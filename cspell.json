@@ -1,0 +1,14 @@
+{
+  "version": "0.2",
+  "language": "en",
+  "words": [
+    "Moku", "createCoreConfig", "createCore", "createApp", "createPlugin", "createCorePlugin",
+    "createState", "pluginConfigs", "onInit", "onStart", "onStop", "ctx", "microkernel",
+    "bun", "bunx", "tsdown", "rolldown", "vite", "vitest", "biome", "eslint", "publint", "lefthook",
+    "tsc", "noEmit", "monorepo", "frontmatter", "gitignore", "worktree", "argv", "stdout", "stderr",
+    "cwd", "dotenv", "cspell", "SSG", "SPA", "SSR", "SEO", "HMR", "preact", "VNode", "hydration",
+    "remark", "rehype", "shiki", "satori", "resvg", "hast", "mdast", "Cloudflare", "wrangler",
+    "NFKD", "subprocess", "afplay", "paplay", "expectTypeOf", "EISDIR", "antipatterns"
+  ],
+  "ignorePaths": ["node_modules/**", "dist/**", ".planning/**"]
+}

@@ -1,0 +1,87 @@
+# session
+
+> **Complex tier** plugin in the `@moku-labs/room` plugin pack. Room-lifecycle + presence authority +
+> the full client-side host-reload recovery state machine (D11). `createPlugin` is imported from
+> `@moku-labs/web` (peer dependency). `depends: [transportPlugin]`.
+
+## Responsibilities
+
+1. **Room lifecycle** (`api.ts` + `lifecycle/`) — `createRoom()` (host, mints a 6-char code + join URL +
+   QR + `hostToken`, synchronously), `joinRoom(code)` (controller, passive), `leave()`, `rejoin()`.
+   Delegates the SDP/ICE handshake to `transport` (the `Signaling` seam) — never touches
+   `RTCPeerConnection` directly.
+2. **Presence / roster** (`lifecycle/`) — stable `PeerId`, phone-persisted `reconnectToken`
+   (localStorage), the 8-controller cap (`MAX_CONTROLLERS`), and STAR-TOPOLOGY enforcement (host is the
+   sole hub; controller<->controller channels are rejected).
+3. **Host-reload recovery** (`recovery/`) — the full CLIENT-SIDE state machine: `hostToken` minted on
+   `createRoom` and verified PEER-SIDE (no server validator, D6); a debounced IndexedDB snapshot
+   (~500 ms) plus a SYNCHRONOUS `localStorage` write on `visibilitychange`; re-entry by rejoining the
+   SAME room code; controller intent buffering + flush/reconcile; a ~10 s reconnect timeout; the iOS
+   "rescan the QR to rejoin" degradation.
+4. **Transport event handling** (`handlers.ts`) — translates transport peer/wire signals into roster
+   mutations, the three `room:*` emissions, and recovery-frame processing.
+
+## Public API (`app.session`)
+
+| Method | Signature | Notes |
+|---|---|---|
+| `createRoom` | `() => RoomDescriptor` | HOST. Returns `{ code, joinUrl, qr, hostToken }` SYNCHRONOUSLY (no `Promise`). Throws if already in a room. |
+| `joinRoom` | `(code: string) => Promise<JoinResult>` | CONTROLLER (passive set internally). `{ ok:false, reason:"full"\|"not-found"\|"unreachable" }` on failure. |
+| `leave` | `() => Promise<void>` | Idempotent. |
+| `rejoin` | `() => Promise<JoinResult>` | iOS "rescan QR" path; re-uses the persisted `reconnectToken`. |
+| `roster` | `() => readonly RosterEntry[]` | Sorted defensive copy (by `joinedAt`). |
+| `self` | `() => SelfInfo` | `{ selfId, role, roomCode }`. |
+| `persistSnapshot` | `(snapshot: Snapshot, sSeq: number) => void` | HOST-ONLY seam called by `sync`; payload is opaque. |
+| `recoveryPhase` | `() => RecoveryPhase` | Poll this on the reload path (see below). |
+
+## Events (Moku `emit` plane — coarse lifecycle ONLY)
+
+Declares + emits THREE of the five `room:*` events: `room:peer-joined`, `room:peer-left`,
+`room:host-reconnecting`. It does NOT declare `room:sync-ready` (owned by `sync`) or
+`room:network-warning` (owned by `transport`) — the `stage`/`controller` facades re-declare all five.
+
+**No wire/DataChannel traffic flows through `emit`.** Recovery frames + roster broadcasts ride
+`transport`'s `Wire`; `emit` carries only the three coarse `room:*` events.
+
+## Reload-path timing — consumers MUST poll, not await the event
+
+`room:host-reconnecting` is emitted during `session` `onInit` (plugin #2), which runs synchronously
+during `createApp` BEFORE the facade-forwarding hooks and downstream consumer handlers are registered.
+On the reload path the event therefore fires into a hook surface that does not yet exist. Consumers on
+the reload path MUST poll `app.session.recoveryPhase()` in their own `onInit`/`onStart` (a non-`"stable"`
+phase means recovery is in flight) rather than rely on the event. The event remains useful for the
+steady-state (non-reload) host-reload detection.
+
+## Lossy intent buffering (acceptable for v1)
+
+While the host is absent, controllers buffer timestamped intents. The buffer is a ring (cap
+`intentBufferMax`, oldest dropped first) and entries older than `intentBufferMaxAgeMs` are discarded on
+flush. This is LOSSY by design for high-frequency analog intents — acceptable for the v1 party-game
+target. Do NOT assume exactly-once intent delivery across a host reload.
+
+## Host crash vs reload
+
+A host *reload* is recoverable. A host *crash* is an UNMITIGATED v1 hard-failure (steering boundary; host
+migration deferred to v2). `recovery/` does not pretend to recover a crash.
+
+## Configuration
+
+All fields default; override via `createApp({ pluginConfigs: { session: { ... } } })`. Defaults encode
+the D11 / contracts §5 constants: `joinUrlBase:""`, `generateQr:true`, `maxControllers:8`,
+`snapshotDebounceMs:500`, `reconnectTimeoutMs:10_000`, `intentBufferMax:256`, `intentBufferMaxAgeMs:8000`,
+`storageKeyPrefix:"moku.room"`.
+
+## Structure
+
+```
+session/
+  index.ts              # ~30-line wiring harness
+  types.ts              # Config/State/API + re-exported §-types (never re-declared)
+  config.ts             # typed default config + the three room:* event descriptions
+  state.ts              # createSessionState (pure, minimal context)
+  api.ts                # makeSessionDeps + createSessionApi (delegates to lifecycle/* + recovery/*)
+  lifecycle/            # code.ts, qr.ts, roster.ts
+  recovery/             # types.ts, persistence.ts, hosttoken.ts, reentry.ts, buffer.ts, timeout.ts
+  handlers.ts           # wire/peer-event handler factories (thin dispatchers)
+  __tests__/            # unit/ + integration/ (inMemory adapter)
+```
