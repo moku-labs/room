@@ -40,6 +40,18 @@ describe("transport types", () => {
     expectTypeOf(api.peers()).toEqualTypeOf<readonly string[]>();
   });
 
+  it("onPeerConnected accepts a (peerId: string) => void cb and returns () => void (D18)", () => {
+    const api = {} as TransportApi;
+    expectTypeOf(api.onPeerConnected).toBeCallableWith((_id: string) => {});
+    expectTypeOf(api.onPeerConnected((_id: string) => {})).toEqualTypeOf<() => void>();
+  });
+
+  it("onPeerLost accepts a (peerId: string) => void cb and returns () => void (D18)", () => {
+    const api = {} as TransportApi;
+    expectTypeOf(api.onPeerLost).toBeCallableWith((_id: string) => {});
+    expectTypeOf(api.onPeerLost((_id: string) => {})).toEqualTypeOf<() => void>();
+  });
+
   it("inMemory() and publicRendezvous() are both assignable to Signaling (D12)", () => {
     expectTypeOf(inMemory()).toExtend<Signaling>();
     expectTypeOf(publicRendezvous()).toExtend<Signaling>();

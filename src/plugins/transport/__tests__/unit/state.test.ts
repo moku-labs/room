@@ -24,6 +24,12 @@ describe("createTransportState", () => {
     expect(state.frameConsumer).toBeNull();
   });
 
+  it("returns null peerConnectedCb and null peerLostCb (D18 seam)", () => {
+    const state = createTransportState();
+    expect(state.peerConnectedCb).toBeNull();
+    expect(state.peerLostCb).toBeNull();
+  });
+
   it("returns an empty warned de-dup set", () => {
     const state = createTransportState();
     expect(state.warned).toBeInstanceOf(Set);

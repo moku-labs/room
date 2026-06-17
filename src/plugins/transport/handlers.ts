@@ -196,6 +196,7 @@ export function handlePeerArrival(
     };
     state.peers.set(peerId, peer);
     bindChannel(state, peer, channel);
+    state.peerConnectedCb?.(peerId);
     return;
   }
 
@@ -209,6 +210,7 @@ export function handlePeerArrival(
       clearTimeout(peer.openTimer);
       peer.openTimer = null;
     }
+    state.peerConnectedCb?.(peerId);
   });
   bindChannel(state, peer, channel as unknown as WireChannel);
   peer.openTimer = setTimeout(
@@ -355,6 +357,7 @@ function createAnswerer(
         clearTimeout(peer.openTimer);
         peer.openTimer = null;
       }
+      state.peerConnectedCb?.(peerId);
     });
     bindChannel(state, peer, event.channel as unknown as WireChannel);
   };

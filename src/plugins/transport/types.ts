@@ -156,6 +156,17 @@ export type TransportState = {
   heartbeatTimer: ReturnType<typeof setInterval> | null;
   /** The single inbound-frame handler registered via `Wire.on` (set by session; dispatches by `frame.t`). */
   frameConsumer: ((peerId: PeerId, frame: Frame) => void) | null;
+  /**
+   * Single consumer notified once when a peer's gameplay channel reaches open/usable. Set by session via
+   * `onPeerConnected`; `null` when unset. Mirrors the `frameConsumer` idiom (latest registration wins).
+   */
+  peerConnectedCb: ((peerId: PeerId) => void) | null;
+  /**
+   * Single consumer notified when an ESTABLISHED peer is lost via the heartbeat dead-peer path (§2.4).
+   * NOT fired on teardown/close/explicit disconnect. Set by session via `onPeerLost`; `null` when unset.
+   * Mirrors the `frameConsumer` idiom (latest registration wins).
+   */
+  peerLostCb: ((peerId: PeerId) => void) | null;
   /** Per-reason de-dup guard so a given `room:network-warning` reason is emitted at most once per peer-epoch. */
   warned: Set<string>;
 };
@@ -262,4 +273,40 @@ export type TransportApi = {
    * ```
    */
   close(): Promise<void>;
+
+  /**
+   * Registers the single consumer fired once when a peer's gameplay `RTCDataChannel` reaches
+   * open/usable — a controller connected (on the host side) or the host connected (on the controller
+   * side). Latest registration wins (same as `Wire.on`). Used by `sessionPlugin` to emit
+   * `room:peer-joined` and update its roster.
+   *
+   * @param cb - Callback invoked with the connected peer's id.
+   * @returns An unsubscribe function; calling it clears the consumer only if this registration is
+   *   still the active one.
+   * @example
+   * ```ts
+   * const off = app.transport.onPeerConnected(peerId => roster.add(peerId));
+   * // Later:
+   * off();
+   * ```
+   */
+  onPeerConnected(cb: (peerId: PeerId) => void): () => void;
+
+  /**
+   * Registers the single consumer fired when an ESTABLISHED peer is lost via the heartbeat dead-peer
+   * path (§2.4). NOT fired on teardown, `close()`, or the public `disconnect()` API — heartbeat death
+   * is the only trigger. Latest registration wins. Used by `sessionPlugin` to emit `room:peer-left`
+   * and drive host-reload recovery.
+   *
+   * @param cb - Callback invoked with the lost peer's id.
+   * @returns An unsubscribe function; calling it clears the consumer only if this registration is
+   *   still the active one.
+   * @example
+   * ```ts
+   * const off = app.transport.onPeerLost(peerId => roster.remove(peerId));
+   * // Later:
+   * off();
+   * ```
+   */
+  onPeerLost(cb: (peerId: PeerId) => void): () => void;
 };

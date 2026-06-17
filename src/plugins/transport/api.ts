@@ -97,6 +97,22 @@ export function createTransportApi(
       await tearDownState(state);
       state.role = "idle";
       state.selfId = "";
+    },
+
+    /** @inheritdoc */
+    onPeerConnected(cb) {
+      state.peerConnectedCb = cb;
+      return () => {
+        if (state.peerConnectedCb === cb) state.peerConnectedCb = null;
+      };
+    },
+
+    /** @inheritdoc */
+    onPeerLost(cb) {
+      state.peerLostCb = cb;
+      return () => {
+        if (state.peerLostCb === cb) state.peerLostCb = null;
+      };
     }
   };
 }

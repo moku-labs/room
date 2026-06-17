@@ -200,3 +200,82 @@ describe("createTransportApi — wire / peers / disconnect / close", () => {
     await expect(api.close()).resolves.toBeUndefined();
   });
 });
+
+describe("createTransportApi — onPeerConnected / onPeerLost (D18 seam)", () => {
+  it("onPeerConnected sets state.peerConnectedCb to the supplied callback", () => {
+    const { signaling } = fakeSignaling();
+    const state = createTransportState();
+    const api = createTransportApi(state, makeConfig(signaling), vi.fn());
+
+    const cb = vi.fn();
+    api.onPeerConnected(cb);
+
+    expect(state.peerConnectedCb).toBe(cb);
+  });
+
+  it("onPeerConnected returns an unsubscribe that clears the cb when it is still active", () => {
+    const { signaling } = fakeSignaling();
+    const state = createTransportState();
+    const api = createTransportApi(state, makeConfig(signaling), vi.fn());
+
+    const cb = vi.fn();
+    const off = api.onPeerConnected(cb);
+    expect(state.peerConnectedCb).toBe(cb);
+
+    off();
+    expect(state.peerConnectedCb).toBeNull();
+  });
+
+  it("onPeerConnected unsubscribe is a no-op if a later registration replaced the cb", () => {
+    const { signaling } = fakeSignaling();
+    const state = createTransportState();
+    const api = createTransportApi(state, makeConfig(signaling), vi.fn());
+
+    const first = vi.fn();
+    const second = vi.fn();
+    const offFirst = api.onPeerConnected(first);
+    api.onPeerConnected(second);
+
+    // offFirst was superseded — calling it must not clear the newer cb.
+    offFirst();
+    expect(state.peerConnectedCb).toBe(second);
+  });
+
+  it("onPeerLost sets state.peerLostCb to the supplied callback", () => {
+    const { signaling } = fakeSignaling();
+    const state = createTransportState();
+    const api = createTransportApi(state, makeConfig(signaling), vi.fn());
+
+    const cb = vi.fn();
+    api.onPeerLost(cb);
+
+    expect(state.peerLostCb).toBe(cb);
+  });
+
+  it("onPeerLost returns an unsubscribe that clears the cb when it is still active", () => {
+    const { signaling } = fakeSignaling();
+    const state = createTransportState();
+    const api = createTransportApi(state, makeConfig(signaling), vi.fn());
+
+    const cb = vi.fn();
+    const off = api.onPeerLost(cb);
+    expect(state.peerLostCb).toBe(cb);
+
+    off();
+    expect(state.peerLostCb).toBeNull();
+  });
+
+  it("onPeerLost unsubscribe is a no-op if a later registration replaced the cb", () => {
+    const { signaling } = fakeSignaling();
+    const state = createTransportState();
+    const api = createTransportApi(state, makeConfig(signaling), vi.fn());
+
+    const first = vi.fn();
+    const second = vi.fn();
+    const offFirst = api.onPeerLost(first);
+    api.onPeerLost(second);
+
+    offFirst();
+    expect(state.peerLostCb).toBe(second);
+  });
+});

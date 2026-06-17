@@ -24,6 +24,8 @@ export function createTransportState(): TransportState {
     session: null,
     heartbeatTimer: null,
     frameConsumer: null,
+    peerConnectedCb: null,
+    peerLostCb: null,
     warned: new Set()
   };
 }

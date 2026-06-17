@@ -341,3 +341,81 @@ describe("handlePeerLeave", () => {
     expect(() => handlePeerLeave(state, "ghost")).not.toThrow();
   });
 });
+
+describe("handlePeerArrival — peerConnectedCb (D18 loopback path)", () => {
+  it("fires peerConnectedCb immediately after binding the loopback channel", () => {
+    const state = createTransportState();
+    const peerConnectedCb = vi.fn();
+    state.peerConnectedCb = peerConnectedCb;
+
+    // Build a loopback session double that exposes openWireChannel.
+    const loopbackChannel = {
+      readyState: "open" as const,
+      bufferedAmount: 0,
+      bufferedAmountLowThreshold: 0,
+      onmessage: null as ((event: { data: string }) => void) | null,
+      send: vi.fn(),
+      close: vi.fn(),
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn()
+    };
+    state.session = {
+      onPeer: vi.fn(),
+      onPeerLeave: vi.fn(),
+      onSignal: vi.fn(),
+      send: vi.fn(),
+      leave: vi.fn().mockResolvedValue(undefined),
+      openWireChannel: (peerId: string) => (peerId === "p_ab12" ? loopbackChannel : null)
+    } as unknown as (typeof state)["session"];
+
+    handlePeerArrival(state, cfg, "p_ab12", noopWarn);
+
+    expect(peerConnectedCb).toHaveBeenCalledTimes(1);
+    expect(peerConnectedCb).toHaveBeenCalledWith("p_ab12");
+  });
+
+  it("does not fire peerConnectedCb when the loopback channel is null for the peer", () => {
+    const state = createTransportState();
+    const peerConnectedCb = vi.fn();
+    state.peerConnectedCb = peerConnectedCb;
+
+    state.session = {
+      onPeer: vi.fn(),
+      onPeerLeave: vi.fn(),
+      onSignal: vi.fn(),
+      send: vi.fn(),
+      leave: vi.fn().mockResolvedValue(undefined),
+      openWireChannel: (_peerId: string) => null
+    } as unknown as (typeof state)["session"];
+
+    handlePeerArrival(state, cfg, "p_ab12", noopWarn);
+
+    expect(peerConnectedCb).not.toHaveBeenCalled();
+  });
+
+  it("does not fire peerConnectedCb when peerConnectedCb is null", () => {
+    const state = createTransportState();
+    // peerConnectedCb stays null — just verify no crash and no cb call.
+    const loopbackChannel = {
+      readyState: "open" as const,
+      bufferedAmount: 0,
+      bufferedAmountLowThreshold: 0,
+      onmessage: null as ((event: { data: string }) => void) | null,
+      send: vi.fn(),
+      close: vi.fn(),
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn()
+    };
+    state.session = {
+      onPeer: vi.fn(),
+      onPeerLeave: vi.fn(),
+      onSignal: vi.fn(),
+      send: vi.fn(),
+      leave: vi.fn().mockResolvedValue(undefined),
+      openWireChannel: (peerId: string) => (peerId === "p_ab12" ? loopbackChannel : null)
+    } as unknown as (typeof state)["session"];
+
+    expect(() => handlePeerArrival(state, cfg, "p_ab12", noopWarn)).not.toThrow();
+    expect(state.peers.has("p_ab12")).toBe(true);
+  });
+});

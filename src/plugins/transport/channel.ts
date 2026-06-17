@@ -434,11 +434,13 @@ export function startHeartbeat(
     for (const peer of state.peers.values()) {
       if (now - peer.lastPongAt > cfg.heartbeatTimeoutMs) {
         peer.state = "dead";
-        disconnectPeer(state, peer.peerId);
-        if (!state.warned.has(`channel-closed:${peer.peerId}`)) {
-          state.warned.add(`channel-closed:${peer.peerId}`);
+        const lostId = peer.peerId;
+        disconnectPeer(state, lostId);
+        if (!state.warned.has(`channel-closed:${lostId}`)) {
+          state.warned.add(`channel-closed:${lostId}`);
           emitWarning("channel-closed");
         }
+        state.peerLostCb?.(lostId);
         continue;
       }
       sendFrame(peer, { t: "ping", ts: now }, cfg, queues);
@@ -494,6 +496,8 @@ export async function tearDownState(state: TransportState): Promise<void> {
   const session = state.session;
   state.session = null;
   state.frameConsumer = null;
+  state.peerConnectedCb = null;
+  state.peerLostCb = null;
   state.warned.clear();
   await session?.leave();
 }

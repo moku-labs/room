@@ -356,6 +356,34 @@ describe("channel — heartbeat", () => {
     vi.advanceTimersByTime(cfg.heartbeatIntervalMs * 3);
     expect(channel.sent.length).toBe(before);
   });
+
+  it("fires peerLostCb with the peer id once when the heartbeat declares a peer dead (D18)", () => {
+    const state = createTransportState();
+    state.role = "host";
+    addConnectedPeer(state, "p_dead");
+    const peerLostCb = vi.fn();
+    state.peerLostCb = peerLostCb;
+    startHeartbeat(state, cfg, vi.fn());
+
+    vi.advanceTimersByTime(cfg.heartbeatTimeoutMs + cfg.heartbeatIntervalMs);
+
+    expect(peerLostCb).toHaveBeenCalledTimes(1);
+    expect(peerLostCb).toHaveBeenCalledWith("p_dead");
+  });
+
+  it("does not fire peerLostCb a second time for the same dead peer on subsequent ticks (D18)", () => {
+    const state = createTransportState();
+    state.role = "host";
+    addConnectedPeer(state, "p_dead");
+    const peerLostCb = vi.fn();
+    state.peerLostCb = peerLostCb;
+    startHeartbeat(state, cfg, vi.fn());
+
+    vi.advanceTimersByTime(cfg.heartbeatTimeoutMs + cfg.heartbeatIntervalMs * 4);
+
+    // The peer is gone after the first death — cb fires exactly once.
+    expect(peerLostCb).toHaveBeenCalledTimes(1);
+  });
 });
 
 describe("channel — teardown", () => {
@@ -419,5 +447,30 @@ describe("channel — teardown", () => {
   it("tearDownState is a safe no-op when already torn down", async () => {
     const state = createTransportState();
     await expect(tearDownState(state)).resolves.toBeUndefined();
+  });
+
+  it("tearDownState nulls peerConnectedCb and peerLostCb (D18 clean reset)", async () => {
+    const state = createTransportState();
+    state.peerConnectedCb = vi.fn();
+    state.peerLostCb = vi.fn();
+
+    await tearDownState(state);
+
+    expect(state.peerConnectedCb).toBeNull();
+    expect(state.peerLostCb).toBeNull();
+  });
+
+  it("tearDownState does NOT fire peerLostCb for any connected peers during teardown (D18)", async () => {
+    const state = createTransportState();
+    state.role = "host";
+    addConnectedPeer(state, "p1");
+    addConnectedPeer(state, "p2");
+    const peerLostCb = vi.fn();
+    state.peerLostCb = peerLostCb;
+
+    await tearDownState(state);
+
+    // Teardown must not invoke peerLostCb — it is heartbeat-death only.
+    expect(peerLostCb).not.toHaveBeenCalled();
   });
 });
