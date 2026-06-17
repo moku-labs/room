@@ -13,12 +13,26 @@ import type { SessionState } from "./types";
  * `crypto`, or the network and produces only plain-JSON fields (the `recovery.timer`/`persistHandle`
  * runtime handles start `null` and are armed later in `api`/`onInit`).
  *
- * @throws {Error} Always — skeleton stub.
+ * @returns The zeroed `SessionState` with role `"none"`, empty roster, recovery phase `"stable"`.
  * @example
  * ```ts
  * createPlugin("session", { createState: createSessionState, ... });
  * ```
  */
 export function createSessionState(): SessionState {
-  throw new Error("not implemented");
+  return {
+    role: "none",
+    selfId: "",
+    roomCode: "",
+    hostToken: "",
+    roster: {},
+    sSeqAtSnapshot: 0,
+    recovery: {
+      phase: "stable",
+      buffer: [],
+      reconnectDeadline: 0,
+      timer: null,
+      persistHandle: null
+    }
+  };
 }

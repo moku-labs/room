@@ -18,7 +18,6 @@ import type { BufferedIntent, SessionState } from "../types";
  * @param intent - The `IntentFrame` to buffer.
  * @param intentBufferMax - The configured ring-buffer cap.
  * @param now - Capture epoch-ms (injectable for tests).
- * @throws {Error} Always — skeleton stub.
  * @example
  * ```ts
  * bufferIntent(state, intent, config.intentBufferMax, Date.now());
@@ -30,7 +29,11 @@ export function bufferIntent(
   intentBufferMax: number,
   now: number
 ): void {
-  throw new Error("not implemented");
+  // Enforce ring cap — drop oldest first.
+  while (state.recovery.buffer.length >= intentBufferMax) {
+    state.recovery.buffer.shift();
+  }
+  state.recovery.buffer.push({ intent, ts: now });
 }
 
 /**
@@ -40,7 +43,7 @@ export function bufferIntent(
  * @param state - This app's mutable session state.
  * @param intentBufferMaxAgeMs - Max age before an entry is discarded on flush.
  * @param now - Current epoch-ms (injectable for tests).
- * @throws {Error} Always — skeleton stub.
+ * @returns The ordered, age-filtered intents ready to include in a `RecoveryFlushFrame`.
  * @example
  * ```ts
  * const buffered = drainBuffer(state, config.intentBufferMaxAgeMs, Date.now());
@@ -51,7 +54,12 @@ export function drainBuffer(
   intentBufferMaxAgeMs: number,
   now: number
 ): readonly BufferedIntent[] {
-  throw new Error("not implemented");
+  const cutoff = now - intentBufferMaxAgeMs;
+  const fresh = state.recovery.buffer.filter(entry => entry.ts >= cutoff);
+  // Sort by cSeq ascending for idempotent reconcile.
+  fresh.sort((a, b) => a.intent.cSeq - b.intent.cSeq);
+  state.recovery.buffer = [];
+  return fresh;
 }
 
 /**
@@ -59,9 +67,9 @@ export function drainBuffer(
  * actually apply, dropping any `cSeq <= lastApplied` so a reconnect/flush never double-applies.
  *
  * @param buffered - The flushed, `cSeq`-ordered intents from a `RecoveryFlushFrame`.
- * @param peerId - The controller the buffer came from.
+ * @param _peerId - The controller the buffer came from (for logging context; not used in the filter — cSeq is the only discriminant).
  * @param lastApplied - The host's `lastApplied[peerId]` high-water mark.
- * @throws {Error} Always — skeleton stub.
+ * @returns The subset of intents with `cSeq > lastApplied`, ready to hand to the intent/sync layer.
  * @example
  * ```ts
  * const fresh = reconcileFlush(frame.buffered, peerId, lastApplied[peerId] ?? 0);
@@ -69,8 +77,9 @@ export function drainBuffer(
  */
 export function reconcileFlush(
   buffered: readonly BufferedIntent[],
-  peerId: PeerId,
+  _peerId: PeerId,
   lastApplied: number
 ): readonly IntentFrame[] {
-  throw new Error("not implemented");
+  // _peerId is accepted for logging context; the actual drop is based on cSeq vs lastApplied.
+  return buffered.filter(entry => entry.intent.cSeq > lastApplied).map(entry => entry.intent);
 }

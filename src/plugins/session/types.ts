@@ -243,6 +243,16 @@ export type SessionEmit = {
 };
 
 /**
+ * The minimal injected logger surface `sessionPlugin` reads off `ctx.log` (bound by `@moku-labs/web`,
+ * D1). Only `warn` is used — for the defensive star-topology rejection (§6), which logs but emits no
+ * event. The real `ctx.log` is structurally assignable to this narrow shape.
+ */
+export type SessionLog = {
+  /** Logs a warning message (the star-topology rejection path — no event). */
+  warn: (message: string) => void;
+};
+
+/**
  * The destructured per-app pieces every extracted `session` module receives (D14). Built inline by the
  * `index.ts` wiring harness from the inferred `ctx` (`@moku-labs/web` infers `createPlugin`'s context;
  * `PluginContext` is NOT imported — it is not exported by web, D1). Carries the per-app mutable `state`,
@@ -274,6 +284,8 @@ export type SessionDeps = {
   readonly config: Readonly<SessionConfig>;
   /** The narrowed `emit` closures for the three owned `room:*` events (§3). */
   readonly emit: SessionEmit;
+  /** The injected `ctx.log` warning surface (the defensive star-topology rejection logs here). */
+  readonly log: SessionLog;
   /** Resolves the hard `transport` dependency the canonical way (`ctx.require(transportPlugin)`). */
   readonly requireTransport: () => TransportApi;
 };
@@ -297,6 +309,8 @@ export type SessionContextShape = {
     (name: "room:peer-left", payload: RoomEvents["room:peer-left"]): void;
     (name: "room:host-reconnecting", payload: RoomEvents["room:host-reconnecting"]): void;
   };
+  /** The kernel's injected logger (`ctx.log`), narrowed to the `warn` surface this plugin uses. */
+  readonly log: SessionLog;
   /** Resolves a dependency plugin instance to its public API (here `transportPlugin` -> `TransportApi`). */
   readonly require: (plugin: typeof transportPlugin) => TransportApi;
 };

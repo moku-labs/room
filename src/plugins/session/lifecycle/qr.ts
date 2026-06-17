@@ -14,14 +14,22 @@ import type { QrMatrix } from "../types";
  *
  * @param code - The room code to embed.
  * @param joinUrlBase - Config origin; empty string means "use `location.origin`".
- * @throws {Error} Always — skeleton stub.
+ * @returns The full join URL string in the form `${base}?room=CODE`.
  * @example
  * ```ts
  * const url = buildJoinUrl("G7K2QF", ""); // -> "https://tv.example?room=G7K2QF"
  * ```
  */
 export function buildJoinUrl(code: string, joinUrlBase: string): string {
-  throw new Error("not implemented");
+  let base: string;
+  if (joinUrlBase !== "") {
+    base = joinUrlBase;
+  } else if (typeof location === "undefined") {
+    base = "";
+  } else {
+    base = location.origin;
+  }
+  return `${base}?room=${code}`;
 }
 
 /**
@@ -31,7 +39,7 @@ export function buildJoinUrl(code: string, joinUrlBase: string): string {
  *
  * @param joinUrl - The URL to encode (code/URL only).
  * @param generateQr - When `false`, skip QR work and return `null`.
- * @throws {Error} Always — skeleton stub.
+ * @returns A promise resolving to a `QrMatrix` or `null` when generation is disabled.
  * @example
  * ```ts
  * const qr = await buildQrMatrix(url, true);
@@ -41,5 +49,18 @@ export async function buildQrMatrix(
   joinUrl: string,
   generateQr: boolean
 ): Promise<QrMatrix | null> {
-  throw new Error("not implemented");
+  if (!generateQr) return null;
+
+  // Lazy-import to keep the QR generator out of the controller bundle.
+  const qrcode = await import("qrcode");
+  const matrix = await qrcode.default.create(joinUrl, { errorCorrectionLevel: "M" });
+
+  const size = matrix.modules.size;
+  const modules: boolean[] = [];
+  for (let row = 0; row < size; row++) {
+    for (let col = 0; col < size; col++) {
+      modules.push(matrix.modules.get(row, col) === 1);
+    }
+  }
+  return { size, modules };
 }

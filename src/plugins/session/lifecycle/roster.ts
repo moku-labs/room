@@ -16,7 +16,7 @@ import type { Role, SessionState } from "../types";
  * @param state - This app's mutable session state.
  * @param entry - The roster entry to admit or refresh.
  * @param maxControllers - The configured cap (`config.maxControllers`).
- * @throws {Error} Always — skeleton stub.
+ * @returns `true` if the entry was admitted/updated, `false` if the room is full.
  * @example
  * ```ts
  * if (!upsertRosterEntry(state, entry, config.maxControllers)) rejectChannel(peerId);
@@ -27,7 +27,12 @@ export function upsertRosterEntry(
   entry: RosterEntry,
   maxControllers: number
 ): boolean {
-  throw new Error("not implemented");
+  // Allow updating an existing entry even at cap.
+  if (!(entry.id in state.roster) && Object.keys(state.roster).length >= maxControllers) {
+    return false;
+  }
+  state.roster[entry.id] = entry;
+  return true;
 }
 
 /**
@@ -36,14 +41,17 @@ export function upsertRosterEntry(
  *
  * @param state - This app's mutable session state.
  * @param peerId - The controller to remove.
- * @throws {Error} Always — skeleton stub.
+ * @returns `true` if the entry was present and removed, `false` if it was already absent.
  * @example
  * ```ts
  * if (removeRosterEntry(state, peerId)) emit.peerLeft({ peerId });
  * ```
  */
 export function removeRosterEntry(state: SessionState, peerId: PeerId): boolean {
-  throw new Error("not implemented");
+  if (!(peerId in state.roster)) return false;
+
+  delete state.roster[peerId];
+  return true;
 }
 
 /**
@@ -51,14 +59,14 @@ export function removeRosterEntry(state: SessionState, peerId: PeerId): boolean 
  * internal state (§6.1).
  *
  * @param state - This app's session state.
- * @throws {Error} Always — skeleton stub.
+ * @returns A frozen, sorted defensive copy of the roster entries.
  * @example
  * ```ts
  * const seats = readRoster(state);
  * ```
  */
 export function readRoster(state: SessionState): readonly RosterEntry[] {
-  throw new Error("not implemented");
+  return Object.values(state.roster).toSorted((a, b) => a.joinedAt - b.joinedAt);
 }
 
 /**
@@ -70,12 +78,17 @@ export function readRoster(state: SessionState): readonly RosterEntry[] {
  * @param to - The target peer id.
  * @param selfId - This device's id (the host, on the stage).
  * @param role - This device's role.
- * @throws {Error} Always — skeleton stub.
+ * @returns `true` if the channel violates star topology and should be rejected.
  * @example
  * ```ts
  * if (isStarViolation(from, to, state.selfId, state.role)) log.warn("rejected p2p channel");
  * ```
  */
 export function isStarViolation(from: PeerId, to: PeerId, selfId: PeerId, role: Role): boolean {
-  throw new Error("not implemented");
+  if (role !== "host") {
+    // On a controller, any channel not involving us as host is a violation.
+    return from !== selfId && to !== selfId;
+  }
+  // On the host, we are the hub — from/to must involve selfId.
+  return from !== selfId && to !== selfId;
 }

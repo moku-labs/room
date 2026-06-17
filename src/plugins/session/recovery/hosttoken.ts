@@ -10,14 +10,14 @@
  * Mints the host re-entry credential (`crypto.randomUUID()`, §5.1) on `createRoom`. Stored alongside the
  * snapshot and presented to controllers for peer-side verification on re-entry.
  *
- * @throws {Error} Always — skeleton stub.
+ * @returns A fresh UUID string to use as the host token.
  * @example
  * ```ts
  * state.hostToken = mintHostToken();
  * ```
  */
 export function mintHostToken(): string {
-  throw new Error("not implemented");
+  return globalThis.crypto.randomUUID();
 }
 
 /**
@@ -27,12 +27,12 @@ export function mintHostToken(): string {
  *
  * @param presented - The token carried in the inbound recovery frame.
  * @param expected - The token this device stored (host's minted token / controller's last-seen token).
- * @throws {Error} Always — skeleton stub.
+ * @returns `true` if the tokens match, `false` if they do not (reject the frame).
  * @example
  * ```ts
  * if (!verifyHostToken(frame.hostToken, state.hostToken)) return; // reject
  * ```
  */
 export function verifyHostToken(presented: string, expected: string): boolean {
-  throw new Error("not implemented");
+  return presented === expected;
 }
