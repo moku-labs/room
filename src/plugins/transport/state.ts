@@ -9,6 +9,7 @@ import type { TransportState } from "./types";
  * session, no timers, no frame consumer, and an empty warn de-dup set. Per-`createApp` via `ctx.state`
  * (D14) — never a module-level singleton.
  *
+ * @returns A fresh `TransportState` with every handle set to `null`/empty and `role` set to `"idle"`.
  * @example
  * ```ts
  * const state = createTransportState();
@@ -16,5 +17,13 @@ import type { TransportState } from "./types";
  * ```
  */
 export function createTransportState(): TransportState {
-  throw new Error("not implemented");
+  return {
+    role: "idle",
+    selfId: "",
+    peers: new Map(),
+    session: null,
+    heartbeatTimer: null,
+    frameConsumer: null,
+    warned: new Set()
+  };
 }

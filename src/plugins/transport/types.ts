@@ -78,7 +78,7 @@ export type TransportConfig = {
  *   paused: false,
  *   reassembly: new Map(),
  *   openTimer: null,
- *   retryTimer: null
+ *   retries: 0
  * };
  * ```
  */
@@ -99,8 +99,12 @@ export type PeerConnection = {
   reassembly: Map<string, ReassemblyBuffer>;
   /** DataChannel-open timeout handle (~3 s); cleared on `open`, on retry, and on teardown. `null` when idle. */
   openTimer: ReturnType<typeof setTimeout> | null;
-  /** Open-timeout retry timer handle for the re-initiated handshake; cleared on teardown. `null` when idle. */
-  retryTimer: ReturnType<typeof setTimeout> | null;
+  /**
+   * Count of open-timeout handshake retries already attempted for this peer. Survives the delete +
+   * recreate across a retry (re-stamped in `handlePeerArrival`) so the retry is capped at
+   * `MAX_OPEN_RETRIES` instead of looping forever (the iOS-to-Bravia GATE mitigation).
+   */
+  retries: number;
 };
 
 /**
@@ -246,7 +250,7 @@ export type TransportApi = {
   peers(): readonly PeerId[];
 
   /**
-   * Closes ALL peer connections (clearing each peer's open/retry timers + reassembly), stops the
+   * Closes ALL peer connections (clearing each peer's open timer + reassembly), stops the
    * heartbeat loop, and leaves the signaling session. Exposed for an explicit room teardown without
    * stopping the app. `onStop` performs the same teardown work against this app's `TransportState`
    * (reached via the per-instance teardown registry keyed by `ctx.global`). Idempotent.

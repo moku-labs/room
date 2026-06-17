@@ -25,6 +25,13 @@ export default [
   eslintPluginUnicorn.configs.recommended,
   {
     rules: {
+      // Room is a WebRTC/DOM library: its contracts deliberately mirror DOM `| null` shapes
+      // (`RTCIceCandidateInit.sdpMid: string | null`, `RTCDataChannel | null`), the JSON value model
+      // (`JsonValue`) includes `null`, and plugin state carries documented `| null` idle/empty sentinels
+      // (`session`/`channel`/timer handles `null` when idle, per types.ts JSDoc). `null` is Room's
+      // intentional sentinel; `unicorn/no-null` fights the committed contract design and these
+      // DOM-mirror types cannot be null-free. Disabled pack-wide (D17).
+      "unicorn/no-null": "off",
       "unicorn/prevent-abbreviations": [
         "error",
         {
