@@ -1,0 +1,39 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1" />
+    <title>Room Sandbox — Controller</title>
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body class="controller">
+    <main>
+      <header>
+        <h1>🎮 Controller</h1>
+        <p class="status" id="status" data-testid="status">booting…</p>
+      </header>
+
+      <section class="lobby" id="lobby" data-testid="lobby">
+        <label for="code-input">Room code</label>
+        <input
+          id="code-input"
+          data-testid="code-input"
+          type="text"
+          inputmode="latin"
+          autocapitalize="characters"
+          autocomplete="off"
+          maxlength="6"
+          placeholder="ABC123"
+        />
+        <button id="join-btn" data-testid="join-btn" type="button">Join</button>
+      </section>
+
+      <section class="game" id="game" data-testid="game" hidden>
+        <p class="my-score-wrap">Your taps: <span id="my-score" data-testid="my-score">0</span></p>
+        <button id="tap-btn" data-testid="tap-btn" type="button" class="tap">TAP!</button>
+        <ul class="board" id="board" data-testid="board"></ul>
+      </section>
+    </main>
+    <script type="module" src="/dist/controller.js"></script>
+  </body>
+</html>

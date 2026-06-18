@@ -1,0 +1,36 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Room Sandbox — Stage</title>
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body class="stage">
+    <main>
+      <header>
+        <h1>📺 Stage</h1>
+        <p class="status" id="status" data-testid="status">booting…</p>
+      </header>
+
+      <section class="join">
+        <div class="join-info">
+          <p class="label">Room code</p>
+          <p class="code" id="code" data-testid="room-code">······</p>
+          <p class="label">Join URL</p>
+          <a class="join-url" id="join-url" data-testid="join-url" href="#">—</a>
+        </div>
+        <div class="qr-wrap">
+          <canvas class="qr" id="qr" data-testid="qr" width="0" height="0" aria-label="join QR code"></canvas>
+          <p class="qr-hint" id="qr-hint" data-testid="qr-hint"></p>
+        </div>
+      </section>
+
+      <section class="players">
+        <h2>Players (<span id="player-count" data-testid="player-count">0</span>)</h2>
+        <ul class="leaderboard" id="leaderboard" data-testid="leaderboard"></ul>
+      </section>
+    </main>
+    <script type="module" src="/dist/stage.js"></script>
+  </body>
+</html>

@@ -38,3 +38,8 @@ report.[0-9]_.[0-9]_.[0-9]_.[0-9]_.json
 
 # Planning artifacts
 .planning
+
+# Playwright e2e
+test-results
+playwright-report
+sandbox/dist

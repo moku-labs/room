@@ -9,6 +9,7 @@ export default [
   {
     ignores: [
       "dist/**",
+      "sandbox/dist/**",
       "coverage/**",
       "bun.lock",
       ".claude/**",
@@ -159,6 +160,21 @@ export default [
       "jsdoc/require-jsdoc": "off",
       "jsdoc/require-description": "off",
       "unicorn/no-abusive-eslint-disable": "off"
+    }
+  },
+
+  // 8b. Sandbox (reference consumer demo, not shipped): relaxed like tests, plus DOM-demo allowances
+  // (direct `getElementById`, single-char map binds, repeated UI strings).
+  {
+    files: ["sandbox/**/*.ts"],
+    rules: {
+      "jsdoc/require-jsdoc": "off",
+      "jsdoc/require-example": "off",
+      "unicorn/prevent-abbreviations": "off",
+      "unicorn/prefer-query-selector": "off",
+      // serve.ts is a Bun dev-server/CLI entry — `process.exit` on a build failure is correct here.
+      "unicorn/no-process-exit": "off",
+      "sonarjs/no-duplicate-string": "off"
     }
   },
 

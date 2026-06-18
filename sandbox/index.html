@@ -1,0 +1,23 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Room Sandbox</title>
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body>
+    <main class="picker">
+      <h1>@moku-labs/room — sandbox</h1>
+      <p>Pick a role. Open <strong>Stage</strong> on the shared screen (TV/laptop), then open
+        <strong>Controller</strong> on each phone (or scan the QR the stage shows).</p>
+      <nav class="roles">
+        <a class="role stage" href="/stage" data-testid="go-stage">📺 Stage<small>shared screen — hosts the room</small></a>
+        <a class="role controller" href="/controller" data-testid="go-controller">🎮 Controller<small>phone — joins by code/QR</small></a>
+      </nav>
+      <p class="hint">Default backbone is real WebRTC (<code>publicRendezvous</code>, Nostr). Append
+        <code>?signaling=memory</code> for the single-context in-memory bus, or
+        <code>?backbone=torrent</code> for the BitTorrent fallback.</p>
+    </main>
+  </body>
+</html>
