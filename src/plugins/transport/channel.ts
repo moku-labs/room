@@ -310,8 +310,8 @@ function attachReceive(state: TransportState, peer: PeerConnection): void {
 
 /**
  * Dispatches a fully-reassembled `Frame`: `ping` receives an immediate `pong` reply and updates
- * `lastPongAt`; `pong` updates `lastPongAt` only. Every other frame is forwarded to `state.frameConsumer`
- * (the handler registered via `Wire.on`).
+ * `lastPongAt`; `pong` updates `lastPongAt` only. Every other frame is fanned out to all consumers in
+ * `state.frameConsumers` (each registered via `Wire.on`, self-filtering by `frame.t`).
  *
  * @param state - The per-app transport state holding the frame consumer.
  * @param peer - The peer that sent the frame (provides `lastPongAt` and channel for the pong reply).
@@ -333,15 +333,16 @@ function deliver(state: TransportState, peer: PeerConnection, frame: Frame): voi
     peer.lastPongAt = Date.now();
     return;
   }
-  state.frameConsumer?.(peer.peerId, frame);
+  // Fan out to EVERY registered consumer (sync / intent / session each self-filter by frame.t).
+  for (const consumer of state.frameConsumers) consumer(peer.peerId, frame);
 }
 
 /**
  * Builds the stable per-app `Wire` (contracts section 2). `send`/`broadcast` serialize a `Frame` to JSON,
  * chunk it if it exceeds `cfg.maxMessageBytes`, and write to the peer's channel respecting `bufferedAmount`
- * backpressure. `on` registers the single inbound-frame consumer (stored on `state.frameConsumer`);
- * inbound frames are reassembled and dispatched directly to it — `ping`/`pong` are handled internally and
- * never forwarded.
+ * backpressure. `on` adds an inbound-frame consumer to `state.frameConsumers` (fan-out — Room composes
+ * sync/intent/session on one wire); inbound frames are reassembled and dispatched to every consumer —
+ * `ping`/`pong` are handled internally and never forwarded.
  *
  * @param state - The per-app transport state holding the peer map and frame consumer.
  * @param cfg - The transport config (chunk threshold).
@@ -372,19 +373,19 @@ export function createWire(state: TransportState, cfg: TransportConfig): Wire {
     },
     /** @inheritdoc */
     on(handler) {
-      state.frameConsumer = handler;
+      state.frameConsumers.add(handler);
       for (const peer of state.peers.values()) ensureReceiving(state, peer);
       /**
-       * Removes this handler from `state.frameConsumer` if it is still the active consumer.
+       * Removes this handler from `state.frameConsumers` (leaves every other consumer attached).
        *
        * @example
        * ```ts
        * const off = wire.on(handler);
-       * off(); // deregisters the handler
+       * off(); // deregisters just this handler
        * ```
        */
       return () => {
-        if (state.frameConsumer === handler) state.frameConsumer = null;
+        state.frameConsumers.delete(handler);
       };
     }
   };
@@ -495,7 +496,7 @@ export async function tearDownState(state: TransportState): Promise<void> {
   for (const peerId of state.peers.keys()) disconnectPeer(state, peerId);
   const session = state.session;
   state.session = null;
-  state.frameConsumer = null;
+  state.frameConsumers.clear();
   state.peerConnectedCb = null;
   state.peerLostCb = null;
   state.warned.clear();

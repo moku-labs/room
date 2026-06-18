@@ -6,16 +6,20 @@ import { syncPlugin } from "../sync";
 import { transportPlugin } from "../transport";
 import { createStageApi } from "./api";
 
-/* eslint-disable jsdoc/require-jsdoc -- structural wiring callbacks (events/hooks/api); domain JSDoc lives in the extracted api/types modules */
+/* eslint-disable jsdoc/require-jsdoc -- structural wiring callbacks (events/api); domain JSDoc lives in the extracted api/types modules */
 /**
  * Stage plugin — Standard tier (HOST-role facade).
  *
  * A thin host surface over Room's four engines (transport, session, intent, sync): every API method
- * delegates via `ctx.require(...)`, the facade owns no state and runs no resource. Re-declares + forwards
- * all five `room:*` lifecycle events (contracts §3) so a game plugin with `depends: [stagePlugin]` gets
- * the complete, typed hook surface in one edge (WARN-2 — event visibility is not transitive: spec/07 §5,
- * spec/14 §7). No `onStart`/`onStop`: the facade manages no resource; the engines own all lifecycle
- * (spec/06). Shipped pre-composed as `roomPlugins.stage = [transport, session, intent, sync, stage]`.
+ * delegates via `ctx.require(...)`, the facade owns no state and runs no resource. Re-declares all five
+ * `room:*` lifecycle events (contracts §3) so a game plugin with `depends: [stagePlugin]` gets the
+ * complete, typed hook surface in one edge (WARN-2 — event visibility is not transitive at the TYPE
+ * level: spec/07 §5, spec/14 §7). It does NOT re-emit (forward) them: Moku's runtime event bus is
+ * global (every hook for an event name fires on any `emit` of that name, regardless of `depends`), so the
+ * engines' own emits already reach a `depends: [stagePlugin]` consumer directly — a forwarding hook that
+ * re-emitted the same name would re-trigger itself and recurse infinitely (D19). No `onStart`/`onStop`:
+ * the facade manages no resource; the engines own all lifecycle (spec/06). Shipped pre-composed as
+ * `roomPlugins.stage = [transport, session, intent, sync, stage]`.
  *
  * @see README.md
  */
@@ -34,19 +38,7 @@ export const stagePlugin = createPlugin("stage", {
       "room:network-warning":
         "A connectivity hard-failure surfaced for failure UX (contracts §3, D2)."
     }),
-  hooks: ctx => ({
-    "room:peer-joined": payload => ctx.emit("room:peer-joined", payload),
-    "room:peer-left": payload => ctx.emit("room:peer-left", payload),
-    "room:host-reconnecting": payload => ctx.emit("room:host-reconnecting", payload),
-    "room:sync-ready": payload => ctx.emit("room:sync-ready", payload),
-    "room:network-warning": payload => ctx.emit("room:network-warning", payload)
-  }),
   api: ctx =>
-    createStageApi(
-      ctx.require(transportPlugin),
-      ctx.require(sessionPlugin),
-      ctx.require(intentPlugin),
-      ctx.require(syncPlugin)
-    )
+    createStageApi(ctx.require(sessionPlugin), ctx.require(intentPlugin), ctx.require(syncPlugin))
 });
 /* eslint-enable jsdoc/require-jsdoc */

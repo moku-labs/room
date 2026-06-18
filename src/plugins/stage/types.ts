@@ -2,29 +2,33 @@
  * @file stage — public type surface (HOST-role facade API).
  * @see README.md
  *
- * Holds ONLY the facade's host-role public surface. Every shared contract type (`JsonValue`,
- * `Namespace`, `PeerId`, `RosterEntry`) is imported from the central `../../contracts` module (D16) —
+ * Holds ONLY the facade's host-role public surface. Every shared contract type (`Namespace`,
+ * `PeerId`, `RosterEntry`) is imported from the central `../../contracts` module (D16) —
  * never re-declared. `RoomDescriptor` is session-owned (the room-code/QR/hostToken descriptor) and is
- * imported from `../session/types`. The facade defines no state, no config, and no `ctx` alias — its
+ * imported from `../session/types`. `Cells` is imported from `../sync/types` (the per-namespace
+ * cell map type). The facade defines no state, no config, and no `ctx` alias — its
  * methods delegate straight to the four engines (transport, session, intent, sync).
  */
-import type { JsonValue, Namespace, PeerId, RosterEntry } from "../../contracts";
+import type { Namespace, PeerId, RosterEntry } from "../../contracts";
 import type { RoomDescriptor } from "../session/types";
+import type { Cells } from "../sync/types";
 
 /**
- * A mutation recipe applied to one namespaced sync slice on the host. Receives a mutable draft of the
- * slice's current cells (key → JSON value) and mutates it in place; `sync` diffs the result into an `Op`
- * list (contracts §4.2) and broadcasts a throttled `SyncDeltaFrame` (contracts §2.2, §4.3). Set a cell to
- * `null` to delete it (contracts §4.2). Must remain plain-JSON-serializable (spec/11 §1.7 — no class
- * instances, `Map`, `Set`, functions, `undefined`-holes).
+ * A mutation recipe applied to one namespaced sync slice on the host. Receives the current cells
+ * (key → JSON value) as a readonly snapshot and returns the **next** cells (pure-function style);
+ * `sync` diffs old vs. returned-next into an `Op` list (contracts §4.2) and broadcasts a throttled
+ * `SyncDeltaFrame` (contracts §2.2, §4.3). Set a cell to `null` to delete it (contracts §4.2).
+ * Must remain plain-JSON-serializable (spec/11 §1.7 — no class instances, `Map`, `Set`, functions,
+ * `undefined`-holes). Return a new object; do NOT mutate `draft` in place.
  *
- * @param draft - The mutable working copy of the slice's cells for this tick.
+ * @param draft - The current cells of the namespace's slice (readonly snapshot).
+ * @returns The next cells for this namespace (the result `sync` diffs against the old snapshot).
  * @example
  * ```ts
- * const recipe: MutateRecipe = draft => { draft.p1 = ((draft.p1 as number) ?? 0) + 1; };
+ * const recipe: MutateRecipe = draft => ({ ...draft, p1: ((draft.p1 as number) ?? 0) + 1 });
  * ```
  */
-export type MutateRecipe = (draft: Record<string, JsonValue>) => void;
+export type MutateRecipe = (draft: Cells) => Cells;
 
 /**
  * A typed intent handler invoked on the host for each validated controller intent of a given name. The
@@ -84,11 +88,11 @@ export type StageApi = {
    * and influence state only by sending intents (see {@link StageApi.onIntent}).
    *
    * @param ns - The target namespace / slice key (contracts §4.1 `Namespace`, e.g. `"scores"`).
-   * @param recipe - The in-place mutation applied to the slice's cells (see {@link MutateRecipe}).
+   * @param recipe - The return-next recipe applied to the slice's cells (see {@link MutateRecipe}).
    * @returns Nothing.
    * @example
    * ```ts
-   * app.stage.mutate("scores", draft => { draft.p1 = ((draft.p1 as number) ?? 0) + 1; });
+   * app.stage.mutate("scores", draft => ({ ...draft, p1: ((draft.p1 as number) ?? 0) + 1 }));
    * ```
    */
   mutate(ns: Namespace, recipe: MutateRecipe): void;

@@ -138,7 +138,7 @@ export type ReassemblyBuffer = {
  *   peers: new Map(),
  *   session: null,
  *   heartbeatTimer: null,
- *   frameConsumer: null,
+ *   frameConsumers: new Set(),
  *   warned: new Set()
  * };
  * ```
@@ -154,17 +154,24 @@ export type TransportState = {
   session: SignalingSession | null;
   /** Interval-timer id for the heartbeat ping loop; `null` when no peers are connected. */
   heartbeatTimer: ReturnType<typeof setInterval> | null;
-  /** The single inbound-frame handler registered via `Wire.on` (set by session; dispatches by `frame.t`). */
-  frameConsumer: ((peerId: PeerId, frame: Frame) => void) | null;
+  /**
+   * The set of inbound-frame consumers registered via `Wire.on`. Room composes MULTIPLE engines on the
+   * one shared `Wire` — `sync` (sync-snap/sync-delta), `intent` (intent), and `session` (recovery-*) each
+   * register their own consumer and self-filter by `frame.t` (the tags are disjoint). Every reassembled
+   * frame is fanned out to ALL consumers, so a later `Wire.on` never clobbers an earlier one (the prior
+   * single-slot design silently dropped every consumer but the last). `Wire.on`'s unsubscribe removes just
+   * that consumer; teardown clears the set.
+   */
+  frameConsumers: Set<(peerId: PeerId, frame: Frame) => void>;
   /**
    * Single consumer notified once when a peer's gameplay channel reaches open/usable. Set by session via
-   * `onPeerConnected`; `null` when unset. Mirrors the `frameConsumer` idiom (latest registration wins).
+   * `onPeerConnected`; `null` when unset. Single-slot — only `sessionPlugin` registers it (unlike `frameConsumers`, which fans out), so latest registration wins.
    */
   peerConnectedCb: ((peerId: PeerId) => void) | null;
   /**
    * Single consumer notified when an ESTABLISHED peer is lost via the heartbeat dead-peer path (§2.4).
    * NOT fired on teardown/close/explicit disconnect. Set by session via `onPeerLost`; `null` when unset.
-   * Mirrors the `frameConsumer` idiom (latest registration wins).
+   * Single-slot — only `sessionPlugin` registers it (unlike `frameConsumers`, which fans out), so latest registration wins.
    */
   peerLostCb: ((peerId: PeerId) => void) | null;
   /** Per-reason de-dup guard so a given `room:network-warning` reason is emitted at most once per peer-epoch. */

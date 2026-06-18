@@ -5,9 +5,11 @@
 The thin **HOST-role facade** a couch-multiplayer game plugin composes against to drive the
 authoritative TV stage. It owns no state, runs no resource, and contains no business logic: every
 method delegates via `ctx.require(...)` to one of the four engines it depends on (`transport`,
-`session`, `intent`, `sync`), and it re-declares + forwards all five `room:*` lifecycle events so a
-game plugin with `depends: [stagePlugin]` gets the complete, typed hook surface in one edge (WARN-2 —
-event visibility is not transitive: spec/07 §5, spec/14 §7). Shipped pre-composed as
+`session`, `intent`, `sync`), and it re-declares all five `room:*` lifecycle events so a game plugin
+with `depends: [stagePlugin]` gets the complete, typed hook surface in one edge (WARN-2 — event
+visibility is not transitive at the type level: spec/07 §5, spec/14 §7). It installs no forwarding
+hooks: Moku's event bus is global, so the engines' own emits already reach a `depends: [stagePlugin]`
+consumer's hooks directly (re-emitting would self-recurse). Shipped pre-composed as
 `roomPlugins.stage = [transport, session, intent, sync, stage]`.
 
 ## API
@@ -24,8 +26,10 @@ the `hostToken` re-entry credential.
 ### `mutate(ns: Namespace, recipe: MutateRecipe): void`
 
 Mutates one authoritative namespaced sync slice on the host. Delegates to `sync.mutate(ns, recipe)`,
-which applies the recipe to the slice's cells, advances `sSeq`, and schedules a throttled (20–30 Hz)
-delta broadcast to every controller (contracts §4.3). The only way the host changes shared state.
+which applies the recipe `(draft) => next` to the slice's cells, advances `sSeq`, and schedules a
+throttled (20–30 Hz) delta broadcast to every controller (contracts §4.3). The recipe is a pure
+function that receives the current cells and returns the next cells; `sync` diffs old vs.
+returned-next into an `Op` list. The only way the host changes shared state.
 
 ### `broadcast(): void`
 
@@ -49,8 +53,9 @@ removed on `room:peer-left`/heartbeat-dead).
 
 ## Events
 
-Re-declared from `00-contracts.md` §3 (identical payloads) and forwarded unchanged from the owning
-engine, so a `depends: [stagePlugin]` game plugin receives the complete lifecycle surface (WARN-2).
+Re-declared from `00-contracts.md` §3.1 (identical payloads) for type visibility, and delivered
+unchanged from the owning engine via Moku's global event bus (the facade adds no forwarding hooks —
+D19), so a `depends: [stagePlugin]` game plugin receives the complete lifecycle surface (WARN-2).
 Coarse lifecycle only — no gameplay payload ever flows through `emit` (spec/07 §3).
 
 | Event | Payload | Description |
@@ -59,7 +64,7 @@ Coarse lifecycle only — no gameplay payload ever flows through `emit` (spec/07
 | `room:peer-left` | `{ peerId: PeerId }` | A controller left or was declared dead by the heartbeat and left the roster (contracts §2.4, §3). |
 | `room:host-reconnecting` | `Record<string, never>` (`{}`) | Host tab reloaded; client-side recovery is in flight (contracts §5). |
 | `room:sync-ready` | `Record<string, never>` (`{}`) | First full snapshot applied; the synced replica is now readable (contracts §4). |
-| `room:network-warning` | `{ reason: "ice-failed" \| "rendezvous-unreachable" \| "channel-closed" }` | A connectivity hard-failure surfaced for failure UX (contracts §3, D2). |
+| `room:network-warning` | `{ reason: "ice-failed" \| "rendezvous-unreachable" \| "channel-closed" }` | A connectivity hard-failure surfaced for failure UX (contracts §3.1, D2). |
 
 ## Dependencies
 
@@ -82,7 +87,8 @@ hooks the `room:*` lifecycle by declaring `depends: [stagePlugin]` (which is how
 visible — WARN-2):
 
 ```typescript
-import { createApp, createPlugin } from "@moku-labs/web";
+import { createApp } from "@moku-labs/web";
+import { createPlugin } from "@moku-labs/web";
 import { roomPlugins, stagePlugin } from "@moku-labs/room";
 
 // A couch-multiplayer game plugin that drives the host stage.
@@ -90,7 +96,7 @@ const scoreboardGame = createPlugin("scoreboardGame", {
   // depends on the facade — this is what makes the five room:* events visible (WARN-2).
   depends: [stagePlugin],
 
-  // Hook the forwarded lifecycle events. Payloads come from contracts §3.
+  // Hook the forwarded lifecycle events. Payloads come from contracts §3.1.
   hooks: ctx => ({
     "room:peer-joined": ({ peerId }) => ctx.log.info(`controller joined: ${peerId}`),
     "room:sync-ready": () => ctx.log.info("replica is readable"),
@@ -112,9 +118,10 @@ const { joinUrl } = app.stage.createRoom();
 renderJoinQr(joinUrl);
 
 app.stage.onIntent("score", (payload, peerId) => {
-  app.stage.mutate("scores", draft => {
-    draft[peerId] = ((draft[peerId] as number) ?? 0) + 1;
-  });
+  app.stage.mutate("scores", draft => ({
+    ...draft,
+    [peerId]: ((draft[peerId] as number) ?? 0) + 1
+  }));
 });
 
 const players = app.stage.roster(); // readonly RosterEntry[] (contracts §6.1)

@@ -17,11 +17,11 @@ describe("createTransportState", () => {
     expect(createTransportState().selfId).toBe("");
   });
 
-  it("returns null session and null heartbeat/frame-consumer", () => {
+  it("returns null session, null heartbeat, and an empty frame-consumer set", () => {
     const state = createTransportState();
     expect(state.session).toBeNull();
     expect(state.heartbeatTimer).toBeNull();
-    expect(state.frameConsumer).toBeNull();
+    expect(state.frameConsumers.size).toBe(0);
   });
 
   it("returns null peerConnectedCb and null peerLostCb (D18 seam)", () => {

@@ -23,7 +23,7 @@ export function createTransportState(): TransportState {
     peers: new Map(),
     session: null,
     heartbeatTimer: null,
-    frameConsumer: null,
+    frameConsumers: new Set(),
     peerConnectedCb: null,
     peerLostCb: null,
     warned: new Set()

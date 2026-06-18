@@ -5,9 +5,11 @@
 The thin **CONTROLLER-role facade** (phone side) a couch-multiplayer game plugin composes against to
 join a room, observe the read-only synced replica, and send typed intents to the authoritative host. It
 owns no state and contains no business logic: every method delegates to one of the four resolved engine
-APIs it depends on (`transport`, `session`, `intent`, `sync`). It re-declares + forwards all five
-`room:*` lifecycle events so a game plugin with `depends: [controllerPlugin]` gets the complete, typed
-hook surface in one edge (WARN-2 — event visibility is not transitive: spec/07 §5, spec/14 §7). The one
+APIs it depends on (`transport`, `session`, `intent`, `sync`). It re-declares all five `room:*`
+lifecycle events so a game plugin with `depends: [controllerPlugin]` gets the complete, typed hook
+surface in one edge (WARN-2 — event visibility is not transitive at the type level: spec/07 §5,
+spec/14 §7); it adds no forwarding hooks, since Moku's global event bus already delivers the engines'
+emits to a `depends: [controllerPlugin]` consumer directly (D19). The one
 browser resource it touches directly is the iOS Screen Wake Lock (Safari 16.4+), exposed as an API method
 (not a lifecycle hook) so the consuming game owns the UX policy (D11). Shipped pre-composed as
 `roomPlugins.controller = [transport, session, intent, sync, controller]`.
@@ -69,10 +71,12 @@ the tab is hidden/closed, so there is no leaked-handle hazard if the tab is kill
 
 ## Events
 
-Re-declared from `00-contracts.md` §3.1 (identical payloads) and forwarded unchanged from the owning
-engine, so a `depends: [controllerPlugin]` game plugin receives the complete lifecycle surface (WARN-2).
-The facade owns none of these originally — it re-declares + forwards them because event visibility is not
-transitive (spec/07 §5). Coarse lifecycle only — no gameplay payload ever flows through `emit`
+Re-declared from `00-contracts.md` §3.1 (identical payloads) for type visibility, and delivered
+unchanged from the owning engine via Moku's global event bus, so a `depends: [controllerPlugin]` game
+plugin receives the complete lifecycle surface (WARN-2). The facade owns none of these originally — it
+re-declares them (for compile-time visibility) because event visibility is not transitive at the type
+level (spec/07 §5); it installs no forwarding hooks, since the global bus already delivers each engine's
+emit to the consumer (D19). Coarse lifecycle only — no gameplay payload ever flows through `emit`
 (spec/07 §3).
 
 | Event | Payload | Owner (re-declared + forwarded) | Description |
