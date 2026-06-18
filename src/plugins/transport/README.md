@@ -25,6 +25,8 @@ Moku `emit`** — all device-to-host frames ride the `Wire`.
 | `disconnect(peerId)` | Tears down one peer. |
 | `peers()` | Read-only snapshot of connected peer ids. |
 | `close()` | Closes all peers, stops the heartbeat, leaves the signaling session. |
+| `onPeerConnected(cb)` | Registers the consumer fired when a peer's gameplay channel opens (host: a controller connected; controller: the host connected). Latest registration wins; returns an unsubscribe. Used by `sessionPlugin` to emit `room:peer-joined`. |
+| `onPeerLost(cb)` | Registers the consumer fired when an established peer is lost via the heartbeat dead-peer path (§2.4 — NOT on clean teardown/`close()`/`disconnect()`). Latest registration wins; returns an unsubscribe. Used by `sessionPlugin` to emit `room:peer-left`. |
 
 ## Config
 

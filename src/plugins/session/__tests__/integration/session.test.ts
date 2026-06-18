@@ -210,11 +210,9 @@ describe("session integration (inMemory)", () => {
     app.session.createRoom();
     // Arm the persistence driver.
     app.session.persistSnapshot({}, 1);
-    await app.stop();
-    // After stop, calling recoveryPhase on a stopped app should not throw.
-    // The teardownRegistry should have been cleaned up.
-    // We can't directly inspect the WeakMap, but we verify stop() completes without error.
-    expect(true).toBe(true); // stop succeeded if we reach here.
+    // stop() must resolve cleanly — the per-instance teardownRegistry entry + timers are torn down.
+    // (The WeakMap can't be inspected directly; the observable signal is that stop() resolves without throwing.)
+    await expect(app.stop()).resolves.toBeUndefined();
   });
 
   it("D14: stopping ONE of two app instances leaves the OTHER app's recoveryPhase/timers untouched", async () => {

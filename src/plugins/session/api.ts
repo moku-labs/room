@@ -18,7 +18,7 @@ import { buildJoinUrl, buildQrMatrix } from "./lifecycle/qr";
 import { readRoster } from "./lifecycle/roster";
 import { mintHostToken } from "./recovery/hosttoken";
 import { armPersistence, recordSnapshot, teardownSession } from "./recovery/persistence";
-import { doJoinRoom, rejoinSameRoom } from "./recovery/reentry";
+import { doJoinRoom, rejoinSameRoom, type SessionStateWithRuntime } from "./recovery/reentry";
 import type { SessionApi, SessionContextShape, SessionDeps } from "./types";
 
 /**
@@ -170,7 +170,7 @@ export function createSessionApi(deps: SessionDeps): SessionApi {
     hostId(): import("../../contracts").PeerId {
       if (deps.state.role === "host") return deps.state.selfId;
       // Controller: return the stored host peer id.
-      const runtime = deps.state as unknown as { _hostId?: string | null };
+      const runtime = deps.state as unknown as SessionStateWithRuntime;
       return runtime._hostId ?? "";
     },
 

@@ -147,9 +147,11 @@ export function inMemory(): Signaling {
    * ```
    */
   const join = async (code: string, opts: SignalingJoinOpts): Promise<SignalingSessionImpl> => {
+    // Get or create the in-memory room for this code.
     const room = rooms.get(code) ?? { members: new Map<string, Member>() };
     rooms.set(code, room);
 
+    // Build this joiner's Member record (its onPeer/onSignal callbacks are bound below).
     const self: Member = {
       selfId: opts.selfId,
       passive: opts.passive ?? false,

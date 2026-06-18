@@ -97,6 +97,7 @@ function createPeer(state: TransportState, cfg: TransportConfig, peerId: PeerId)
       state.session.send(peerId, { kind: "candidate", candidate });
     }
   };
+
   /**
    * Marks the peer `"connected"` and clears the open-timeout timer when ICE reaches
    * connected/completed — the cue that the WebRTC handshake for this peer succeeded. On a transient
@@ -178,6 +179,7 @@ export function handlePeerArrival(
   retries = 0
 ): void {
   const loopback = asLoopback(state.session);
+  // Loopback (inMemory) path: wire the in-process channel directly and mark the peer connected.
   if (loopback) {
     if (state.peers.has(peerId)) return;
     const channel = loopback.openWireChannel(peerId);

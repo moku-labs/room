@@ -167,6 +167,7 @@ export function applyOps(snapshot: Snapshot, ops: readonly Op[]): Snapshot {
     result[ns] = { ...snapshot[ns] };
   }
 
+  // Apply each op in order: a null val deletes the cell, any other value sets it.
   for (const op of ops) {
     const { ns, key, val } = op;
     if (!(ns in result)) {

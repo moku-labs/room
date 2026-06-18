@@ -433,6 +433,7 @@ export function startHeartbeat(
   state.heartbeatTimer = setInterval(() => {
     const now = Date.now();
     for (const peer of state.peers.values()) {
+      // Declare the peer dead if no pong arrived within the timeout window: disconnect, warn once, notify.
       if (now - peer.lastPongAt > cfg.heartbeatTimeoutMs) {
         peer.state = "dead";
         const lostId = peer.peerId;
@@ -444,6 +445,8 @@ export function startHeartbeat(
         state.peerLostCb?.(lostId);
         continue;
       }
+
+      // Otherwise the peer is alive — send the next heartbeat ping.
       sendFrame(peer, { t: "ping", ts: now }, cfg, queues);
     }
   }, cfg.heartbeatIntervalMs);

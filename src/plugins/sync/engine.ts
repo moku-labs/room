@@ -24,8 +24,8 @@ import type { Cells, Config, State, SyncEngine } from "./types";
  */
 type SyncReadyEmit = () => void;
 
-/** Error message prefix for [@moku-labs/room] formatted errors (spec/11 Part 3). */
-const ERROR_PREFIX = "[moku-labs/room]";
+/** Error message prefix for [room] formatted errors (spec/11 Part 3; matches the `room:` event namespace). */
+const ERROR_PREFIX = "[room]";
 
 /**
  * Builds the ONE per-app `SyncEngine` over this app's mutable state, config, transport `Wire`, session

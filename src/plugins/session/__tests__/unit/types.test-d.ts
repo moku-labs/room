@@ -70,6 +70,15 @@ describe("types (type-level)", () => {
     expectTypeOf<HostReconnectingPayload>().toMatchTypeOf<Record<string, never>>();
   });
 
+  it("room:peer-joined / room:peer-left payloads reject malformed shapes", () => {
+    // The negative side of the positive payload checks above: an empty object is missing the required
+    // peerId, and a wrong-typed peerId is rejected — a depends:[sessionPlugin] consumer's emit would
+    // surface these as type errors.
+    expectTypeOf<Record<string, never>>().not.toMatchTypeOf<RoomEvents["room:peer-joined"]>();
+    expectTypeOf<{ peerId: number }>().not.toMatchTypeOf<RoomEvents["room:peer-joined"]>();
+    expectTypeOf<{ peerId: number }>().not.toMatchTypeOf<RoomEvents["room:peer-left"]>();
+  });
+
   it("RecoveryHelloFrame/Welcome/Flush are assignable to §2 Frame (toMatchTypeOf<Frame>)", () => {
     expectTypeOf<RecoveryHelloFrame>().toMatchTypeOf<Frame>();
     expectTypeOf<RecoveryWelcomeFrame>().toMatchTypeOf<Frame>();

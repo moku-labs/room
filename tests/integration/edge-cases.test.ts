@@ -29,13 +29,13 @@ describe("room edge cases — unregistered-slice mutate", () => {
     await stage.stop();
   });
 
-  it("sync.mutate on a never-registered namespace throws the prefixed [moku-labs/room] error", async () => {
+  it("sync.mutate on a never-registered namespace throws the prefixed [room] error", async () => {
     const bus = makeBus();
     const { app: stage } = makeStage(bus);
     await stage.start();
 
     // Same guard, reached via the role-agnostic sync surface rather than the stage facade.
-    expect(() => stage.sync.mutate("ghost", s => s)).toThrow(/\[moku-labs\/room\]/);
+    expect(() => stage.sync.mutate("ghost", s => s)).toThrow(/\[room\]/);
 
     await stage.stop();
   });
