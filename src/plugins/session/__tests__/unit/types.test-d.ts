@@ -16,12 +16,20 @@ import type {
   RosterEntry,
   Snapshot
 } from "../../../../contracts";
-import type { JoinResult, RecoveryPhase, RoomDescriptor, SelfInfo, SessionApi } from "../../types";
+import type {
+  JoinResult,
+  QrMatrix,
+  RecoveryPhase,
+  RoomDescriptor,
+  SelfInfo,
+  SessionApi
+} from "../../types";
 
 describe("types (type-level)", () => {
   it("app.session exposes exactly the SessionApi method signatures", () => {
     // Verify each method's return type.
     expectTypeOf<SessionApi["createRoom"]>().toMatchTypeOf<() => RoomDescriptor>();
+    expectTypeOf<SessionApi["qr"]>().toMatchTypeOf<() => Promise<QrMatrix | null>>();
     expectTypeOf<SessionApi["joinRoom"]>().toMatchTypeOf<(code: string) => Promise<JoinResult>>();
     expectTypeOf<SessionApi["leave"]>().toMatchTypeOf<() => Promise<void>>();
     expectTypeOf<SessionApi["rejoin"]>().toMatchTypeOf<() => Promise<JoinResult>>();

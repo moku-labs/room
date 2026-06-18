@@ -12,7 +12,7 @@
 import { createPlugin } from "@moku-labs/web";
 import { expectTypeOf } from "vitest";
 import type { Namespace, PeerId, RoomEvents, RosterEntry } from "../../../../contracts";
-import type { RoomDescriptor } from "../../../session/types";
+import type { QrMatrix, RoomDescriptor } from "../../../session/types";
 import type { Cells } from "../../../sync/types";
 import { createStageApi } from "../../api";
 import { stagePlugin } from "../../index";
@@ -49,6 +49,7 @@ expectTypeOf(createStageApi).returns.toEqualTypeOf<StageApi>();
 
 // StageApi method return types
 expectTypeOf<StageApi["createRoom"]>().returns.toEqualTypeOf<RoomDescriptor>();
+expectTypeOf<StageApi["qr"]>().returns.toEqualTypeOf<Promise<QrMatrix | null>>();
 expectTypeOf<StageApi["roster"]>().returns.toEqualTypeOf<readonly RosterEntry[]>();
 expectTypeOf<StageApi["broadcast"]>().returns.toEqualTypeOf<void>();
 expectTypeOf<StageApi["mutate"]>().returns.toEqualTypeOf<void>();

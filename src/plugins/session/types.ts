@@ -206,7 +206,12 @@ export type RoomDescriptor = {
   readonly code: string;
   /** The full controller join URL (`${joinUrlBase}?room=CODE`) the QR encodes (§6.2). */
   readonly joinUrl: string;
-  /** QR matrix data for `joinUrl`, or `null` when `config.generateQr` is `false`. Code/URL ONLY — never SDP/ICE (§6.2). */
+  /**
+   * Always `null` on the descriptor: `createRoom()` returns SYNCHRONOUSLY (§6.2) but QR generation is
+   * ASYNC (the `qrcode` encoder is lazy-imported host-only). Obtain the rendered matrix from the async
+   * {@link SessionApi.qr} accessor (or the host facade's `stage.qr()`) — it encodes the code/URL ONLY,
+   * never SDP/ICE (§6.2). Retained on the descriptor for shape stability.
+   */
   readonly qr: QrMatrix | null;
   /** The client-side host-reclaim credential (`crypto.randomUUID()`, §5.1, D11) — minted on `createRoom`, presented on host re-entry for peer-side verification. */
   readonly hostToken: string;
@@ -336,6 +341,26 @@ export type SessionApi = {
    * ```
    */
   createRoom: () => RoomDescriptor;
+
+  /**
+   * Builds the join-affordance QR matrix for the CURRENT room, ASYNCHRONOUSLY. This is the public
+   * companion to {@link SessionApi.createRoom}: that method returns synchronously (§6.2) and therefore
+   * cannot carry the async-generated matrix on its {@link RoomDescriptor} (`RoomDescriptor.qr` is always
+   * `null`) — the rendered matrix comes from here instead. The `qrcode` encoder is lazy-imported
+   * HOST-ONLY so it tree-shakes out of the `<5 KB` controller bundle (§6.2). The encoded payload is the
+   * join URL ONLY — never SDP/ICE (§6.2). Resolves to `null` when `config.generateQr` is `false` (the
+   * headless / controller path) or when no room is active.
+   *
+   * @returns A promise resolving to the {@link QrMatrix} for the active room's join URL, or `null` when
+   *   QR generation is disabled (`config.generateQr === false`) or no room is open.
+   * @example
+   * ```ts
+   * app.session.createRoom();           // sync — descriptor.qr is null
+   * const qr = await app.session.qr();  // async — the rendered matrix (or null when disabled)
+   * if (qr) renderQr(qr);               // show on the TV; phones scan to join
+   * ```
+   */
+  qr: () => Promise<QrMatrix | null>;
 
   /**
    * CONTROLLER entry point. Loads/creates the phone-persisted `reconnectToken` (§6.1), mints/reuses

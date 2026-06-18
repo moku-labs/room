@@ -10,7 +10,7 @@
  * methods delegate straight to the four engines (transport, session, intent, sync).
  */
 import type { Namespace, PeerId, RosterEntry } from "../../contracts";
-import type { RoomDescriptor } from "../session/types";
+import type { QrMatrix, RoomDescriptor } from "../session/types";
 import type { Cells } from "../sync/types";
 
 /**
@@ -70,15 +70,38 @@ export type StageApi = {
    * instant the code is minted).
    *
    * @returns The `RoomDescriptor` verbatim from `session` — `{ code, joinUrl, qr, hostToken }`: the room
-   *   code, the join URL, the QR matrix to render (code/URL only, never SDP/ICE; contracts §6.2), and the
+   *   code, the join URL, the `qr` slot (ALWAYS `null` here — `createRoom` is synchronous but QR
+   *   generation is async; render the matrix via the async {@link StageApi.qr} accessor), and the
    *   `hostToken` re-entry credential (contracts §5.1, D11).
    * @example
    * ```ts
    * const { code, joinUrl } = app.stage.createRoom();
-   * renderJoinQr(joinUrl);
+   * renderJoinCode(code);
+   * const qr = await app.stage.qr(); // async — descriptor.qr is null
+   * if (qr) renderJoinQr(qr);
    * ```
    */
   createRoom(): RoomDescriptor;
+
+  /**
+   * Builds the join-affordance QR matrix for the current room, ASYNCHRONOUSLY: delegates to
+   * `session.qr()`. This is the public companion to {@link StageApi.createRoom} — that method returns
+   * synchronously (contracts §6.2) and so cannot carry the async-generated matrix on its
+   * {@link RoomDescriptor} (`RoomDescriptor.qr` is always `null`); the rendered matrix comes from here.
+   * The `qrcode` encoder is lazy-imported HOST-ONLY (it tree-shakes out of the controller bundle,
+   * contracts §6.2) and encodes the join URL ONLY — never SDP/ICE. Resolves to `null` when
+   * `session`'s `generateQr` config is `false` or no room is open.
+   *
+   * @returns A promise resolving to the {@link QrMatrix} for the active room's join URL, or `null` when
+   *   QR generation is disabled or no room is open.
+   * @example
+   * ```ts
+   * app.stage.createRoom();
+   * const qr = await app.stage.qr();
+   * if (qr) renderJoinQr(qr); // show on the TV; phones scan to join
+   * ```
+   */
+  qr(): Promise<QrMatrix | null>;
 
   /**
    * Mutates one authoritative namespaced sync slice on the host: delegates to `sync.mutate(ns, recipe)`.

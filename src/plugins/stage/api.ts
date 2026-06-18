@@ -17,7 +17,7 @@ import type { StageApi } from "./types";
 
 /**
  * Creates the HOST-role facade API from the three resolved engine APIs. Every method is a
- * one-line delegation: `createRoom`/`roster` → session; `mutate`/`broadcast` → sync;
+ * one-line delegation: `createRoom`/`qr`/`roster` → session; `mutate`/`broadcast` → sync;
  * `onIntent` → intent (adapts engine's `(payload, meta)` callback to facade's `(payload, peerId)`
  * by unwrapping `meta.peerId`). The `transportPlugin` is intentionally absent from this factory's
  * signature — it is a visibility-only dependency wired via `depends` in `index.ts`, and the facade
@@ -42,6 +42,7 @@ import type { StageApi } from "./types";
 export function createStageApi(session: SessionApi, intent: IntentApi, sync: SyncApi): StageApi {
   return {
     createRoom: () => session.createRoom(),
+    qr: () => session.qr(),
     mutate: (ns, recipe) => sync.mutate(ns, recipe),
     broadcast: () => sync.broadcast(),
     onIntent: (name, handler) =>

@@ -20,8 +20,23 @@ Creates and hosts a new room. Delegates to `session.createRoom()`, which mints t
 (contracts §6.2) + `hostToken` (contracts §5.1), joins the signaling rendezvous as the active offerer,
 and accepts controllers up to `MAX_CONTROLLERS` (contracts §6). Room-code generation is **synchronous**,
 so this returns the `RoomDescriptor` **directly — not a promise**. Returns `{ code, joinUrl, qr,
-hostToken }`: the room code, the join URL, the QR matrix to render (code/URL only, never SDP/ICE), and
-the `hostToken` re-entry credential.
+hostToken }`: the room code, the join URL, the `qr` slot (**always `null`** — QR generation is async;
+render the matrix via `qr()` below), and the `hostToken` re-entry credential.
+
+### `qr(): Promise<QrMatrix | null>`
+
+Builds the join-QR matrix for the open room, **asynchronously**. Delegates to `session.qr()`. This is the
+companion to `createRoom()` — that method is synchronous and so cannot carry the async-generated matrix
+on its `RoomDescriptor` (`RoomDescriptor.qr` is always `null`); the rendered matrix comes from here. The
+`qrcode` encoder is lazy-imported **host-only** (it tree-shakes out of the controller bundle, contracts
+§6.2) and encodes the join URL **only** — never SDP/ICE. Resolves to `null` when `session`'s `generateQr`
+config is `false` or no room is open.
+
+```ts
+const { code, joinUrl } = app.stage.createRoom(); // synchronous
+const qr = await app.stage.qr(); // async — descriptor.qr is null
+if (qr) renderJoinQr(qr); // show on the TV; phones scan to join
+```
 
 ### `mutate(ns: Namespace, recipe: MutateRecipe): void`
 
@@ -114,8 +129,11 @@ await app.start();
 
 // Drive the host stage through the single facade surface.
 // createRoom() is synchronous — it returns the RoomDescriptor directly (no await).
-const { joinUrl } = app.stage.createRoom();
-renderJoinQr(joinUrl);
+const { code, joinUrl } = app.stage.createRoom();
+showJoinCode(code, joinUrl);
+// The QR matrix is async (descriptor.qr is null) — fetch + render it from the qr() accessor.
+const qr = await app.stage.qr();
+if (qr) renderJoinQr(qr);
 
 app.stage.onIntent("score", (payload, peerId) => {
   app.stage.mutate("scores", draft => ({

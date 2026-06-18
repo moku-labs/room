@@ -35,13 +35,19 @@ export function makeBus(): Bus {
 
 /**
  * Shared `pluginConfigs` for every Room app in the harness: the required `site` block (web's core
- * plugin), the in-memory `signaling` bus on transport, and QR generation off (DOM-free test bus).
+ * plugin), the in-memory `signaling` bus on transport, and the `session.generateQr` toggle. QR is OFF
+ * by default (the DOM-free test bus has no camera path); pass `generateQr: true` to exercise the public
+ * `session.qr()` / `stage.qr()` accessor (the encoder is pure and DOM-free, so it runs under the bus too).
+ *
+ * @param bus - The in-process signaling bus to wire onto transport.
+ * @param generateQr - Whether `session` should build QR matrix data. Default `false`.
+ * @returns The `pluginConfigs` object to hand to `createApp`.
  */
-export function siteCfg(bus: Bus) {
+export function siteCfg(bus: Bus, generateQr = false) {
   return {
     site: { name: "room-test", url: "https://room.test" },
     transport: { signaling: bus },
-    session: { generateQr: false }
+    session: { generateQr }
   };
 }
 
@@ -73,8 +79,14 @@ function captureHooks(captured: CapturedEvent[]) {
  * Builds a STAGE (host / shared-screen) app from the public `roomPlugins.stage` plus a throwaway game
  * probe that `depends:[stagePlugin]` and records every `room:*` event it sees (the WARN-2 visibility
  * proof). The returned app exposes `app.stage`, `app.sync`, `app.session`, `app.intent`, `app.transport`.
+ * Pass `generateQr: true` to exercise the host's public `stage.qr()` accessor.
+ *
+ * @param bus - The in-process signaling bus to rendezvous on.
+ * @param probeName - Unique plugin name for the event-capture probe (avoid collisions across apps).
+ * @param generateQr - Whether `session` should build QR matrix data (drives `stage.qr()`). Default `false`.
+ * @returns `{ app, captured }` — the composed host app and its captured `room:*` events.
  */
-export function makeStage(bus: Bus, probeName = "stageGameProbe") {
+export function makeStage(bus: Bus, probeName = "stageGameProbe", generateQr = false) {
   const captured: CapturedEvent[] = [];
 
   const probe = createPlugin(probeName, {
@@ -86,7 +98,7 @@ export function makeStage(bus: Bus, probeName = "stageGameProbe") {
 
   const app = createApp({
     plugins: [...roomPlugins.stage, probe],
-    pluginConfigs: siteCfg(bus)
+    pluginConfigs: siteCfg(bus, generateQr)
   });
 
   return { app, captured };

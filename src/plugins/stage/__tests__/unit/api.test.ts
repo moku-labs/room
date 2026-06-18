@@ -12,7 +12,7 @@
  */
 import { describe, expect, it, vi } from "vitest";
 import type { IntentApi, IntentMeta } from "../../../intent/types";
-import type { RoomDescriptor, RosterEntry, SessionApi } from "../../../session/types";
+import type { QrMatrix, RoomDescriptor, RosterEntry, SessionApi } from "../../../session/types";
 import type { Cells, Api as SyncApi } from "../../../sync/types";
 import { createStageApi } from "../../api";
 
@@ -31,8 +31,10 @@ function makeSessionSpy() {
   const roster: readonly RosterEntry[] = [
     { id: "p1", reconnectToken: "rt1", joinedAt: 1_718_600_000_000 }
   ];
+  const qrMatrix: QrMatrix = { size: 2, modules: [true, false, false, true] };
   const spy = {
     createRoom: vi.fn<() => RoomDescriptor>(() => descriptor),
+    qr: vi.fn<() => Promise<QrMatrix | null>>(async () => qrMatrix),
     roster: vi.fn<() => readonly RosterEntry[]>(() => roster)
   };
   return { ...spy, _session: spy as unknown as SessionApi };
@@ -80,6 +82,18 @@ describe("createStageApi — delegation", () => {
     // Returns the SAME object reference (verbatim delegation — no transformation)
     expect(result).toBe(session.createRoom.mock.results[0]?.value);
     expect(result.code).toBe("ABC123");
+  });
+
+  it("qr() calls session.qr() exactly once and resolves its QrMatrix verbatim", async () => {
+    const session = makeSessionSpy();
+    const intent = makeIntentSpy();
+    const sync = makeSyncSpy();
+
+    const api = createStageApi(session._session, intent._intent, sync._sync);
+    const result = await api.qr();
+
+    expect(session.qr).toHaveBeenCalledOnce();
+    expect(result).toEqual({ size: 2, modules: [true, false, false, true] });
   });
 
   it("mutate('scores', recipe) calls sync.mutate once with the same ns and the same recipe reference (identity)", () => {

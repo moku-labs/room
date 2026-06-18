@@ -91,8 +91,11 @@ const app = createApp({
 await app.start();
 
 // createRoom() is SYNCHRONOUS — it returns the descriptor directly (no await).
-const { code, joinUrl, qr } = app.stage.createRoom();
-renderJoinQr(joinUrl); // show the QR on the TV; phones scan it to join
+const { code, joinUrl } = app.stage.createRoom();
+showJoinCode(code, joinUrl);
+// The join QR is async (descriptor.qr is always null) — fetch + render it from the qr() accessor.
+const qr = await app.stage.qr();
+if (qr) renderJoinQr(qr); // show the QR on the TV; phones scan it to join
 
 // Own authoritative state: register a slice, react to intents, mutate.
 app.stage.onIntent("score", (payload, peerId) => {
@@ -181,7 +184,7 @@ plugin (`depends: [stagePlugin]` / `[controllerPlugin]`) sees the complete typed
 
 The facade's API is reached off the app by plugin name:
 
-- Stage: **`app.stage`** → `StageApi` (`createRoom`, `mutate`, `broadcast`, `onIntent`, `roster`).
+- Stage: **`app.stage`** → `StageApi` (`createRoom`, `qr`, `mutate`, `broadcast`, `onIntent`, `roster`).
 - Controller: **`app.controller`** → `ControllerApi` (`joinRoom`, `read`, `on`, `intent`, `requestWakeLock`,
   `releaseWakeLock`).
 
@@ -214,7 +217,7 @@ surface over the four engines).
 | # | Plugin | Tier | Depends on | Role / key surface |
 |---|--------|------|-----------|--------------------|
 | 1 | `transportPlugin` | Complex | — | WebRTC DataChannels: signaling handshake, chunking/backpressure, mandatory heartbeat, capped ICE recovery. Owns the typed `Wire`. API: `connect`, `wire`, `disconnect`, `peers`, `close`. Emits `room:network-warning`. |
-| 2 | `sessionPlugin` | Complex | transport | Room code + QR + roster; star topology (`hostId()`); client-side host-reload recovery. API: `createRoom`, `joinRoom`, `leave`, `rejoin`, `roster`, `self`, `recoveryPhase`. Emits `room:peer-joined`, `room:peer-left`, `room:host-reconnecting`. |
+| 2 | `sessionPlugin` | Complex | transport | Room code + QR + roster; star topology (`hostId()`); client-side host-reload recovery. API: `createRoom`, `qr`, `joinRoom`, `leave`, `rejoin`, `roster`, `self`, `recoveryPhase`. Emits `room:peer-joined`, `room:peer-left`, `room:host-reconnecting`. |
 | 3 | `intentPlugin` | Standard | transport, session | Controller→host typed inputs (`IntentFrame`, per-controller `cSeq` idempotent de-dup). API: `register`, `onIntent`, `intent`, buffer seam. No events. |
 | 4 | `syncPlugin` | Complex | transport, session | Host→controller authoritative state: full snapshot + throttled op-list deltas (custom codec). API: `registerSlice`, `mutate`, `broadcast`, `read`, `subscribe`, `applyFrame`. Emits `room:sync-ready`. |
 | 5 | `stagePlugin` | Standard (facade) | all four | **Host-role facade** → `StageApi` (`app.stage`). Re-declares all five `room:*` events. |

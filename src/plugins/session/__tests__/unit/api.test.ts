@@ -144,6 +144,50 @@ describe("createSessionApi", () => {
     });
   });
 
+  describe("qr", () => {
+    /** Test config with QR generation ON (the host/browser path; the shared `testConfig` keeps it OFF). */
+    const qrOnConfig: Readonly<SessionConfig> = { ...testConfig, generateQr: true };
+
+    it("resolves null when no room is active (roomCode empty), even with generateQr on", async () => {
+      const deps = makeDeps({ config: qrOnConfig }); // role 'none', roomCode ''
+      const api = createSessionApi(deps);
+
+      await expect(api.qr()).resolves.toBeNull();
+    });
+
+    it("resolves null when generateQr is false, even with an active room", async () => {
+      const deps = makeDeps(); // testConfig.generateQr === false
+      deps.state.roomCode = "G7K2QF";
+      const api = createSessionApi(deps);
+
+      await expect(api.qr()).resolves.toBeNull();
+    });
+
+    it("resolves a QrMatrix for the active room's join URL when generateQr is true", async () => {
+      const deps = makeDeps({ config: qrOnConfig });
+      deps.state.roomCode = "G7K2QF";
+      const api = createSessionApi(deps);
+
+      const matrix = await api.qr();
+
+      expect(matrix).not.toBeNull();
+      if (!matrix) return;
+      expect(matrix.size).toBeGreaterThan(0);
+      expect(matrix.modules).toHaveLength(matrix.size * matrix.size);
+    });
+
+    it("renders the QR for a room opened via createRoom (createRoom sync + descriptor.qr null → qr() matrix)", async () => {
+      const deps = makeDeps({ config: qrOnConfig });
+      const api = createSessionApi(deps);
+
+      const descriptor = api.createRoom();
+      expect(descriptor.qr).toBeNull(); // sync path never carries the async matrix
+
+      const matrix = await api.qr();
+      expect(matrix).not.toBeNull();
+    });
+  });
+
   describe("joinRoom", () => {
     it("returns { ok:false, reason:'unreachable' } when already in a room", async () => {
       const deps = makeDeps();

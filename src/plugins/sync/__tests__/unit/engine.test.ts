@@ -44,6 +44,7 @@ function makeWire() {
 function makeSession(): SessionApi {
   return {
     createRoom: vi.fn(),
+    qr: vi.fn(async () => null),
     joinRoom: vi.fn(),
     leave: vi.fn(),
     rejoin: vi.fn(),

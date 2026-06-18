@@ -33,10 +33,11 @@ function setStatus(text: string): void {
 }
 
 /**
- * Paints a {@link import("../src/index").RoomDescriptor}'s QR matrix onto the canvas — `size × size`
- * dark/light modules scaled up to a comfortable scan target. No-op when QR generation was disabled.
+ * Paints a {@link import("../src/index").QrMatrix} onto the canvas — `size × size` dark/light modules
+ * scaled up to a comfortable scan target. No-op when QR generation was disabled (`null`).
  *
- * @param qr - The boolean module matrix from `createRoom()`, or `null` when `generateQr` is off.
+ * @param qr - The boolean module matrix from the async `app.stage.qr()` accessor, or `null` when
+ *   `generateQr` is off.
  */
 function renderQr(
   qr: { readonly size: number; readonly modules: readonly boolean[] } | null
@@ -118,14 +119,12 @@ async function boot(): Promise<void> {
     const link = byId("join-url") as HTMLAnchorElement;
     link.textContent = descriptor.joinUrl;
     link.href = descriptor.joinUrl;
-    renderQr(descriptor.qr);
 
-    // KNOWN GAP (see ../.planning/build/findings.md): `createRoom()` is synchronous but QR generation is
-    // async, so `descriptor.qr` is currently ALWAYS null and no public async QR accessor exists. The demo
-    // stays fully usable — players join by typing the 6-char code. Degrade gracefully until the API lands.
-    byId("qr-hint").textContent = descriptor.qr
-      ? "Scan to join"
-      : "Enter the code on your phone to join";
+    // Render the join QR via the public async accessor. `createRoom()` is synchronous (so `descriptor.qr`
+    // is always null), but QR generation is async — the `qrcode` encoder is lazy-imported host-only.
+    const qr = await app.stage.qr();
+    renderQr(qr);
+    byId("qr-hint").textContent = qr ? "Scan to join" : "Enter the code on your phone to join";
 
     // Live leaderboard: re-render on every authoritative change, plus a slow poll for roster join/leave.
     app.sync.subscribe(SCORES, () => renderLeaderboard());

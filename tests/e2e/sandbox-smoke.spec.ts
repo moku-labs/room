@@ -33,13 +33,12 @@ test.describe("sandbox smoke (offline, in-memory signaling)", () => {
     expect(crashes, `uncaught page errors: ${crashes.join(" | ")}`).toEqual([]);
   });
 
-  // KNOWN GAP — expected to FAIL until the library ships a public async QR accessor. `createRoom()` is
-  // synchronous but QR generation is async, so `RoomDescriptor.qr` is always null and the TV cannot paint
-  // a join QR through the public surface (see .planning/build/findings.md). `test.fail()` makes this an
-  // honest, self-clearing marker: Playwright flags it the moment the QR actually renders, prompting removal.
+  // The stage paints a join QR through the PUBLIC surface: `createRoom()` is synchronous (so
+  // `RoomDescriptor.qr` is null), and the host renders the matrix from the async `app.stage.qr()`
+  // accessor (see .planning/build/findings.md "Step 5.9.x"). boot() awaits `stage.qr()` and paints the
+  // canvas BEFORE flipping the status to "open", so by the time "open" is visible the canvas has a
+  // non-zero width.
   test("stage renders a join QR", async ({ page }) => {
-    test.fail(true, "RoomDescriptor.qr is always null — no public async QR accessor (findings.md)");
-
     await page.goto("/stage?signaling=memory");
     await expect(page.getByTestId("status")).toContainText("open", { timeout: 20_000 });
 

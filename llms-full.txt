@@ -96,7 +96,7 @@ Everything below is the COMPLETE public surface. Nothing else is public.
   `HeartbeatPongFrame`, `RecoveryHelloFrame`, `RecoveryWelcomeFrame`, `RecoveryFlushFrame`, `PeerId`, `RosterEntry`,
   `Snapshot`, `Op`, `JsonValue`, `Namespace`, `RoomEvents`.
 - **Contract consts:** `MAX_CONTROLLERS` (= 8), `ROOM_CODE_LENGTH` (= 6).
-- **Plugin-owned public types:** `RoomDescriptor`, `JoinResult` (from session); `StageApi` (from stage);
+- **Plugin-owned public types:** `RoomDescriptor`, `JoinResult`, `QrMatrix` (from session); `StageApi` (from stage);
   `ControllerApi` (from controller).
 
 ---
@@ -386,6 +386,10 @@ type SessionApi = {
   /** HOST. Mints selfId + 6-char code + hostToken, joins signaling as active hub, arms persistence, returns the
    *  descriptor SYNCHRONOUSLY (no Promise). Throws if already in a room. */
   createRoom: () => RoomDescriptor;
+  /** HOST. Async companion to createRoom — builds the join-QR matrix for the open room (the qrcode encoder is
+   *  lazy-imported host-only). null when generateQr is false or no room is open. Encodes the join URL ONLY,
+   *  never SDP/ICE. (createRoom is sync so RoomDescriptor.qr is always null — get the matrix here.) */
+  qr: () => Promise<QrMatrix | null>;
   /** CONTROLLER. Loads/creates the phone reconnectToken, joins signaling as passive. Resolves once the channel is
    *  connected. `{ ok:false, reason }` on failure. (passive:true set internally — caller passes code only.) */
   joinRoom: (code: string) => Promise<JoinResult>;
@@ -412,7 +416,8 @@ type RoomDescriptor = {
   readonly code: string;
   /** The full controller join URL (`${joinUrlBase}?room=CODE`) the QR encodes. */
   readonly joinUrl: string;
-  /** QR matrix data for joinUrl, or null when config.generateQr is false. Code/URL ONLY — never SDP/ICE. */
+  /** ALWAYS null: createRoom is synchronous but QR generation is async. Get the rendered matrix from the async
+   *  SessionApi.qr() / StageApi.qr() accessor. Encodes the code/URL ONLY — never SDP/ICE. */
   readonly qr: QrMatrix | null;
   /** The client-side host-reclaim credential (crypto.randomUUID()) — presented on host re-entry for peer-side
    *  verification. */
@@ -446,8 +451,8 @@ type RecoveryPhase =
   | "degraded";    // reconnect timed out (iOS -> "rescan QR"); session unrecoverable here
 ```
 
-(`RoomDescriptor` and `JoinResult` are part of the public export surface; `QrMatrix`, `SelfInfo`, `RecoveryPhase`
-are reachable through `RoomDescriptor`/`SessionApi` but are documented here for completeness.)
+(`RoomDescriptor`, `JoinResult`, and `QrMatrix` are part of the public export surface; `SelfInfo` and
+`RecoveryPhase` are reachable through `RoomDescriptor`/`SessionApi` but are documented here for completeness.)
 
 **Lossy intent buffering:** while the host is absent, controllers buffer timestamped intents in a ring (cap
 `intentBufferMax`, oldest dropped first); entries older than `intentBufferMaxAgeMs` are discarded on flush. Lossy by
@@ -591,8 +596,13 @@ type IntentHandler = (payload: unknown, peerId: PeerId) => void; // stage facade
 /** The HOST-role facade API (D5). Reached as app.stage or ctx.require(stagePlugin). */
 type StageApi = {
   /** Creates + hosts a new room. Delegates to session.createRoom(). Room-code generation is SYNCHRONOUS, so this
-   *  returns the RoomDescriptor DIRECTLY — not a promise. Returns { code, joinUrl, qr, hostToken }. */
+   *  returns the RoomDescriptor DIRECTLY — not a promise. Returns { code, joinUrl, qr, hostToken } where qr is
+   *  ALWAYS null (QR generation is async — render the matrix via qr() below). */
   createRoom(): RoomDescriptor;
+  /** Builds the join-QR matrix for the open room, ASYNCHRONOUSLY. Delegates to session.qr(). The companion to
+   *  createRoom (which is sync and so cannot carry the async matrix on RoomDescriptor.qr). Lazy-imports the
+   *  qrcode encoder host-only; encodes the join URL ONLY — never SDP/ICE. null when generateQr is false / no room. */
+  qr(): Promise<QrMatrix | null>;
   /** Mutates one authoritative namespaced sync slice. Delegates to sync.mutate. Advances sSeq and schedules a
    *  throttled (20–30 Hz) delta broadcast. The ONLY way the host changes shared state. */
   mutate(ns: Namespace, recipe: MutateRecipe): void;
@@ -711,9 +721,10 @@ const scoreboard = createPlugin("scoreboard", {
   onStart: ctx => {
     const stage = ctx.require(stagePlugin);
 
-    // Host creates the room (SYNCHRONOUS) and shows the QR.
-    const { joinUrl } = stage.createRoom();
-    renderJoinQr(joinUrl);
+    // Host creates the room (SYNCHRONOUS); the join QR is async (descriptor.qr is null).
+    const { code, joinUrl } = stage.createRoom();
+    showJoinCode(code, joinUrl);
+    stage.qr().then(qr => qr && renderJoinQr(qr)); // fetch the matrix via the async qr() accessor
 
     // Each controller intent advances that controller's score; mutate schedules a throttled delta.
     stage.onIntent("score", (_payload, peerId) => {
@@ -851,8 +862,9 @@ const myGame = createPlugin("myGame", {
   }),
   onStart: ctx => {
     const stage = ctx.require(stagePlugin);
-    const { joinUrl } = stage.createRoom();
-    renderJoinQr(joinUrl);
+    const { code, joinUrl } = stage.createRoom();
+    showJoinCode(code, joinUrl);
+    stage.qr().then(qr => qr && renderJoinQr(qr)); // QR is async; descriptor.qr is null
     stage.onIntent("move", (payload, peerId) => {
       stage.mutate("players", draft => ({ ...draft, [peerId]: payload as JsonValue }));
     });

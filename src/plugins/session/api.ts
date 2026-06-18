@@ -14,7 +14,7 @@
 
 import { transportPlugin } from "../transport";
 import { generateRoomCode } from "./lifecycle/code";
-import { buildJoinUrl } from "./lifecycle/qr";
+import { buildJoinUrl, buildQrMatrix } from "./lifecycle/qr";
 import { readRoster } from "./lifecycle/roster";
 import { mintHostToken } from "./recovery/hosttoken";
 import { armPersistence, recordSnapshot, teardownSession } from "./recovery/persistence";
@@ -94,19 +94,20 @@ export function createSessionApi(deps: SessionDeps): SessionApi {
         // Best-effort: connection failure is surfaced via room:network-warning from transport.
       });
 
-      // Build QR synchronously if enabled (buildQrMatrix is async, so we return null for qr
-      // and let callers use the async variant if needed; the spec says createRoom is sync).
-      // Per the spec, qr is returned synchronously — for the sync path we return null and
-      // let the host call buildQrMatrix separately, or we use a stored async result.
-      // The spec requires synchronous return but also requires QR matrix. We resolve this
-      // by computing the QR asynchronously and caching it, but return null for now on the
-      // sync path (generateQr:false is the headless path; generateQr:true is the browser path
-      // where the consumer should use the async version). For v1 TDD compliance, we make
-      // createRoom sync with qr:null when generateQr:true (consumer calls buildQrMatrix separately).
-      // The spec says "returns synchronously" but the QR lib is async — we return null here.
+      // QR is async (lazy-imports `qrcode`) but createRoom is sync (§6.2 contract), so the descriptor
+      // carries `qr: null`. The rendered matrix comes from the async `qr()` accessor below.
       const qr = null;
 
       return { code, joinUrl, qr, hostToken };
+    },
+
+    /** @inheritdoc */
+    async qr(): Promise<import("./types").QrMatrix | null> {
+      // No active room → nothing worth encoding (avoids a QR for an empty `?room=` URL).
+      if (deps.state.roomCode === "") return null;
+
+      const joinUrl = buildJoinUrl(deps.state.roomCode, deps.config.joinUrlBase);
+      return buildQrMatrix(joinUrl, deps.config.generateQr);
     },
 
     /** @inheritdoc */

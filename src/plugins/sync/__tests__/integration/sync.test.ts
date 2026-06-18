@@ -329,6 +329,7 @@ describe("sync integration (inMemory)", () => {
     const state = createSyncState();
     const session = {
       createRoom: vi.fn(),
+      qr: vi.fn(async () => null),
       joinRoom: vi.fn(),
       leave: vi.fn(),
       rejoin: vi.fn(),

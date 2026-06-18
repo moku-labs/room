@@ -7,9 +7,10 @@
 ## Responsibilities
 
 1. **Room lifecycle** (`api.ts` + `lifecycle/`) — `createRoom()` (host, mints a 6-char code + join URL +
-   QR + `hostToken`, synchronously), `joinRoom(code)` (controller, passive), `leave()`, `rejoin()`.
-   Delegates the SDP/ICE handshake to `transport` (the `Signaling` seam) — never touches
-   `RTCPeerConnection` directly.
+   `hostToken`, synchronously), `qr()` (host, async — builds the join-QR matrix; the encoder is
+   lazy-imported so it stays out of the controller bundle), `joinRoom(code)` (controller, passive),
+   `leave()`, `rejoin()`. Delegates the SDP/ICE handshake to `transport` (the `Signaling` seam) — never
+   touches `RTCPeerConnection` directly.
 2. **Presence / roster** (`lifecycle/`) — stable `PeerId`, phone-persisted `reconnectToken`
    (localStorage), the 8-controller cap (`MAX_CONTROLLERS`), and STAR-TOPOLOGY enforcement (host is the
    sole hub; controller<->controller channels are rejected).
@@ -25,7 +26,8 @@
 
 | Method | Signature | Notes |
 |---|---|---|
-| `createRoom` | `() => RoomDescriptor` | HOST. Returns `{ code, joinUrl, qr, hostToken }` SYNCHRONOUSLY (no `Promise`). Throws if already in a room. |
+| `createRoom` | `() => RoomDescriptor` | HOST. Returns `{ code, joinUrl, qr, hostToken }` SYNCHRONOUSLY (no `Promise`). `qr` is ALWAYS `null` here (QR generation is async) — use `qr()`. Throws if already in a room. |
+| `qr` | `() => Promise<QrMatrix \| null>` | HOST. Async companion to `createRoom` — builds the join-QR matrix for the open room (the `qrcode` encoder is lazy-imported host-only). `null` when `generateQr` is `false` or no room is open. Encodes the join URL ONLY — never SDP/ICE. |
 | `joinRoom` | `(code: string) => Promise<JoinResult>` | CONTROLLER (passive set internally). `{ ok:false, reason:"full"\|"not-found"\|"unreachable" }` on failure. |
 | `leave` | `() => Promise<void>` | Idempotent. |
 | `rejoin` | `() => Promise<JoinResult>` | iOS "rescan QR" path; re-uses the persisted `reconnectToken`. |

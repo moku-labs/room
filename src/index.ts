@@ -72,6 +72,6 @@ export type {
 export { MAX_CONTROLLERS, ROOM_CODE_LENGTH } from "./contracts";
 
 // --- Public plugin types (owned by their plugins) ---
-export type { RoomDescriptor, JoinResult } from "./plugins/session/types";
+export type { RoomDescriptor, JoinResult, QrMatrix } from "./plugins/session/types";
 export type { StageApi } from "./plugins/stage/types";
 export type { ControllerApi } from "./plugins/controller/types";
