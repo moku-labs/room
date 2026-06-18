@@ -49,13 +49,19 @@ export function registerTransportBindings(deps: SessionDeps): void {
       };
       handlePeerConnected(deps)(peerId, entry);
     } else {
-      // Controller side: the host connected. Record the host id.
-      // pendingJoinResolve is stored on the deps state runtime extension (not serialized).
+      // Controller side: the host is the single star hub. Accept a connecting peer as the host ONLY
+      // when we are actively (re)connecting to one — a pending joinRoom, OR a non-"stable" recovery
+      // phase (host re-entry after absence). Once stable with a known host, a later connection is NOT
+      // the host (e.g. a non-star / meshing signaling adapter surfacing another controller) and must
+      // not clobber `_hostId` (finding #1). The pending resolver/host id live on the runtime extension.
+      const rt = deps.state as unknown as SessionStateWithRuntime;
+      const expectingHost =
+        rt._pendingJoinResolve !== null || deps.state.recovery.phase !== "stable";
+      if (rt._hostId !== null && !expectingHost) return;
+
       deps.state.selfId = deps.state.selfId || peerId; // keep our own id if already set
       // Resolve any pending joinRoom promise by updating recovery phase.
       deps.state.recovery.phase = "stable";
-      // The pending resolver is stored via the runtime-only field mechanism.
-      const rt = deps.state as unknown as SessionStateWithRuntime;
       const resolver = rt._pendingJoinResolve;
       if (resolver) {
         rt._pendingJoinResolve = null;

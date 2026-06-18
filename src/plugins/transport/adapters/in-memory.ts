@@ -17,6 +17,8 @@ import type { LoopbackEndpoint, LoopbackSignaling } from "../channel";
 /** A live participant on the in-process bus — one per `join` call. */
 type Member = {
   readonly selfId: string;
+  /** `true` for a passive (controller) join — two passive members never pipe to each other (star). */
+  readonly passive: boolean;
   onPeer: ((peerId: string) => void) | null;
   onPeerLeave: ((peerId: string) => void) | null;
   onSignal: ((peerId: string, msg: SignalMsg) => void) | null;
@@ -32,23 +34,53 @@ type Room = {
 };
 
 /**
- * One end of an in-process wire pipe. `send` pushes into the paired endpoint's `onmessage` on a
- * microtask (mirroring a real channel's async delivery); `bufferedAmount` stays `0` (no real socket) so
- * backpressure never engages on the test bus.
+ * One end of an in-process wire pipe. `send` hands the message to the paired endpoint, which delivers it
+ * on a microtask (mirroring a real channel's async delivery) once its `onmessage` sink is bound — and
+ * BUFFERS it until then. `bufferedAmount` stays `0` (no real socket) so backpressure never engages.
+ *
+ * The buffer matters for late joiners: the host pushes its join-baseline `sync-snap` the instant the peer
+ * connects (on `room:peer-joined`), but the joiner wires its receive pump one microtask LATER (transport's
+ * `handlePeerArrival` → `bindChannel`). A real `RTCDataChannel` binds `onmessage` on channel creation
+ * (before `open`), so it never drops that frame — buffering reproduces that fidelity here (finding #2).
  */
 class PipeEndpoint implements LoopbackEndpoint {
   bufferedAmount = 0;
   bufferedAmountLowThreshold = 0;
   readyState: "open" | "closed" = "open";
-  onmessage: ((event: { data: string }) => void) | null = null;
   peer: PipeEndpoint | null = null;
   private closeHandler: (() => void) | null = null;
+  /** Backing field for the {@link onmessage} accessor — the unified inbound sink consumed by channel.ts. */
+  private onmessageHandler: ((event: { data: string }) => void) | null = null;
+  /** Frames that arrived before `onmessage` was bound; drained in arrival order once it is. */
+  private readonly preBindBuffer: string[] = [];
 
   /* eslint-disable jsdoc/require-jsdoc -- in-process DataChannel shim; mirrors the lib.dom RTCDataChannel methods consumed by channel.ts */
+  get onmessage(): ((event: { data: string }) => void) | null {
+    return this.onmessageHandler;
+  }
+
+  // Binding the sink drains whatever arrived before the receive pump was wired (the late-join baseline).
+  set onmessage(handler: ((event: { data: string }) => void) | null) {
+    this.onmessageHandler = handler;
+    if (!handler || this.preBindBuffer.length === 0) return;
+    const drained = this.preBindBuffer.splice(0);
+    for (const data of drained) queueMicrotask(() => this.onmessageHandler?.({ data }));
+  }
+
   send(data: string): void {
     const target = this.peer;
     if (this.readyState !== "open" || target?.readyState !== "open") return;
-    queueMicrotask(() => target.onmessage?.({ data }));
+    target.receive(data);
+  }
+
+  // Deliver now if the sink is bound (async, like a real channel); otherwise buffer until it is.
+  private receive(data: string): void {
+    if (this.onmessageHandler) {
+      const handler = this.onmessageHandler;
+      queueMicrotask(() => handler({ data }));
+    } else {
+      this.preBindBuffer.push(data);
+    }
   }
 
   addEventListener(type: string, cb: () => void): void {
@@ -107,7 +139,7 @@ export function inMemory(): Signaling {
    * `openWireChannel` capability the integration tests use to carry real frames with no WebRTC).
    *
    * @param code - The room code whose in-memory bus to join.
-   * @param opts - Self id + role (the bus has no offer/answer asymmetry, so `passive` is ignored).
+   * @param opts - Self id + role; `passive` is honored to model the star (two passive peers never pipe).
    * @returns The live in-process signaling session.
    * @example
    * ```ts
@@ -120,6 +152,7 @@ export function inMemory(): Signaling {
 
     const self: Member = {
       selfId: opts.selfId,
+      passive: opts.passive ?? false,
       onPeer: null,
       onPeerLeave: null,
       onSignal: null,
@@ -151,6 +184,11 @@ export function inMemory(): Signaling {
     const existing = [...room.members.values()];
     room.members.set(self.selfId, self);
     for (const other of existing) {
+      // Star topology: two passive peers (controller↔controller) never connect — only the active host
+      // offers to passive controllers. A real WebRTC star enforces this via the offer/answer asymmetry
+      // (transport joins controllers `passive`, the host active); model it here so multi-controller
+      // integration is faithful instead of a full mesh (contracts §1.1; finding #1).
+      if (self.passive && other.passive) continue;
       ensurePipe(other.selfId);
       self.pendingPeers.push(other.selfId);
       notifyPeer(other, self.selfId);

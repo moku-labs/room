@@ -9,6 +9,7 @@
  */
 
 import type { HostReentryRecord, SessionDeps, SessionState } from "../types";
+import type { SessionStateWithRuntime } from "./reentry";
 import type { PersistHandle } from "./types";
 
 /** IndexedDB database name for the host re-entry record. */
@@ -305,7 +306,9 @@ export function readReentryRecord(deps: SessionDeps): HostReentryRecord | null {
 /**
  * `onStop` teardown for the recovery sub-domain (D14): does the final SYNCHRONOUS snapshot persist FIRST
  * (`persistHandle.flushNow()` — the same `localStorage` path as `visibilitychange`), THEN clears timers
- * and removes the `visibilitychange` listener (`persistHandle.dispose()`), and nulls `recovery.timer`.
+ * and removes the `visibilitychange` listener (`persistHandle.dispose()`), nulls `recovery.timer`, and
+ * clears any in-flight join timeout + settles its pending resolver (so a `joinRoom` interrupted by
+ * `stop()` leaves neither a dangling 10s timer nor a hung promise — finding #3).
  * Takes the per-app `SessionState` (recovered from the `teardownRegistry` WeakMap) — NEVER a
  * module-level singleton — so it needs no `state`/`require`/`emit` (the `{ global }`-only context).
  *
@@ -326,5 +329,16 @@ export function teardownSession(state: SessionState): void {
   if (state.recovery.timer !== null) {
     clearTimeout(state.recovery.timer);
     state.recovery.timer = null;
+  }
+  // A joinRoom() in flight when the app stops must not leave its reconnect timer dangling (it would
+  // fire post-teardown → stale promise resolution) nor leave an awaiting joinRoom() hung forever.
+  const runtime = state as unknown as SessionStateWithRuntime;
+  if (runtime._joinTimeout) {
+    clearTimeout(runtime._joinTimeout);
+    runtime._joinTimeout = null;
+  }
+  if (runtime._pendingJoinResolve) {
+    runtime._pendingJoinResolve({ ok: false, reason: "unreachable" });
+    runtime._pendingJoinResolve = null;
   }
 }
