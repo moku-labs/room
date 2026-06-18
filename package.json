@@ -91,7 +91,7 @@
   },
   "scripts": {
     "build": "tsdown",
-    "prepublishOnly": "bun run build && bun run validate",
+    "typecheck": "tsc --noEmit",
     "validate": "publint && attw --pack . --profile node16",
     "lint": "biome check . && eslint .",
     "lint:fix": "biome check --write . && eslint --fix .",
