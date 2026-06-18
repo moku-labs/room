@@ -228,11 +228,13 @@ describe("controller integration — event forwarding through depends: [controll
     await ctrlApp.start();
 
     const { code } = stageApp.stage.createRoom();
-    await ctrlApp.controller.joinRoom(code);
 
-    // Seed state + broadcast so sync-ready fires on controller
+    // Seed the slice BEFORE the controller joins so the host's join-baseline snapshot carries it and the
+    // controller fires room:sync-ready on apply (the register-THEN-join baseline path; a never-mutated
+    // slice does not ride a plain delta).
     stageApp.sync.registerSlice("game", { phase: "lobby" });
-    stageApp.stage.broadcast();
+
+    await ctrlApp.controller.joinRoom(code);
 
     // The padGame probe received room:sync-ready through the single controllerPlugin edge — WARN-2 ✓
     await vi.waitFor(

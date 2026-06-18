@@ -94,7 +94,8 @@ export function createSyncEngine(
   }
 
   /**
-   * Flip `ready` on the first snapshot application and emit `room:sync-ready` exactly once.
+   * Flip `ready` on the first applied authoritative frame (a snapshot, or a gap-free delta from the
+   * initial state) and emit `room:sync-ready` exactly once.
    *
    * @example
    * ```ts
@@ -190,8 +191,9 @@ export function createSyncEngine(
    * the frame while `stale` (awaiting a re-baseline). Detects a sequence gap (`sSeq > local sSeq + 1`):
    * marks `stale`, fires the `onResyncRequest` hooks when `resyncOnGap` is on (with an empty `peerId` — the
    * controller has no peer context here), and skips the apply. Ignores an already-seen `sSeq`. On a
-   * contiguous frame it applies the ops, adopts `sSeq`, and notifies the subscribers of every touched
-   * namespace.
+   * contiguous frame it applies the ops, adopts `sSeq`, flips `ready` on the first such frame (a controller
+   * that joined before any slice existed bootstraps off this delta), and notifies the subscribers of every
+   * touched namespace.
    *
    * @param ops - The ordered `Op[]` carried by the `sync-delta` frame.
    * @param sSeq - The host sequence the delta represents (gap-checked against the local `sSeq`).
@@ -222,6 +224,9 @@ export function createSyncEngine(
     const affected = new Set(ops.map(op => op.ns));
     state.snapshot = applyOps(state.snapshot, ops);
     state.sSeq = sSeq;
+    // First gap-free authoritative frame makes the replica readable (a controller that joined BEFORE a
+    // slice was registered bootstraps off this delta, never a snapshot — §4.3). Idempotent.
+    markReady();
     for (const ns of affected) {
       const cells = state.snapshot[ns];
       if (cells) {

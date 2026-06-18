@@ -16,7 +16,9 @@ import type { SessionDeps } from "./types";
 
 /**
  * Broadcasts the current roster to all controllers via transport's `Wire`. Host-only. Called after every
- * roster mutation so all controllers stay in sync.
+ * roster mutation so each controller's `session.roster()` mirror stays in sync. Rides a DEDICATED
+ * `RosterFrame` — NOT a `sync-snap` — so a roster broadcast never re-baselines (and so wipes) a
+ * controller's §4 sync replica on every join/leave (the W3 roster-vs-sync-plane collision).
  *
  * @param deps - This app's destructured per-instance pieces.
  * @example
@@ -25,15 +27,8 @@ import type { SessionDeps } from "./types";
  * ```
  */
 function broadcastRoster(deps: SessionDeps): void {
-  const transport = deps.requireTransport();
-  const wire = transport.wire();
-  wire.broadcast({
-    t: "sync-snap",
-    snapshot: {
-      roster: deps.state.roster as Record<string, unknown>
-    } as import("../../contracts").Snapshot,
-    sSeq: deps.state.sSeqAtSnapshot
-  });
+  const wire = deps.requireTransport().wire();
+  wire.broadcast({ t: "roster", roster: deps.state.roster });
 }
 
 /**
@@ -195,14 +190,15 @@ function handleRecoveryFlush(
 }
 
 /**
- * Dispatches inbound recovery `Frame` variants (§5.3): `RecoveryHelloFrame` (host verifies the token,
- * replies `RecoveryWelcomeFrame`, re-broadcasts a fresh snapshot via the `sync` seam),
+ * Dispatches the session plugin's inbound `Frame` variants (the single `Wire.on` consumer it registers):
+ * `RecoveryHelloFrame` (host verifies the token, replies `RecoveryWelcomeFrame`),
  * `RecoveryWelcomeFrame` (controller verifies the stored token, sends `RecoveryFlushFrame`, moves to
  * `"reconciling"`), `RecoveryFlushFrame` (host applies buffered intents in `cSeq` order, dropping
- * `cSeq <= lastApplied[peerId]` — §4.3 idempotence). Non-recovery frames are ignored here.
+ * `cSeq <= lastApplied[peerId]` — §4.3 idempotence), and `RosterFrame` (controller mirrors the
+ * host-authoritative roster — §6.1). Every other frame tag is ignored here (each plugin self-filters).
  *
  * @param deps - This app's destructured per-instance pieces.
- * @returns A function accepting `(peerId, frame)` that dispatches recovery frame variants.
+ * @returns A function accepting `(peerId, frame)` that dispatches the session-owned frame variants.
  * @example
  * ```ts
  * wire.on(handleRecoveryFrame(deps));
@@ -226,8 +222,14 @@ export function handleRecoveryFrame(deps: SessionDeps): (peerId: PeerId, frame: 
         handleRecoveryFlush(deps, peerId, frame, lastApplied);
         break;
       }
+      case "roster": {
+        // Controller mirrors the host-authoritative roster (§6.1). The host ignores its own broadcast
+        // (it never receives it; the guard keeps the host's roster the single source of truth).
+        if (deps.state.role !== "host") deps.state.roster = { ...frame.roster };
+        break;
+      }
       default: {
-        // Non-recovery frame — ignore.
+        // Not a session-owned frame (intent / sync-* / ping / pong) — ignore.
         break;
       }
     }

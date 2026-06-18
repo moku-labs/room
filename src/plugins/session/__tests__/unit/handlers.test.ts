@@ -186,6 +186,42 @@ describe("handlers", () => {
     expect(deps.emit.hostReconnecting).not.toHaveBeenCalled();
   });
 
+  it("handlePeerConnected broadcasts a dedicated roster frame (NOT a sync-snap)", () => {
+    const deps = makeDeps();
+    handlePeerConnected(deps)("p-1", makeRosterEntry("p-1"));
+
+    // The roster rides its own `roster` frame so it never re-baselines a controller's sync replica (W3).
+    const wire = deps.requireTransport().wire();
+    expect(vi.mocked(wire.broadcast)).toHaveBeenCalledWith({
+      t: "roster",
+      roster: { "p-1": makeRosterEntry("p-1") }
+    });
+  });
+
+  it("handleRecoveryFrame: a roster frame updates the controller's roster mirror", () => {
+    const deps = makeDeps();
+    deps.state.role = "controller";
+
+    const handler = handleRecoveryFrame(deps);
+    const roster = { "p-7": makeRosterEntry("p-7", 7000) };
+    const frame: Frame = { t: "roster", roster };
+    handler("host-id", frame);
+
+    expect(deps.state.roster).toEqual(roster);
+  });
+
+  it("handleRecoveryFrame: a roster frame is ignored on the host (authoritative roster preserved)", () => {
+    const deps = makeDeps(); // role = "host"
+    deps.state.roster = { "p-1": makeRosterEntry("p-1") };
+
+    const handler = handleRecoveryFrame(deps);
+    const frame: Frame = { t: "roster", roster: { "p-2": makeRosterEntry("p-2", 2000) } };
+    handler("p-2", frame);
+
+    // The host's roster is authoritative — an inbound roster frame must NOT overwrite it.
+    expect(deps.state.roster).toEqual({ "p-1": makeRosterEntry("p-1") });
+  });
+
   it("handleStarTopologyViolation: rejects a controller<->controller channel (no event)", () => {
     const deps = makeDeps();
     deps.state.selfId = "host-id";
@@ -198,6 +234,162 @@ describe("handlers", () => {
     expect(deps.emit.peerJoined).not.toHaveBeenCalled();
     expect(deps.emit.peerLeft).not.toHaveBeenCalled();
     expect(deps.emit.hostReconnecting).not.toHaveBeenCalled();
+  });
+
+  it("handleStarTopologyViolation: a host-involving channel is NOT a violation (no warn)", () => {
+    const deps = makeDeps();
+    deps.state.selfId = "host-id";
+    deps.state.role = "host";
+
+    // `from` IS the host (selfId) — a legal star edge, so `isStarViolation` returns false and nothing logs.
+    handleStarTopologyViolation(deps)("host-id", "p-2");
+
+    expect(deps.log.warn).not.toHaveBeenCalled();
+  });
+
+  it("handleRecoveryFrame: Hello is a no-op on a controller (role !== host, no reply)", () => {
+    const deps = makeDeps();
+    deps.state.role = "controller";
+    deps.state.hostToken = "token-abc";
+
+    const handler = handleRecoveryFrame(deps);
+    handler("p-1", { t: "recovery-hello", hostToken: "token-abc", peerId: "p-1" });
+
+    // A controller never answers a hello — only the host replies with a welcome.
+    const wire = deps.requireTransport().wire();
+    expect(vi.mocked(wire.send)).not.toHaveBeenCalled();
+  });
+
+  it("handleRecoveryFrame: Welcome is a no-op on the host (role !== controller)", () => {
+    const deps = makeDeps(); // role = "host"
+    deps.state.hostToken = "token-abc";
+    deps.state.recovery.phase = "stable";
+
+    const handler = handleRecoveryFrame(deps);
+    handler("p-1", { t: "recovery-welcome", hostToken: "token-abc", sSeq: 10 });
+
+    // The host ignores a welcome entirely — no phase change, no flush.
+    expect(deps.state.recovery.phase).toBe("stable");
+    const wire = deps.requireTransport().wire();
+    expect(vi.mocked(wire.send)).not.toHaveBeenCalled();
+  });
+
+  it("handleRecoveryFrame: controller Welcome with a mismatched token goes degraded (no flush)", () => {
+    const deps = makeDeps();
+    deps.state.role = "controller";
+    deps.state.hostToken = "token-abc";
+    deps.state.recovery.phase = "host-absent";
+
+    const handler = handleRecoveryFrame(deps);
+    handler("host-id", { t: "recovery-welcome", hostToken: "WRONG-TOKEN", sSeq: 10 });
+
+    // A token mismatch poisons the session — degrade and send nothing.
+    expect(deps.state.recovery.phase).toBe("degraded");
+    const wire = deps.requireTransport().wire();
+    expect(vi.mocked(wire.send)).not.toHaveBeenCalled();
+  });
+
+  it("handleRecoveryFrame: controller Welcome clears a pending reconnect timer", () => {
+    const deps = makeDeps();
+    deps.state.role = "controller";
+    deps.state.hostToken = "token-abc";
+    deps.state.recovery.phase = "host-absent";
+
+    vi.useFakeTimers();
+    const clearSpy = vi.spyOn(globalThis, "clearTimeout");
+    // Arm a real timer so the `recovery.timer !== null` clear branch is taken.
+    deps.state.recovery.timer = setTimeout(() => undefined, 10_000);
+    const armed = deps.state.recovery.timer;
+
+    const handler = handleRecoveryFrame(deps);
+    handler("host-id", { t: "recovery-welcome", hostToken: "token-abc", sSeq: 10 });
+
+    expect(clearSpy).toHaveBeenCalledWith(armed);
+    expect(deps.state.recovery.timer).toBeNull();
+    expect(deps.state.recovery.phase).toBe("reconciling");
+    clearSpy.mockRestore();
+    vi.useRealTimers();
+  });
+
+  it("handleRecoveryFrame: Flush is a no-op on a controller (role !== host)", () => {
+    const deps = makeDeps();
+    deps.state.role = "controller";
+
+    const handler = handleRecoveryFrame(deps);
+    const frame: Frame = {
+      t: "recovery-flush",
+      buffered: [{ intent: { t: "intent", name: "tap", payload: null, cSeq: 1 }, ts: 1000 }]
+    };
+    handler("host-id", frame);
+
+    // Only the host reconciles a flush — a controller ignores it.
+    const wire = deps.requireTransport().wire();
+    expect(vi.mocked(wire.send)).not.toHaveBeenCalled();
+  });
+
+  it("handleRecoveryFrame: host applies buffered intents on Flush, advancing lastApplied", () => {
+    const deps = makeDeps(); // role = "host"
+
+    const handler = handleRecoveryFrame(deps);
+    const frame: Frame = {
+      t: "recovery-flush",
+      buffered: [
+        { intent: { t: "intent", name: "tap", payload: { x: 1 }, cSeq: 1 }, ts: 1000 },
+        { intent: { t: "intent", name: "tap", payload: { x: 2 }, cSeq: 2 }, ts: 1001 }
+      ]
+    };
+    handler("p-1", frame);
+
+    // Each fresh intent is re-sent (cSeq > highWater of 0) — the toApply.length > 0 branch.
+    const wire = deps.requireTransport().wire();
+    expect(vi.mocked(wire.send)).toHaveBeenCalledTimes(2);
+    expect(vi.mocked(wire.send)).toHaveBeenNthCalledWith(1, "p-1", {
+      t: "intent",
+      name: "tap",
+      payload: { x: 1 },
+      cSeq: 1
+    });
+    expect(vi.mocked(wire.send)).toHaveBeenNthCalledWith(2, "p-1", {
+      t: "intent",
+      name: "tap",
+      payload: { x: 2 },
+      cSeq: 2
+    });
+  });
+
+  it("handleRecoveryFrame: host Flush with an empty buffer applies nothing", () => {
+    const deps = makeDeps(); // role = "host"
+
+    const handler = handleRecoveryFrame(deps);
+    const frame: Frame = { t: "recovery-flush", buffered: [] };
+    handler("p-1", frame);
+
+    // The toApply.length > 0 FALSE branch — nothing to re-send.
+    const wire = deps.requireTransport().wire();
+    expect(vi.mocked(wire.send)).not.toHaveBeenCalled();
+  });
+
+  it("handleRecoveryFrame: host Flush drops already-applied intents on a replay (idempotent)", () => {
+    const deps = makeDeps(); // role = "host"
+
+    const handler = handleRecoveryFrame(deps);
+    const frame: Frame = {
+      t: "recovery-flush",
+      buffered: [
+        { intent: { t: "intent", name: "tap", payload: null, cSeq: 1 }, ts: 1000 },
+        { intent: { t: "intent", name: "tap", payload: null, cSeq: 2 }, ts: 1001 }
+      ]
+    };
+
+    // First flush applies both (advances lastApplied[p-1] to 2).
+    handler("p-1", frame);
+    const wire = deps.requireTransport().wire();
+    expect(vi.mocked(wire.send)).toHaveBeenCalledTimes(2);
+    vi.mocked(wire.send).mockClear();
+
+    // Replaying the identical flush drops every cSeq <= lastApplied — nothing re-sent (§4.3).
+    handler("p-1", frame);
+    expect(vi.mocked(wire.send)).not.toHaveBeenCalled();
   });
 
   it("emit is only ever called with room:* event names (no wire frames via emit)", () => {

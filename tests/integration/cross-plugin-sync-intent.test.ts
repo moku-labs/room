@@ -162,6 +162,40 @@ describe("cross-plugin sync — host slice fan-out to controller replicas", () =
     await ctrlApp.stop();
     await stageApp.stop();
   });
+
+  it("a roster broadcast (2nd controller joins) does NOT clobber the 1st controller's sync replica; the roster mirrors", async () => {
+    // W3 fix: the roster rides a DEDICATED `roster` frame, not a `sync-snap`, so a roster broadcast on a
+    // late join no longer re-baselines (and wipes) an already-connected controller's game replica. The
+    // controller's `session.roster()` mirror still updates from that dedicated frame.
+    const bus = makeBus();
+    const { app: stageApp } = makeStage(bus);
+    const { app: p1 } = makeController(bus, "ctrlRosterMirrorA");
+    const { app: p2 } = makeController(bus, "ctrlRosterMirrorB");
+
+    await stageApp.start();
+    await p1.start();
+
+    const { code } = stageApp.stage.createRoom();
+
+    // Host seeds a game slice BEFORE P1 joins so P1's join baseline carries it.
+    stageApp.sync.registerSlice("scores", { total: 5 });
+    await p1.controller.joinRoom(code);
+    await vi.waitFor(() => expect(p1.controller.read("scores")?.total).toBe(5), { timeout: 5000 });
+
+    // A SECOND controller joins → the host broadcasts the roster to every controller (incl. P1).
+    await p2.start();
+    await p2.controller.joinRoom(code);
+    await vi.waitFor(() => expect(stageApp.session.roster()).toHaveLength(2), { timeout: 5000 });
+
+    // P1's sync replica is UNTOUCHED by the roster broadcast (pre-W3-fix it was clobbered to {roster})...
+    expect(p1.controller.read("scores")?.total).toBe(5);
+    // ...and P1's roster mirror reflects BOTH controllers via the dedicated roster frame.
+    await vi.waitFor(() => expect(p1.session.roster()).toHaveLength(2), { timeout: 5000 });
+
+    await p1.stop();
+    await p2.stop();
+    await stageApp.stop();
+  });
 });
 
 // ---------------------------------------------------------------------------

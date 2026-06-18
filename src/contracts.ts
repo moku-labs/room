@@ -289,6 +289,19 @@ export type RecoveryFlushFrame = {
 };
 
 /**
+ * Host → controller roster mirror (§6.1). Broadcast on every roster mutation (join/leave) so each
+ * controller's `session.roster()` reflects the host-authoritative seat list. A DEDICATED frame — NOT a
+ * `SyncSnapshotFrame` — so it never collides with the §4 sync replica plane: `syncPlugin` ignores it and
+ * `sessionPlugin` applies it to its local roster mirror. (Sharing `sync-snap` would re-baseline — and so
+ * wipe — a controller's game replica on every join/leave.)
+ */
+export type RosterFrame = {
+  readonly t: "roster";
+  /** The complete host-authoritative roster: controller {@link PeerId} → {@link RosterEntry} (§6.1). */
+  readonly roster: { readonly [id: PeerId]: RosterEntry };
+};
+
+/**
  * The complete device↔host wire protocol. Discriminated on `t`. Every variant is plain-JSON; nothing
  * here flows through Moku `emit` (spec/07 §3, spec/11 §2.7).
  */
@@ -300,7 +313,8 @@ export type Frame =
   | HeartbeatPongFrame
   | RecoveryHelloFrame
   | RecoveryWelcomeFrame
-  | RecoveryFlushFrame;
+  | RecoveryFlushFrame
+  | RosterFrame;
 
 /**
  * The typed device↔host DataChannel channel. Star topology: on the host (stage), `peerId` selects a
@@ -328,7 +342,8 @@ export type Wire = {
   /**
    * Registers the single inbound frame handler. Called once per fully-reassembled frame (§2.3),
    * with the sender's id. Transport dispatches each frame to the owning engine by `frame.t`
-   * (intent → intentPlugin, sync-* → syncPlugin, ping/pong → heartbeat, recovery-* → sessionPlugin).
+   * (intent → intentPlugin, sync-* → syncPlugin, ping/pong → heartbeat, recovery-* / roster →
+   * sessionPlugin).
    *
    * @param handler - Invoked with `(senderPeerId, frame)` for every inbound frame.
    * @returns An unsubscribe function.
@@ -352,7 +367,7 @@ export type RoomEvents = {
   "room:peer-left": { peerId: PeerId };
   /** The host tab reloaded; recovery is in flight. Controllers should show "reconnecting" UX (§5). */
   "room:host-reconnecting": Record<string, never>;
-  /** The first full snapshot has been applied; the synced replica is now readable (§4). */
+  /** The first authoritative frame (snapshot, or gap-free delta) has been applied; replica readable (§4). */
   "room:sync-ready": Record<string, never>;
   /** A network condition surfaced to the consumer for failure UX (D2 accepted hard-failure). */
   "room:network-warning": { reason: "ice-failed" | "rendezvous-unreachable" | "channel-closed" };
