@@ -79,7 +79,7 @@ level (spec/07 §5); it installs no forwarding hooks, since the global bus alrea
 emit to the consumer (D19). Coarse lifecycle only — no gameplay payload ever flows through `emit`
 (spec/07 §3).
 
-| Event | Payload | Owner (re-declared + forwarded) | Description |
+| Event | Payload | Owner (re-declared; bus-delivered) | Description |
 |-------|---------|---------------------------------|-------------|
 | `room:peer-joined` | `{ peerId: PeerId }` | `session` | A controller's DataChannel reached `connected` and joined the roster (contracts §3, §6). |
 | `room:peer-left` | `{ peerId: PeerId }` | `session` | A controller left or was declared dead by the heartbeat and left the roster (contracts §2.4, §3). |
@@ -91,7 +91,7 @@ emit to the consumer (D19). Coarse lifecycle only — no gameplay payload ever f
 
 | Plugin | Role | Reason |
 |--------|------|--------|
-| `transportPlugin` | visibility-only | Listed in `depends` solely so `transport`'s `room:network-warning` is mergeable for re-declaration + forwarding (WARN-2). No method is ever `require`d. |
+| `transportPlugin` | visibility-only | Listed in `depends` solely so `transport`'s `room:network-warning` is mergeable for re-declaration (WARN-2). No method is ever `require`d. |
 | `sessionPlugin` | delegation target | `joinRoom()` delegates here; owns the rendezvous join + passive flag + reconnect-token slot (contracts §1, §6) + recovery (§5); source of `room:peer-joined`/`-left`/`host-reconnecting`. |
 | `intentPlugin` | delegation target | `intent()` delegates here; owns the `IntentFrame` wire send, `cSeq` stamping, and host-absence buffering (contracts §4.3, §5.3). |
 | `syncPlugin` | delegation target | `read()` / `on()` delegate here; owns the read-only replica (contracts §4); source of `room:sync-ready`. |
@@ -112,7 +112,7 @@ const padGame = createPlugin("padGame", {
   // depends on the facade — this is what makes the five room:* events visible (WARN-2).
   depends: [controllerPlugin],
 
-  // Hook the forwarded lifecycle events. Payloads come from contracts §3.1.
+  // Hook the re-declared lifecycle events (bus-delivered). Payloads come from contracts §3.1.
   hooks: ctx => ({
     "room:sync-ready": () => ctx.log.info("replica is readable"),
     "room:host-reconnecting": () => ctx.log.info("host reloading — showing reconnecting UX"),

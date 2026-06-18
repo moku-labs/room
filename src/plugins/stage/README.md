@@ -70,7 +70,7 @@ Coarse lifecycle only — no gameplay payload ever flows through `emit` (spec/07
 
 | Plugin | Role | Reason |
 |--------|------|--------|
-| `transportPlugin` | visibility-only | Listed in `depends` solely so `transport`'s `room:network-warning` is mergeable for re-declaration + forwarding (WARN-2). No method is ever `require`d. |
+| `transportPlugin` | visibility-only | Listed in `depends` solely so `transport`'s `room:network-warning` is mergeable for re-declaration (WARN-2). No method is ever `require`d. |
 | `sessionPlugin` | delegation target | `createRoom()` / `roster()` delegate here; owns room-code/QR/roster (contracts §6) + recovery (§5); source of `room:peer-joined`/`-left`/`host-reconnecting`. |
 | `intentPlugin` | delegation target | `onIntent()` delegates here; owns intent validation + `cSeq` de-dup (contracts §4.3). |
 | `syncPlugin` | delegation target | `mutate()` / `broadcast()` delegate here; owns the authoritative snapshot + op-list (contracts §4); source of `room:sync-ready`. |
@@ -96,7 +96,7 @@ const scoreboardGame = createPlugin("scoreboardGame", {
   // depends on the facade — this is what makes the five room:* events visible (WARN-2).
   depends: [stagePlugin],
 
-  // Hook the forwarded lifecycle events. Payloads come from contracts §3.1.
+  // Hook the re-declared lifecycle events (bus-delivered). Payloads come from contracts §3.1.
   hooks: ctx => ({
     "room:peer-joined": ({ peerId }) => ctx.log.info(`controller joined: ${peerId}`),
     "room:sync-ready": () => ctx.log.info("replica is readable"),

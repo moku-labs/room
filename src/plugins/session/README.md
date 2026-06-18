@@ -46,7 +46,7 @@ Declares + emits THREE of the five `room:*` events: `room:peer-joined`, `room:pe
 ## Reload-path timing — consumers MUST poll, not await the event
 
 `room:host-reconnecting` is emitted during `session` `onInit` (plugin #2), which runs synchronously
-during `createApp` BEFORE the facade-forwarding hooks and downstream consumer handlers are registered.
+during `createApp` BEFORE downstream consumer handlers are registered.
 On the reload path the event therefore fires into a hook surface that does not yet exist. Consumers on
 the reload path MUST poll `app.session.recoveryPhase()` in their own `onInit`/`onStart` (a non-`"stable"`
 phase means recovery is in flight) rather than rely on the event. The event remains useful for the

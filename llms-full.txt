@@ -1,0 +1,963 @@
+# @moku-labs/room — comprehensive LLM reference
+
+> Couch-multiplayer foundation for Moku: shared screen (stage) + phones (controllers), WebRTC peer-to-peer,
+> multi-device state sync.
+
+This is the full reference. For a concise overview see `llms.txt`. For human docs see `README.md` and each
+`src/plugins/<name>/README.md`.
+
+---
+
+## 1. What this package is (and is NOT)
+
+`@moku-labs/room` is a **Moku PLUGIN PACK** (decision D1). It is NOT a standalone framework or app.
+
+- It has **NO Layer-2 shell**, **NO `src/config.ts`**, and it does **NOT** call `createCore`/`createApp` itself.
+- It is built on **`@moku-labs/web`** (peer dependency `^1.12.4`), which supplies `createApp` / `createPlugin` and
+  the core `ctx.log` + `ctx.env` APIs. Room never imports `@moku-labs/core` directly.
+- Integration model: a consumer builds their OWN `@moku-labs/web` app and **spreads a pre-composed Room plugin
+  array** (`roomPlugins.stage` or `roomPlugins.controller`) into `createApp({ plugins: [...] })`.
+- The DOM/WebRTC build target is **`@moku-labs/room/browser`** (the `./browser` conditional export). The main
+  `@moku-labs/room` entry re-exports the identical surface; a browser app imports the `/browser` entry.
+
+Package facts (`package.json`):
+
+- `name`: `@moku-labs/room`, `type`: `module`.
+- `peerDependencies`: `@moku-labs/web` `^1.12.4`.
+- `dependencies` (bundled): `trystero` `~0.25.2` (default public-rendezvous signaling), `qrcode` `^1.5.4` (join QR).
+- `engines`: Node `>=24.0.0`, bun `>=1.3.14`.
+- `exports`: `.` (main, `import`/`require` → `dist/index.*`), `./browser` (→ `dist/browser.*`).
+- Scripts: `build` (tsdown), `validate` (publint + attw), `lint` (biome + eslint), `lint:fix`, `format`, `test`
+  (vitest run), `test:unit`, `test:integration`, `test:coverage`.
+
+Install (bun only):
+
+```bash
+bun add @moku-labs/room
+bun add @moku-labs/web   # peer dependency
+```
+
+---
+
+## 2. Domain model
+
+- **Stage** — the shared TV/laptop screen. The authoritative **HOST** and **star hub**: owns game state, validates
+  controller inputs, broadcasts state to every controller, and calls `createRoom()` to mint a room code + QR.
+- **Controller** — a phone. A passive peer (spoke): joins by room code, sends typed **intents** to the host, and
+  renders a **read-only replica** of the host's state.
+- **Star topology, 8-cap.** The stage is the sole hub; there are NO controller↔controller channels. At most 8
+  controllers (`MAX_CONTROLLERS = 8`). Room codes are 6 chars (`ROOM_CODE_LENGTH = 6`).
+
+### Discovery + connection
+
+1. Stage `createRoom()` → a 6-char room code + a join URL + a QR matrix.
+2. Both devices join a **public rendezvous** keyed by the code (Trystero over a Nostr backbone by default).
+3. They exchange SDP/ICE over the public relays — a **one-time handshake only**.
+4. They then talk over **direct peer-to-peer DataChannels on the LAN**. The rendezvous never carries gameplay;
+   once connected, the relay session is discarded.
+
+### Two planes (strictly separate)
+
+- **The typed `Wire`** (`Frame` DataChannel) carries **ALL gameplay** — intents, state snapshots, deltas,
+  heartbeats, recovery frames.
+- **Moku `emit`** (`room:*` events) carries **ONLY coarse lifecycle** — the five `room:*` events. No gameplay
+  payload ever flows through `emit`, and no `room:*` event ever carries gameplay.
+
+### No game server — D2 accepted hard-failure
+
+Room is strictly peer-to-peer with **no TURN relay, ever**. On AP-isolated / symmetric-NAT / iOS-Private-Relay
+networks (~15–30% in the wild) the P2P connection cannot be established and there is **no recovery path** — it
+hard-fails and surfaces `room:network-warning`. The design target is the **home LAN** (everyone in the same room on
+the same Wi-Fi). Treat `room:network-warning` as the failure-UX hook.
+
+### iOS caveats
+
+- **App-layer heartbeat is mandatory** — WebKit's DataChannel `onclose` does not fire on iOS (bug 303052), so dead
+  peers are detected only by the app-layer ping/pong.
+- **Screen Wake Lock** (controller, Safari 16.4+) prevents the phone dimming/locking and suspending its
+  DataChannel mid-session. Opt in via `ControllerApi.requestWakeLock()`.
+- **Host-reload recovery degrades** to "rescan the QR to rejoin" on iOS (`session.rejoin()`).
+
+---
+
+## 3. Public export surface (from `src/index.ts`)
+
+Everything below is the COMPLETE public surface. Nothing else is public.
+
+- **Plugin instances:** `transportPlugin`, `sessionPlugin`, `intentPlugin`, `syncPlugin`, `stagePlugin`,
+  `controllerPlugin`.
+- **Pre-composed arrays:**
+  - `roomPlugins.stage = [transportPlugin, sessionPlugin, intentPlugin, syncPlugin, stagePlugin]`
+  - `roomPlugins.controller = [transportPlugin, sessionPlugin, intentPlugin, syncPlugin, controllerPlugin]`
+  - (The facade is LAST so it sees all four engines' events.)
+- **Signaling adapter factories:** `publicRendezvous` (DEFAULT — Trystero v0.25.x), `inMemory` (tests/simulation).
+- **Contract types** (from `./contracts`): `Signaling`, `SignalingSession`, `SignalingJoinOpts`, `SignalMsg`,
+  `IceCandidateInit`, `Wire`, `Frame`, `IntentFrame`, `SyncSnapshotFrame`, `SyncDeltaFrame`, `HeartbeatPingFrame`,
+  `HeartbeatPongFrame`, `RecoveryHelloFrame`, `RecoveryWelcomeFrame`, `RecoveryFlushFrame`, `PeerId`, `RosterEntry`,
+  `Snapshot`, `Op`, `JsonValue`, `Namespace`, `RoomEvents`.
+- **Contract consts:** `MAX_CONTROLLERS` (= 8), `ROOM_CODE_LENGTH` (= 6).
+- **Plugin-owned public types:** `RoomDescriptor`, `JoinResult` (from session); `StageApi` (from stage);
+  `ControllerApi` (from controller).
+
+---
+
+## 4. Contract types (full TypeScript, from `src/contracts.ts`)
+
+These are reproduced faithfully. All shapes are plain-JSON / DOM-free by construction so the signaling seam stays
+portable to `inMemory` and to a future server adapter.
+
+### 4.1 Sync scalar/value model
+
+```typescript
+/** A JSON-serializable scalar/container value permitted in a synced cell. */
+type JsonValue =
+  | string
+  | number
+  | boolean
+  | null
+  | readonly JsonValue[]
+  | { readonly [key: string]: JsonValue };
+
+/** A namespace identifier (a typed slice key, e.g. "scores", "round"). */
+type Namespace = string;
+
+/** The complete authoritative state: namespace -> (key -> JSON cell). Sent whole in a SyncSnapshotFrame. */
+type Snapshot = {
+  readonly [ns: Namespace]: { readonly [key: string]: JsonValue };
+};
+
+/** One namespaced cell write — the unit of the custom op-list codec (D4). `val: null` deletes the cell. */
+type Op = {
+  readonly ns: Namespace;
+  readonly key: string;
+  readonly val: JsonValue;
+};
+```
+
+### 4.2 Roster / peer / room-code model
+
+```typescript
+/** A peer's stable identity on both the signaling and wire planes. Plain string id. */
+type PeerId = string;
+
+/** A roster entry for one connected controller. */
+type RosterEntry = {
+  /** Stable per-controller id. */
+  readonly id: PeerId;
+  /** Phone-persisted token that re-binds a reloaded controller to the same roster slot. */
+  readonly reconnectToken: string;
+  /** Optional human-facing display name the controller supplied (game-defined, JSON). */
+  readonly name?: string;
+  /** Epoch-ms timestamp the entry last had a live channel / heartbeat. */
+  readonly joinedAt: number;
+};
+
+const MAX_CONTROLLERS = 8;   // max simultaneous controllers (excludes the host)
+const ROOM_CODE_LENGTH = 6;  // characters in a room code
+```
+
+### 4.3 The `Signaling` adapter seam (DOM-free, D12)
+
+```typescript
+/** Plain, DOM-free mirror of the browser RTCIceCandidateInit dictionary. */
+type IceCandidateInit = {
+  readonly candidate?: string;
+  readonly sdpMid?: string | null;
+  readonly sdpMLineIndex?: number | null;
+  readonly usernameFragment?: string | null;
+};
+
+/** One message exchanged over the signaling plane during the one-time WebRTC handshake. Handshake data ONLY. */
+type SignalMsg =
+  | { readonly kind: "offer" | "answer"; readonly sdp: string }
+  | { readonly kind: "candidate"; readonly candidate: IceCandidateInit };
+
+/** Options passed to Signaling.join. */
+type SignalingJoinOpts = {
+  /** This peer's stable id on the signaling plane. */
+  readonly selfId: string;
+  /** When true, join WITHOUT initiating offers (the controller/answerer). When false/omitted, active offerer
+   *  (the host/stage). The host is the authoritative star hub; controllers are passive. */
+  readonly passive?: boolean;
+};
+
+/** A live signaling session scoped to ONE room code. Created by Signaling.join, then discarded once connected. */
+type SignalingSession = {
+  /** Fired when a peer appears in the room. For the active (offerer) side this is the cue to create an offer. */
+  onPeer(cb: (peerId: string) => void): void;
+  /** Fired when a peer leaves the signaling room. Handshake bookkeeping only — NOT dead-peer detection (that is
+   *  the app-layer heartbeat's job). */
+  onPeerLeave(cb: (peerId: string) => void): void;
+  /** Sends one handshake message to a specific peer over the signaling plane. */
+  send(peerId: string, msg: SignalMsg): void;
+  /** Registers the inbound handshake handler — (senderPeerId, msg) for every inbound handshake message. */
+  onSignal(cb: (peerId: string, msg: SignalMsg) => void): void;
+  /** Tears down the session and releases all rendezvous resources. Idempotent. */
+  leave(): Promise<void>;
+};
+
+/** The general room-based peer-signaling seam (D12). Adapters: publicRendezvous (default), inMemory (tests),
+ *  and a FUTURE serverSignaling — all interchangeable with ZERO transport-plugin changes. */
+type Signaling = {
+  /** Joins the signaling room identified by `code` and returns a live session. */
+  join(code: string, opts: SignalingJoinOpts): Promise<SignalingSession>;
+};
+```
+
+### 4.4 The typed `Wire` channel + `Frame` union (device↔host DataChannel)
+
+```typescript
+/** Controller -> host typed input. `cSeq` is a monotonic per-controller sequence number for idempotent de-dup;
+ *  the host drops any cSeq <= lastApplied[peerId]. Shape-checked only (D6 — no anti-cheat/HMAC). */
+type IntentFrame = {
+  readonly t: "intent";
+  /** Registered intent name (the intent contract key). */
+  readonly name: string;
+  /** Plain-JSON intent payload; validated by a correctness-only typed shape-check (D6). */
+  readonly payload: unknown;
+  /** Monotonic per-controller sequence number. */
+  readonly cSeq: number;
+};
+
+/** Host -> controller full authoritative snapshot. Sent on join, late-join, reconnect/reconcile. */
+type SyncSnapshotFrame = {
+  readonly t: "sync-snap";
+  readonly snapshot: Snapshot;
+  /** Host sequence number this snapshot represents. */
+  readonly sSeq: number;
+};
+
+/** Host -> controller incremental op-list patch broadcast while live (throttled 20–30 Hz). Ordered by sSeq. */
+type SyncDeltaFrame = {
+  readonly t: "sync-delta";
+  readonly ops: readonly Op[];
+  /** Host sequence number AFTER applying these ops. */
+  readonly sSeq: number;
+};
+
+/** App-layer heartbeat ping (host<->controller). Drives dead-peer detection (WebKit 303052). */
+type HeartbeatPingFrame = { readonly t: "ping"; readonly ts: number };
+
+/** App-layer heartbeat pong reply, echoing the ping `ts`. */
+type HeartbeatPongFrame = { readonly t: "pong"; readonly ts: number };
+
+/** Controller -> host re-entry claim after a host reload. Carries the persisted host token to verify. */
+type RecoveryHelloFrame = {
+  readonly t: "recovery-hello";
+  /** The hostToken the controller last saw, echoed back for peer-side verification. */
+  readonly hostToken: string;
+  readonly peerId: PeerId;
+};
+
+/** Host -> controller acknowledgement of a verified re-entry; precedes the reconcile snapshot. */
+type RecoveryWelcomeFrame = {
+  readonly t: "recovery-welcome";
+  readonly hostToken: string;
+  /** The host sequence the controller should reconcile against; a sync-snap follows. */
+  readonly sSeq: number;
+};
+
+/** Controller -> host flush of intents buffered during a host absence. Applied in cSeq order (idempotent). */
+type RecoveryFlushFrame = {
+  readonly t: "recovery-flush";
+  readonly buffered: readonly { readonly intent: IntentFrame; readonly ts: number }[];
+};
+
+/** The complete device<->host wire protocol. Discriminated on `t`. Every variant is plain-JSON; nothing here
+ *  flows through Moku emit. */
+type Frame =
+  | IntentFrame
+  | SyncSnapshotFrame
+  | SyncDeltaFrame
+  | HeartbeatPingFrame
+  | HeartbeatPongFrame
+  | RecoveryHelloFrame
+  | RecoveryWelcomeFrame
+  | RecoveryFlushFrame;
+
+/** The typed device<->host DataChannel. Star topology: on the host, `peerId` selects a controller; on a
+ *  controller, frames always target the single host so send/broadcast collapse to "send to host". This is the
+ *  ONLY transport for gameplay — Moku emit is reserved for room:* events. */
+type Wire = {
+  /** Sends one frame to a single peer (chunking + backpressure applied). */
+  send(peerId: PeerId, frame: Frame): void;
+  /** Sends one frame to ALL currently-connected peers (host -> every controller). No-op on a controller. */
+  broadcast(frame: Frame): void;
+  /** Registers the single inbound frame handler — (senderPeerId, frame) per reassembled frame. Returns an
+   *  unsubscribe function. Transport fans out to all registered consumers; each engine self-filters by frame.t. */
+  on(handler: (peerId: PeerId, frame: Frame) => void): () => void;
+};
+```
+
+### 4.5 The `room:*` event payloads (Moku `emit` — coarse lifecycle ONLY)
+
+```typescript
+/** Room's coarse lifecycle events on the Moku emit plane. These are the ONLY events Room emits — all
+ *  device<->host traffic is the Wire, never these. */
+type RoomEvents = {
+  /** A controller's DataChannel reached connected and was added to the roster. */
+  "room:peer-joined": { peerId: PeerId };
+  /** A controller left or was declared dead by the heartbeat and removed from the roster. */
+  "room:peer-left": { peerId: PeerId };
+  /** The host tab reloaded; recovery is in flight. Controllers should show "reconnecting" UX. */
+  "room:host-reconnecting": Record<string, never>;
+  /** The first full snapshot has been applied; the synced replica is now readable. */
+  "room:sync-ready": Record<string, never>;
+  /** A network condition surfaced to the consumer for failure UX (D2 accepted hard-failure). */
+  "room:network-warning": { reason: "ice-failed" | "rendezvous-unreachable" | "channel-closed" };
+};
+```
+
+---
+
+## 5. Complete event catalog
+
+`room:*` is the Moku `emit` plane — **coarse lifecycle only**. ALL gameplay rides the `Wire` (`Frame`s), never
+these events.
+
+| Event | Payload | Emitted by | Meaning |
+|---|---|---|---|
+| `room:peer-joined` | `{ peerId: PeerId }` | session | Controller channel reached `connected`, added to roster. |
+| `room:peer-left` | `{ peerId: PeerId }` | session | Controller left or heartbeat-declared dead; removed from roster. |
+| `room:host-reconnecting` | `Record<string, never>` (`{}`) | session | Host tab reloaded; client-side recovery in flight. |
+| `room:sync-ready` | `Record<string, never>` (`{}`) | sync | First full snapshot applied; replica readable. |
+| `room:network-warning` | `{ reason: "ice-failed" \| "rendezvous-unreachable" \| "channel-closed" }` | transport | Connectivity hard-failure UX hook (D2). |
+
+**Ownership:** `session` declares + emits the first three; `sync` owns `room:sync-ready`; `transport` owns
+`room:network-warning`. The `stage`/`controller` facades **re-declare all five** for compile-time visibility.
+
+**Reload-path timing caveat:** `room:host-reconnecting` is emitted during `session` `onInit` (plugin #2), which runs
+synchronously during `createApp` BEFORE downstream consumer hooks are registered. On the reload path the event fires
+into a hook surface that does not yet exist. Consumers on the reload path MUST poll
+`app.session.recoveryPhase()` in their own `onInit`/`onStart` (a non-`"stable"` phase means recovery is in flight).
+The event remains useful for steady-state (non-reload) host-reload detection.
+
+---
+
+## 6. Plugins
+
+Dependency-ordered. The first four are **engines**; the last two are **role facades**.
+
+### 6.1 transport (Complex, depends: none)
+
+Room's networking floor. Three strictly-separated planes: (1) `RTCPeerConnection` lifecycle, one connection per
+peer in a star (host hub up to 8; controller = one to the host), offer/answer/ICE through the signaling seam,
+`restartIce()` on a transient drop; (2) the typed `Wire` — per-frame JSON serialization, chunking (~14 KiB) +
+reassembly, `bufferedAmount` backpressure (~64 KiB), a MANDATORY app-layer heartbeat (~2 s ping / ~6 s dead), and a
+~3 s DataChannel-open timeout that retries the handshake (iOS-Safari↔Sony-Bravia interop mitigation, capped); (3)
+the general `Signaling` seam — a DOM-free contract plus the two v1 adapters. Emits exactly `room:network-warning`.
+
+```typescript
+type TransportApi = {
+  /** Opens the transport: joins the signaling room; host = active offerer, controller = passive. Idempotent per
+   *  code. Resolves when the signaling session is live (NOT once peers connect). Throws (and emits
+   *  room:network-warning { reason: "rendezvous-unreachable" }) if no relay is reachable. */
+  connect(opts: { readonly role: "host" | "controller"; readonly selfId: PeerId; readonly code: string }): Promise<void>;
+  /** Returns the stable typed Wire (same instance every call). */
+  wire(): Wire;
+  /** Tears down the connection to a single peer. Idempotent. */
+  disconnect(peerId: PeerId): void;
+  /** Ids of all currently-connected peers (channel open + heartbeat-alive). Read-only snapshot. */
+  peers(): readonly PeerId[];
+  /** Closes ALL peers, stops the heartbeat, leaves the signaling session. Idempotent. */
+  close(): Promise<void>;
+  /** Registers the single consumer fired when a peer's gameplay channel reaches open. Used by session to emit
+   *  room:peer-joined. Latest registration wins. Returns unsubscribe. */
+  onPeerConnected(cb: (peerId: PeerId) => void): () => void;
+  /** Registers the single consumer fired when an ESTABLISHED peer is lost via the heartbeat dead path only (NOT
+   *  on teardown/close/disconnect). Used by session to emit room:peer-left. Returns unsubscribe. */
+  onPeerLost(cb: (peerId: PeerId) => void): () => void;
+};
+```
+
+`connect`, `disconnect`, `peers`, `onPeerConnected`, `onPeerLost` are internal seams used by `session`; consumers
+normally use the role facades, not `TransportApi` directly.
+
+### 6.2 session (Complex, depends: transport)
+
+Room-lifecycle + presence authority + the full client-side host-reload recovery state machine. Owns: room code +
+QR + `hostToken` minting; the roster + 8-cap + star-topology enforcement (controller↔controller channels rejected);
+the recovery state machine (debounced IndexedDB snapshot + synchronous `localStorage` write on `visibilitychange`,
+peer-side `hostToken` verification, controller intent buffering + flush/reconcile, ~10 s reconnect timeout, iOS
+rescan-QR degradation). Declares + emits `room:peer-joined`, `room:peer-left`, `room:host-reconnecting`.
+
+```typescript
+type SessionApi = {
+  /** HOST. Mints selfId + 6-char code + hostToken, joins signaling as active hub, arms persistence, returns the
+   *  descriptor SYNCHRONOUSLY (no Promise). Throws if already in a room. */
+  createRoom: () => RoomDescriptor;
+  /** CONTROLLER. Loads/creates the phone reconnectToken, joins signaling as passive. Resolves once the channel is
+   *  connected. `{ ok:false, reason }` on failure. (passive:true set internally — caller passes code only.) */
+  joinRoom: (code: string) => Promise<JoinResult>;
+  /** Leaves the room (closes channels, clears roster/detaches, disarms recovery). Idempotent. */
+  leave: () => Promise<void>;
+  /** CONTROLLER re-entry helper for the iOS "rescan QR" degrade path; re-uses the persisted reconnectToken. */
+  rejoin: () => Promise<JoinResult>;
+  /** Roster snapshot (defensive copy, ordered by joinedAt). Host = authoritative; controller mirrors the host. */
+  roster: () => readonly RosterEntry[];
+  /** This device's identity: { selfId, role, roomCode }. */
+  self: () => SelfInfo;
+  /** The authoritative HOST peer id (star hub) — the single peer every IntentFrame targets. "" until connected. */
+  hostId: () => PeerId;
+  /** HOST-ONLY seam called by sync: hands the Snapshot + sSeq to persist for host-reload recovery (stored
+   *  opaquely; never inspected). No-op on a controller. */
+  persistSnapshot: (snapshot: Snapshot, sSeq: number) => void;
+  /** Current recovery phase (poll this on the reload path). */
+  recoveryPhase: () => RecoveryPhase;
+};
+
+/** Result of createRoom — everything the TV needs to display the join affordance. Plain-JSON-friendly. */
+type RoomDescriptor = {
+  /** The 6-char room code. */
+  readonly code: string;
+  /** The full controller join URL (`${joinUrlBase}?room=CODE`) the QR encodes. */
+  readonly joinUrl: string;
+  /** QR matrix data for joinUrl, or null when config.generateQr is false. Code/URL ONLY — never SDP/ICE. */
+  readonly qr: QrMatrix | null;
+  /** The client-side host-reclaim credential (crypto.randomUUID()) — presented on host re-entry for peer-side
+   *  verification. */
+  readonly hostToken: string;
+};
+
+/** Lightweight QR payload: module size + a row-major boolean matrix the consumer renders however it likes. */
+type QrMatrix = {
+  readonly size: number;
+  readonly modules: readonly boolean[]; // length size*size, true = dark
+};
+
+/** Discriminated result of joinRoom/rejoin. Fullness/not-found are API results, NOT events. */
+type JoinResult =
+  | { readonly ok: true; readonly selfId: PeerId }
+  | { readonly ok: false; readonly reason: "full" | "not-found" | "unreachable" };
+
+/** This device's identity surface. */
+type SelfInfo = {
+  readonly selfId: PeerId;
+  readonly role: "host" | "controller" | "none";
+  readonly roomCode: string; // "" when not in a room
+};
+
+/** Coarse phase of the host-reload recovery state machine (drives controller reconnect UX). */
+type RecoveryPhase =
+  | "stable"       // host present, normal play
+  | "host-absent"  // host channel lost; controller buffering intents, waiting for re-entry
+  | "verifying"    // re-entry detected; hostToken handshake in flight
+  | "reconciling"  // token verified; flushing buffer + awaiting fresh snapshot
+  | "degraded";    // reconnect timed out (iOS -> "rescan QR"); session unrecoverable here
+```
+
+(`RoomDescriptor` and `JoinResult` are part of the public export surface; `QrMatrix`, `SelfInfo`, `RecoveryPhase`
+are reachable through `RoomDescriptor`/`SessionApi` but are documented here for completeness.)
+
+**Lossy intent buffering:** while the host is absent, controllers buffer timestamped intents in a ring (cap
+`intentBufferMax`, oldest dropped first); entries older than `intentBufferMaxAgeMs` are discarded on flush. Lossy by
+design for high-frequency analog intents. Do NOT assume exactly-once intent delivery across a host reload.
+
+**Host crash vs reload:** a host *reload* is recoverable; a host *crash* is an UNMITIGATED v1 hard-failure (host
+migration deferred to v2).
+
+### 6.3 intent (Standard, depends: transport, session)
+
+Controller→host typed-input contract — the narrow slice extracted out of sync so the sync engine stays Complex.
+Role-agnostic: a single instance serves both roles. The host calls `register`/`onIntent`; the controller calls
+`intent`; both share the recovery seam. Declares NO events; manages no resource (no `onStart`/`onStop`).
+
+```typescript
+type IntentApi = {
+  /** Host: declares an intent kind + its correctness-only shape-check. Idempotent per name (last wins). */
+  register(name: string, schema: IntentSchema): void;
+  /** Host: subscribes the single handler for a registered kind. Runs only for inbound frames that name a
+   *  registered kind, pass the schema, and are not a duplicate (cSeq > lastApplied[peerId]). Returns unsubscribe. */
+  onIntent(name: string, handler: IntentHandler): () => void;
+  /** Controller: stamps the next cSeq, builds an IntentFrame, and EITHER sends it over Wire.send OR (while
+   *  buffering during a host absence) enqueues it timestamped. NEVER routes through emit. */
+  intent(name: string, payload: JsonValue): void;
+  /** Recovery seam (called by session): toggle controller buffering. */
+  setBuffering(on: boolean): void;
+  /** Recovery seam: atomically return + clear the pruned, ts-ordered buffer for a single RecoveryFlushFrame. */
+  drainBuffer(): readonly BufferedIntent[];
+  /** Recovery seam: current buffered-intent count for reconnect UX. */
+  bufferedCount(): number;
+};
+
+/** A correctness-only field rule inside an IntentSchema. Bounds inclusive. Anything beyond shape is out of
+ *  scope (D6 — no auth/rate/replay). */
+type IntentFieldRule =
+  | { readonly type: "number"; readonly min?: number; readonly max?: number }
+  | { readonly type: "string"; readonly maxLength?: number }
+  | { readonly type: "boolean" }
+  | { readonly type: "enum"; readonly values: readonly (string | number | boolean)[] };
+
+/** The correctness-only typed shape-check for one intent kind (D6). */
+type IntentSchema = {
+  /** Per-field rules keyed by field name. Every key is a REQUIRED field. */
+  readonly fields: Readonly<Record<string, IntentFieldRule>>;
+  /** When false (strict default), reject any field outside `fields`. When true, allow extra ignored keys. */
+  readonly additionalFields: boolean;
+};
+
+/** Metadata handed to a host intent handler alongside the validated payload. */
+type IntentMeta = { readonly peerId: PeerId; readonly cSeq: number };
+
+/** A host intent handler (intent-plugin form). Runs ONLY after validation + de-dup. */
+type IntentHandler = (payload: JsonValue, meta: IntentMeta) => void;
+
+/** One timestamped, queued intent held on the controller during a host absence. */
+type BufferedIntent = { readonly intent: IntentFrame; readonly ts: number };
+```
+
+(`IntentApi`, `IntentSchema`, `IntentFieldRule`, `IntentMeta`, `IntentHandler`, `BufferedIntent` are the intent
+plugin's internal/public types; they are NOT in the package's top-level export surface — the host normally reaches
+`register`/`onIntent` through `StageApi.onIntent`, and the controller reaches `intent` through `ControllerApi.intent`.
+They are documented here because they describe the intent contract precisely.)
+
+**Note:** the intent plugin's own `onIntent` handler signature is `(payload, meta)` where `meta = { peerId, cSeq }`.
+The `StageApi.onIntent` facade adapts this to the simpler `(payload, peerId)` surface (it unwraps `meta.peerId`).
+
+### 6.4 sync (Complex, depends: transport, session)
+
+Role-agnostic authoritative sync engine. The host owns a map of namespaced typed slices, `mutate`s them, and
+broadcasts changes; every controller holds a read-only replica of the same `Snapshot` shape. Fresh join / late-join
+/ reconnect → full snapshot to that one peer; steady state → sequence-numbered op-list delta patches coalesced at a
+20–30 Hz throttle (decoupled from the 60 Hz game loop). Controllers apply frames in `sSeq` order; a detected gap
+requests a fresh snapshot rather than applying out of order. Encoding/decoding lives in a pure `codec.ts`. Owns and
+emits exactly `room:sync-ready`.
+
+```typescript
+type Cells = { readonly [key: string]: JsonValue };
+
+type SyncApi = {
+  // --- Host ---
+  /** Registers a namespaced typed slice with its initial value. Call ONCE per namespace, host-side, before the
+   *  first broadcast. Idempotent re-register with same initial = no-op; different initial throws. */
+  registerSlice(ns: Namespace, initial: Cells): void;
+  /** Mutates a registered slice (host only). recipe receives a draft of the cells and returns the next cells;
+   *  the engine diffs old vs next into an Op[]. Marks dirty; does NOT broadcast synchronously (the next throttle
+   *  tick coalesces + broadcasts). Throws if ns was never registered. */
+  mutate(ns: Namespace, recipe: (draft: Cells) => Cells): void;
+  /** Forces an immediate broadcast (host only). With peerId, sends a full SyncSnapshotFrame to that one peer
+   *  (late-join/reconcile); without it, broadcasts a SyncDeltaFrame to every controller. */
+  broadcast(peerId?: PeerId): void;
+  /** Registers the host-side resync handler fired when a controller reports a sequence gap (only when
+   *  config.resyncOnGap). Typically calls broadcast(peerId). Returns unsubscribe. */
+  onResyncRequest(handler: (peerId: PeerId) => void): () => void;
+
+  // --- Controller ---
+  /** Reads the current replica value of a namespace (also a readonly view host-side). Returns a frozen plain-JSON
+   *  copy, or undefined if the namespace is not present yet. */
+  read(ns: Namespace): Cells | undefined;
+  /** Subscribes to changes for one namespace. Fires after every applied frame touching ns, and once immediately
+   *  if already present. Does NOT use emit. Returns unsubscribe. */
+  subscribe(ns: Namespace, cb: (cells: Cells) => void): () => void;
+  /** Applies one inbound host frame to the replica (controller). Called by transport's frame dispatch for
+   *  sync-snap / sync-delta. First applied snapshot emits room:sync-ready. Non-sync frames ignored. */
+  applyFrame(frame: Frame): void;
+  /** Whether the first snapshot has been applied and the synced state is readable. Mirrors room:sync-ready. */
+  isReady(): boolean;
+
+  // --- Shared / recovery seam (consumed by session) ---
+  /** Exports the complete authoritative state as a plain-JSON Snapshot + its current sSeq (the exact bytes
+   *  session persists). Pure read. */
+  exportSnapshot(): { readonly snapshot: Snapshot; readonly sSeq: number };
+  /** Restores authoritative state from a persisted snapshot on host re-entry. Used ONLY by session's recovery
+   *  path. After import the host re-broadcasts a fresh baseline. */
+  importSnapshot(snapshot: Snapshot, sSeq: number): void;
+  /** Starts the host broadcast throttle loop (host only). Idempotent. Normally called by onStart. */
+  startBroadcast(): void;
+  /** Stops the host broadcast throttle loop + clears the timer (host only). Idempotent. Called by onStop. */
+  stopBroadcast(): void;
+};
+```
+
+(`SyncApi` and `Cells` are the sync plugin's surface; the host reaches `mutate`/`broadcast` through `StageApi`, and
+the controller reaches `read`/`subscribe` through `ControllerApi`. `Snapshot`/`Op` ARE in the public export surface.)
+
+### 6.5 stage (Standard facade, depends: all four engines)
+
+The HOST-role facade a couch-multiplayer game plugin composes against. Owns no state, runs no resource, contains no
+business logic — every method delegates via `ctx.require(...)` to one of the four engines. Re-declares all five
+`room:*` events for a `depends: [stagePlugin]` game plugin. Reached as `app.stage` (plugin name `"stage"`).
+
+```typescript
+/** A mutation recipe applied to one namespaced sync slice on the host. Receives current cells (readonly) and
+ *  returns the next cells (pure-function style); sync diffs old vs returned-next into an Op list. Set a cell to
+ *  null to delete it. Must remain plain-JSON-serializable; return a new object, do NOT mutate draft. */
+type MutateRecipe = (draft: { readonly [key: string]: JsonValue }) => { readonly [key: string]: JsonValue };
+
+/** A typed intent handler invoked on the host for each validated controller intent of a given name. The intent
+ *  plugin shape-checks + de-dups by cSeq BEFORE this runs. */
+type IntentHandler = (payload: unknown, peerId: PeerId) => void; // stage facade form: (payload, peerId)
+
+/** The HOST-role facade API (D5). Reached as app.stage or ctx.require(stagePlugin). */
+type StageApi = {
+  /** Creates + hosts a new room. Delegates to session.createRoom(). Room-code generation is SYNCHRONOUS, so this
+   *  returns the RoomDescriptor DIRECTLY — not a promise. Returns { code, joinUrl, qr, hostToken }. */
+  createRoom(): RoomDescriptor;
+  /** Mutates one authoritative namespaced sync slice. Delegates to sync.mutate. Advances sSeq and schedules a
+   *  throttled (20–30 Hz) delta broadcast. The ONLY way the host changes shared state. */
+  mutate(ns: Namespace, recipe: MutateRecipe): void;
+  /** Forces an immediate full snapshot broadcast to all controllers. Delegates to sync.broadcast(). Idempotent. */
+  broadcast(): void;
+  /** Registers a typed host-side handler for a named controller intent. Delegates to intent.onIntent, unwrapping
+   *  meta.peerId so the handler is (payload, peerId). Returns unsubscribe. */
+  onIntent(name: string, handler: IntentHandler): () => void;
+  /** Snapshot of the current connected-controller roster. Delegates to session.roster(). Read-only. */
+  roster(): readonly RosterEntry[];
+};
+```
+
+### 6.6 controller (Standard facade, depends: all four engines)
+
+The CONTROLLER-role facade (phone side). Owns no state, no business logic — every method delegates to one resolved
+engine. The one browser resource it touches directly is the iOS Screen Wake Lock, exposed as an API method (not a
+lifecycle hook) so the game owns the UX policy. Re-declares all five `room:*` events. Reached as `app.controller`
+(plugin name `"controller"`).
+
+```typescript
+/** The CONTROLLER-role public surface (phone side). Reached as app.controller or ctx.require(controllerPlugin). */
+type ControllerApi = {
+  /** Joins the room as a PASSIVE peer. Delegates to session.joinRoom(code). The passive flag is set INTERNALLY.
+   *  Resolves once the channel to the host is live; THROWS an Error whose message is the reason
+   *  ("full" | "not-found" | "unreachable") on failure — a full room is a session-API rejection, NOT a
+   *  room:network-warning. */
+  joinRoom(code: string): Promise<void>;
+  /** Reads one namespace from the READ-ONLY replica. Delegates to sync.read. Immutable; undefined if absent. */
+  read(ns: Namespace): Readonly<Record<string, JsonValue>> | undefined;
+  /** Subscribes to changes of ONE namespace. Delegates to sync.subscribe. Fires once immediately if populated.
+   *  Returns unsubscribe. */
+  on(ns: Namespace, cb: (value: Readonly<Record<string, JsonValue>>) => void): () => void;
+  /** Sends one typed input to the host as an IntentFrame over the WIRE (never emit). Delegates to intent.intent,
+   *  which stamps cSeq and (while the host is absent) buffers for the recovery flush. Fire-and-forget. */
+  intent(name: string, payload: JsonValue): void;
+  /** Requests a Screen Wake Lock (Safari 16.4+) so iOS doesn't dim/lock + suspend the DataChannel. Idempotent.
+   *  Feature-detected — resolves false (never throws) on a platform without navigator.wakeLock or on denial. */
+  requestWakeLock(): Promise<boolean>;
+  /** Releases the Screen Wake Lock if held. Idempotent (the OS also auto-releases when the tab is hidden). */
+  releaseWakeLock(): Promise<void>;
+};
+```
+
+---
+
+## 7. Configuration (every field, type, default)
+
+Override via `createApp({ pluginConfigs: { <plugin>: { ... } } })` (shallow merge). All fields default to the
+verified "couch" profile.
+
+### transport (`TransportConfig`)
+
+| Field | Type | Default | Description |
+|---|---|---|---|
+| `signaling` | `Signaling` | `publicRendezvous()` | The signaling seam; discarded once connected. |
+| `iceServers` | `readonly RTCIceServer[]` | one public STUN (`stun.l.google.com:19302`) | ICE servers for every connection. `[]` = LAN-only (mDNS). NO TURN ever (D2). |
+| `heartbeatIntervalMs` | `number` | `2000` | App-layer ping interval. Mandatory (WebKit 303052). |
+| `heartbeatTimeoutMs` | `number` | `6000` | No-pong window before a peer is declared dead. |
+| `openTimeoutMs` | `number` | `3000` | DataChannel-open timeout before retrying the handshake (capped). |
+| `maxMessageBytes` | `number` | `14336` | Chunk threshold (~14 KiB UTF-8); larger frames are split + reassembled. |
+
+### session (`SessionConfig`)
+
+| Field | Type | Default | Description |
+|---|---|---|---|
+| `joinUrlBase` | `string` | `""` | Origin for the join URL. Empty = use `location.origin` at runtime. |
+| `generateQr` | `boolean` | `true` | Whether createRoom() produces QR matrix data. false skips QR (headless). |
+| `maxControllers` | `number` | `8` | Max simultaneous controllers (excludes host). Lowering is fine; >8 not recommended. |
+| `snapshotDebounceMs` | `number` | `500` | Debounce for the durable IndexedDB host-snapshot write. |
+| `reconnectTimeoutMs` | `number` | `10000` | How long a controller waits for a reloaded host before degrading. |
+| `intentBufferMax` | `number` | `256` | Ring-buffer cap for intents buffered during host absence (oldest dropped). |
+| `intentBufferMaxAgeMs` | `number` | `8000` | Max age of a buffered intent before discard on flush. |
+| `storageKeyPrefix` | `string` | `"moku.room"` | localStorage key prefix for the phone reconnectToken + re-entry record. |
+
+### intent (`IntentConfig`)
+
+| Field | Type | Default | Description |
+|---|---|---|---|
+| `bufferCap` | `number` | `256` | Max controller-side intents buffered during host absence (FIFO drop). |
+| `bufferMaxAgeMs` | `number` | `10000` | Max age of a buffered intent before prune; should be `>=` session's reconnect timeout. |
+
+### sync (`SyncConfig`)
+
+| Field | Type | Default | Description |
+|---|---|---|---|
+| `broadcastHz` | `number` | `30` | Authoritative broadcast rate; coalesces mutates into one delta per tick. Verified band 20–30 Hz; clamped to `[5, 60]`. |
+| `skipEmptyDeltas` | `boolean` | `true` | When true, a no-change tick sends no SyncDeltaFrame. |
+| `maxOpsPerDelta` | `number` | `512` | Max Op cells per delta before an extra frame is forced. `0` disables the cap. |
+| `resyncOnGap` | `boolean` | `true` | When true, a controller's detected gap surfaces the host onResyncRequest hook. |
+
+### stage / controller
+
+No config. The facades own no tunables; every knob lives on the engine that owns the concern. The controller's
+wake-lock behavior is opt-in via `requestWakeLock()`, not a config flag.
+
+---
+
+## 8. Realistic end-to-end usage scenario
+
+A two-player scoreboard game. Stage app (the TV) and controller app (each phone) are separate `@moku-labs/web` apps.
+
+### Stage app
+
+```typescript
+import { createApp, createPlugin } from "@moku-labs/web";
+import { roomPlugins, stagePlugin } from "@moku-labs/room/browser";
+
+const scoreboard = createPlugin("scoreboard", {
+  depends: [stagePlugin], // makes the five room:* events visible (WARN-2)
+  hooks: ctx => ({
+    "room:peer-joined": ({ peerId }) => ctx.log.info(`controller joined: ${peerId}`),
+    "room:peer-left": ({ peerId }) => ctx.log.info(`controller left: ${peerId}`),
+    "room:network-warning": ({ reason }) => ctx.log.warn(`network: ${reason}`)
+  }),
+  onStart: ctx => {
+    const stage = ctx.require(stagePlugin);
+
+    // Host creates the room (SYNCHRONOUS) and shows the QR.
+    const { joinUrl } = stage.createRoom();
+    renderJoinQr(joinUrl);
+
+    // Each controller intent advances that controller's score; mutate schedules a throttled delta.
+    stage.onIntent("score", (_payload, peerId) => {
+      stage.mutate("scores", draft => ({
+        ...draft,
+        [peerId]: ((draft[peerId] as number) ?? 0) + 1
+      }));
+    });
+  }
+});
+
+const app = createApp({ plugins: [...roomPlugins.stage, scoreboard] });
+await app.start();
+```
+
+### Controller app
+
+```typescript
+import { createApp, createPlugin } from "@moku-labs/web";
+import { roomPlugins, controllerPlugin } from "@moku-labs/room/browser";
+
+const pad = createPlugin("pad", {
+  depends: [controllerPlugin],
+  hooks: ctx => ({
+    "room:sync-ready": () => ctx.log.info("replica readable"),
+    "room:host-reconnecting": () => showReconnectingOverlay()
+  }),
+  onStart: async ctx => {
+    const controller = ctx.require(controllerPlugin);
+
+    // Join with the code scanned from the TV's QR (throws on failure).
+    try {
+      await controller.joinRoom(readScannedCode());
+    } catch (e) {
+      // e.message is "full" | "not-found" | "unreachable"
+      showJoinError((e as Error).message);
+      return;
+    }
+    await controller.requestWakeLock(); // keep the screen awake
+
+    // Render the read-only replica.
+    controller.on("scores", scores => renderScores(scores));
+
+    // Send an input on a button press.
+    document.querySelector("#buzz")?.addEventListener("click", () => {
+      controller.intent("score", {}); // fire-and-forget over the Wire
+    });
+  }
+});
+
+const app = createApp({ plugins: [...roomPlugins.controller, pad] });
+await app.start();
+```
+
+### What happens on the wire
+
+1. Controller's `intent("score", {})` → `intentPlugin` stamps `cSeq` → `IntentFrame {t:"intent", name:"score",
+   payload:{}, cSeq:n}` → `Wire.send(host, frame)`.
+2. Transport delivers the frame to the host; transport fans it to all `Wire.on` consumers; `intentPlugin`
+   self-filters `t:"intent"`, validates the schema, drops duplicates (`cSeq <= lastApplied[peerId]`), and invokes
+   the host `onIntent` handler.
+3. The handler calls `stage.mutate("scores", ...)` → `syncPlugin` diffs into `Op[]`, marks `scores` dirty.
+4. The next `broadcastHz` tick coalesces dirty namespaces into a `SyncDeltaFrame {t:"sync-delta", ops, sSeq}` and
+   `Wire.broadcast`s it to every controller.
+5. Each controller's transport delivers it; `syncPlugin.applyFrame` applies in `sSeq` order and fires the `scores`
+   `subscribe` callback → re-render.
+6. A late joiner gets a full `SyncSnapshotFrame` first (single-peer `broadcast(peerId)`); the first applied snapshot
+   emits `room:sync-ready`.
+
+### Host reload
+
+1. During play, `syncPlugin` hands snapshots to `session.persistSnapshot(snapshot, sSeq)`; `session` writes a
+   debounced IndexedDB record + a synchronous `localStorage` record on `visibilitychange`.
+2. The host tab reloads. `session` `onInit` detects the persisted re-entry record, resumes the SAME room code, and
+   (host side) emits `room:host-reconnecting`. Consumers on the reload path read `session.recoveryPhase()` (it is
+   not `"stable"`).
+3. Controllers detect the host absence, buffer intents (ring buffer, lossy), and show reconnecting UX.
+4. On re-entry: controller sends `RecoveryHelloFrame {hostToken, peerId}`; host verifies the token peer-side and
+   replies `RecoveryWelcomeFrame {hostToken, sSeq}` followed by a fresh `SyncSnapshotFrame`.
+5. Each controller flushes its buffer in one `RecoveryFlushFrame {buffered}`; the host applies them in `cSeq` order,
+   dropping duplicates. Recovery phase returns to `"stable"`.
+6. (On iOS the path degrades to "rescan QR" → the controller calls `session.rejoin()`.)
+
+---
+
+## 9. Plugin dependency graph + initialization order
+
+```
+transport ──> session ──> intent ─┐
+   │            │                  ├──> stage       (host facade)   = roomPlugins.stage
+   │            └──────> sync  ────┤
+   └───────────────────────────────└──> controller (phone facade)  = roomPlugins.controller
+```
+
+- `transport` depends on nothing (Wave 1).
+- `session` depends on `transport` (Wave 2).
+- `intent` and `sync` both depend on `transport` + `session` and are parallel siblings — neither depends on the
+  other (Wave 3, D5). The host applies a `mutate` from a game-defined `onIntent` handler, but that call originates
+  in the GAME plugin, not in `sync`.
+- `stage` and `controller` depend on all four engines (Wave 4).
+- Initialization order = array order in `roomPlugins.*`. The **facade is LAST** so all four engines' `room:*`
+  events are mergeable into its re-declared set.
+
+### On the facades (D19) — re-declare, do NOT re-emit
+
+The facades re-DECLARE the five `room:*` events for **compile-time visibility** to a game plugin that
+`depends: [stagePlugin]` / `[controllerPlugin]` (event-type visibility is NOT transitive at the type level). They
+install **NO forwarding hooks**: Moku's event bus is **GLOBAL** — every hook registered for an event name fires on
+any `emit` of that name regardless of `depends` — so the engines' own emits already reach a `depends`-ing consumer
+directly. A forwarding hook that re-emitted the same name would re-trigger itself and recurse infinitely. The
+facades delegate API methods and re-declare event types only; they do not proxy/forward events.
+
+---
+
+## 10. Extension patterns
+
+### 10.1 A game plugin that depends on a facade
+
+Declare `depends: [stagePlugin]` (host) or `depends: [controllerPlugin]` (phone). That single edge gives you the
+complete typed `room:*` hook surface AND lets you `ctx.require(stagePlugin)` / `ctx.require(controllerPlugin)` to
+reach the facade API. Read game state from the synced replica (controller: `read`/`on`; host owns it via `mutate`),
+and hook the lifecycle events:
+
+```typescript
+import { createPlugin } from "@moku-labs/web";
+import { stagePlugin } from "@moku-labs/room";
+
+const myGame = createPlugin("myGame", {
+  depends: [stagePlugin],
+  hooks: ctx => ({
+    "room:peer-joined": ({ peerId }) => ctx.log.info(`joined ${peerId}`),
+    "room:peer-left": ({ peerId }) => ctx.log.info(`left ${peerId}`),
+    "room:sync-ready": () => ctx.log.info("replica readable"),
+    "room:network-warning": ({ reason }) => showFailureUx(reason)
+  }),
+  onStart: ctx => {
+    const stage = ctx.require(stagePlugin);
+    const { joinUrl } = stage.createRoom();
+    renderJoinQr(joinUrl);
+    stage.onIntent("move", (payload, peerId) => {
+      stage.mutate("players", draft => ({ ...draft, [peerId]: payload as JsonValue }));
+    });
+  }
+});
+
+// Compose AFTER the facade array:
+const app = createApp({ plugins: [...roomPlugins.stage, myGame] });
+```
+
+Compose the game plugin AFTER the `roomPlugins.*` array so its `depends` edge is satisfied by array order.
+
+> Note: if the game plugin's `onStart` runs on a host RELOAD, poll `ctx.require(...).recoveryPhase()` (via session)
+> rather than relying on `room:host-reconnecting`, which fires before downstream hooks exist.
+
+### 10.2 A custom `Signaling` adapter
+
+Implement the DOM-free `Signaling` seam and pass it as `pluginConfigs.transport.signaling`. The contract is one
+method (`join`) returning a `SignalingSession`; transport never changes:
+
+```typescript
+import type { Signaling, SignalingSession, SignalingJoinOpts, SignalMsg } from "@moku-labs/room";
+
+function myAdapter(): Signaling {
+  return {
+    async join(code: string, opts: SignalingJoinOpts): Promise<SignalingSession> {
+      // Establish your rendezvous for `code`. `opts.selfId` is this peer; `opts.passive` = controller side.
+      return {
+        onPeer(cb) { /* call cb(peerId) when a peer appears — the active side then offers */ },
+        onPeerLeave(cb) { /* handshake bookkeeping only — NOT dead-peer detection */ },
+        send(peerId, msg: SignalMsg) { /* deliver one handshake message (offer/answer/candidate) */ },
+        onSignal(cb) { /* call cb(senderPeerId, msg) for every inbound handshake message */ },
+        async leave() { /* release rendezvous resources; idempotent */ }
+      };
+    }
+  };
+}
+
+const app = createApp({
+  plugins: roomPlugins.stage,
+  pluginConfigs: { transport: { signaling: myAdapter() } }
+});
+```
+
+Carry ONLY handshake data over `SignalMsg` — never gameplay. Keep the adapter DOM-free so it stays portable
+(in-process tests, Workers/Node server adapter). Dead-peer detection for ESTABLISHED channels is the app-layer
+heartbeat's job, not `onPeerLeave`.
+
+---
+
+## 11. File structure
+
+- `src/index.ts` — public barrel: the six plugin instances, `roomPlugins`, the two adapter factories, and the
+  contract + plugin-owned type exports.
+- `src/browser.ts` — browser entry (`@moku-labs/room/browser`); `export * from "./index"`.
+- `src/contracts.ts` — the single physical home (D16) for all shared types (signaling, wire, sync, roster, events) +
+  `MAX_CONTROLLERS` / `ROOM_CODE_LENGTH`. Pure types + two consts, DOM-free by construction.
+- `src/plugins/<name>/` — one directory per plugin:
+  - `index.ts` — the `createPlugin` wiring harness.
+  - `types.ts` — the plugin's config/state/API types (shared types imported from `../../contracts`, never
+    re-declared).
+  - `config.ts` — typed default config (`DEFAULT_TRANSPORT_CONFIG`, `DEFAULT_INTENT_CONFIG`, `DEFAULT_SYNC_CONFIG`,
+    …) + event descriptions.
+  - `api.ts` — the API factory.
+  - engine internals — e.g. `state.ts`, `lifecycle/` + `recovery/` (session), `codec.ts` (sync),
+    `adapters/public-rendezvous.ts` + `adapters/in-memory.ts` (transport), `receive.ts` (intent),
+    `handlers.ts` (session).
+  - `__tests__/unit/` + `__tests__/integration/` — colocated tests (integration uses the `inMemory()` adapter).
+- Framework-level tests live in the root `tests/unit/` and `tests/integration/` (cross-plugin scenarios).
+
+---
+
+## 12. Development
+
+bun only.
+
+| Script | Command | Purpose |
+|---|---|---|
+| Build | `bun run build` | tsdown. |
+| Validate package | `bun run validate` | publint + attw (export-map/types). |
+| Lint | `bun run lint` | Biome check + ESLint. |
+| Lint (fix) | `bun run lint:fix` | Auto-fix Biome + ESLint. |
+| Format | `bun run format` | Biome format. |
+| Test | `bun run test` | vitest run (all). |
+| Unit | `bun run test:unit` | unit project. |
+| Integration | `bun run test:integration` | integration project. |
+| Coverage | `bun run test:coverage` | unit + integration with coverage (90% threshold). |
+
+Code style: Biome (2-space indent, double quotes, semicolons, no trailing commas) + ESLint 9 flat config.
+TypeScript strict mode with `exactOptionalPropertyTypes` and `noUncheckedIndexedAccess`. `import type` enforced.
+JSDoc required on all source exports.
+
+---
+
+## 13. Glossary of decision IDs referenced above
+
+- **D1** — Room is a plugin pack with no Layer-2 shell; never calls createCore/createApp; built on @moku-labs/web.
+- **D2** — Strict no-server P2P, no TURN. Accepted hard-failure on hostile networks; `room:network-warning` is the
+  UX hook.
+- **D4** — Custom op-list sync codec (Snapshot + Op deltas), lighter than RFC 6902 JSON Patch.
+- **D5** — intent is split out of sync; role-agnostic engines, role chosen by which facade exposes which methods.
+- **D6** — Correctness-only intent shape-check; trusted living-room threat model (no anti-cheat / rate-limit / HMAC).
+- **D11** — 8-controller cap; client-side host-reload recovery; iOS Screen Wake Lock.
+- **D12** — The general `Signaling` adapter seam (publicRendezvous / inMemory / future server adapter).
+- **D16** — All shared contract types live once in `src/contracts.ts`.
+- **D19** — Facades re-declare `room:*` events for type visibility but install no forwarding hooks (the event bus is
+  global).
+- **WARN-2** — Event-type visibility is not transitive; a facade must re-declare events for a `depends`-ing consumer.

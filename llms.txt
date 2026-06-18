@@ -1,0 +1,185 @@
+# @moku-labs/room
+
+> Couch-multiplayer foundation for Moku: shared screen (stage) + phones (controllers), WebRTC peer-to-peer,
+> multi-device state sync. A Moku PLUGIN PACK — NOT a standalone framework or app.
+
+Room has NO Layer-2 shell, NO `src/config.ts`, and never calls `createCore`/`createApp` itself. It is built on
+`@moku-labs/web` (peer dependency `^1.12.4`), which supplies `createApp`/`createPlugin` + `ctx.log`/`ctx.env`. Room
+never imports `@moku-labs/core` directly. Consumers build their own `@moku-labs/web` app and spread a pre-composed
+Room plugin array (`roomPlugins.stage` or `roomPlugins.controller`) into `createApp`. The browser/WebRTC build
+target is `@moku-labs/room/browser`.
+
+- Package: `@moku-labs/room` (peer dep `@moku-labs/web ^1.12.4`; bundled deps `trystero ~0.25.2`, `qrcode ^1.5.4`)
+- Install: `bun add @moku-labs/room` + `bun add @moku-labs/web`
+- Entries: `@moku-labs/room` (main) and `@moku-labs/room/browser` (DOM/WebRTC; identical surface)
+
+## Core concepts
+
+- **Stage vs controller.** Stage = the shared TV/laptop screen, the authoritative HOST and star hub: owns game
+  state, validates inputs, broadcasts state, calls `createRoom()`. Controller = a phone, a passive peer: joins by
+  code, sends typed intents, renders a read-only state replica.
+- **Peer-to-peer, no game server (D2 — accepted hard-failure).** Strictly P2P, NO TURN ever. Stage `createRoom()`
+  → 6-char code → QR → both devices join a public rendezvous (Trystero/Nostr by default) → one-time SDP/ICE
+  handshake over public relays → direct P2P DataChannels on the LAN. The rendezvous never carries gameplay. On
+  AP-isolated / symmetric-NAT / iOS-Private-Relay networks (~15–30%) the connection hard-fails with no recovery;
+  surfaces `room:network-warning`. Design target: the home LAN.
+- **Wire vs events (two planes, strictly separate).** The typed `Wire` (`Frame` DataChannel) carries ALL gameplay
+  (intents, snapshots, deltas, heartbeats, recovery). Moku `emit` (`room:*`) carries ONLY coarse lifecycle (5
+  events). No gameplay ever rides `emit`; no `room:*` event ever carries gameplay.
+- **Star topology, 8-cap.** Stage is the sole hub; NO controller↔controller channels. `MAX_CONTROLLERS = 8`,
+  `ROOM_CODE_LENGTH = 6`.
+- **Signaling adapter seam (D12).** Transport talks to discovery only through the DOM-free `Signaling` contract.
+  Adapters swap with zero transport changes: `publicRendezvous()` (default, Trystero) and `inMemory()` (tests).
+- **Host-reload recovery.** Host tab RELOAD is recoverable (host CRASH is an unmitigated v1 hard-failure). Host
+  mints a `hostToken`, persists snapshots (debounced IndexedDB + sync localStorage on `visibilitychange`), resumes
+  the same room code, verifies the token peer-side (no server, D6). Controllers buffer intents during absence and
+  flush them (idempotent by `cSeq`, lossy by design). iOS degrades to "rescan QR" via `session.rejoin()`.
+- **iOS caveats.** App-layer heartbeat is MANDATORY (WebKit DataChannel `onclose` doesn't fire on iOS). Controller
+  Screen Wake Lock (Safari 16.4+) keeps the channel alive. Recovery degrades to rescan-QR.
+
+## Facades (D19)
+
+The two role facades (`stagePlugin`, `controllerPlugin`) sit LAST in their arrays and RE-DECLARE all five `room:*`
+events so a game plugin with `depends: [stagePlugin]` / `[controllerPlugin]` sees the full typed hook surface in
+one edge (event-type visibility is not transitive). They install NO forwarding hooks — Moku's event bus is GLOBAL,
+so engines' `emit("room:*")` already reach every hook regardless of `depends`. Facades delegate API methods only;
+they do not re-emit/proxy events.
+
+## Quick reference — compose
+
+```typescript
+import { createApp, createPlugin } from "@moku-labs/web";
+import { roomPlugins, stagePlugin } from "@moku-labs/room/browser";
+
+// roomPlugins.stage      = [transportPlugin, sessionPlugin, intentPlugin, syncPlugin, stagePlugin]
+// roomPlugins.controller = [transportPlugin, sessionPlugin, intentPlugin, syncPlugin, controllerPlugin]
+
+const game = createPlugin("game", {
+  depends: [stagePlugin], // makes the five room:* events visible
+  hooks: ctx => ({ "room:peer-joined": ({ peerId }) => ctx.log.info(peerId) })
+});
+
+const app = createApp({ plugins: [...roomPlugins.stage, game] }); // facade LAST
+await app.start();
+
+const { code, joinUrl, qr } = app.stage.createRoom(); // SYNCHRONOUS — no await
+```
+
+## Quick reference — role APIs
+
+Reach the facade API by plugin name: `app.stage` (StageApi) / `app.controller` (ControllerApi). Inside a game
+plugin: `ctx.require(stagePlugin)` / `ctx.require(controllerPlugin)`.
+
+**StageApi (`app.stage`, host):**
+- `createRoom(): RoomDescriptor` — SYNCHRONOUS; `{ code, joinUrl, qr, hostToken }`.
+- `mutate(ns, recipe): void` — mutate one authoritative slice; recipe `(draft) => next`; schedules a throttled delta.
+- `broadcast(): void` — force an immediate snapshot broadcast.
+- `onIntent(name, handler): () => void` — handler `(payload, peerId)`; validated + de-duped before it runs.
+- `roster(): readonly RosterEntry[]` — connected controllers.
+
+**ControllerApi (`app.controller`, phone):**
+- `joinRoom(code): Promise<void>` — passive join; THROWS `Error("full"|"not-found"|"unreachable")` on failure.
+- `read(ns): Readonly<Record<string, JsonValue>> | undefined` — read the replica.
+- `on(ns, cb): () => void` — subscribe to one namespace.
+- `intent(name, payload): void` — send a typed input over the Wire (never emit); fire-and-forget.
+- `requestWakeLock(): Promise<boolean>` / `releaseWakeLock(): Promise<void>` — iOS Screen Wake Lock.
+
+## Quick reference — adapters
+
+- `publicRendezvous()` — DEFAULT signaling adapter (Trystero v0.25.x over a Nostr backbone). Production.
+- `inMemory()` — in-process adapter, no `RTCPeerConnection`. Tests/simulation; pair with `iceServers: []`.
+
+```typescript
+createApp({ plugins: roomPlugins.stage,
+  pluginConfigs: { transport: { signaling: inMemory(), iceServers: [] } } });
+```
+
+## File structure
+
+- `src/index.ts` — public barrel: plugin instances, `roomPlugins`, adapters, contract types.
+- `src/browser.ts` — browser entry (`@moku-labs/room/browser`); re-exports the barrel.
+- `src/contracts.ts` — single physical home (D16) for all shared types + `room:*` event catalog + the two consts.
+- `src/plugins/<name>/` — one dir per plugin: `index.ts` (wiring), `types.ts`, `config.ts`, `api.ts`, plus engine
+  internals (`state.ts`, `lifecycle/`, `recovery/`, `codec.ts`, …) and colocated `__tests__/`.
+
+## Public export surface (from src/index.ts)
+
+- Plugin instances: `transportPlugin`, `sessionPlugin`, `intentPlugin`, `syncPlugin`, `stagePlugin`,
+  `controllerPlugin`.
+- Pre-composed arrays: `roomPlugins.stage`, `roomPlugins.controller`.
+- Signaling adapter factories: `publicRendezvous` (default), `inMemory` (tests).
+- Contract types: `Signaling`, `SignalingSession`, `SignalingJoinOpts`, `SignalMsg`, `IceCandidateInit`, `Wire`,
+  `Frame`, `IntentFrame`, `SyncSnapshotFrame`, `SyncDeltaFrame`, `HeartbeatPingFrame`, `HeartbeatPongFrame`,
+  `RecoveryHelloFrame`, `RecoveryWelcomeFrame`, `RecoveryFlushFrame`, `PeerId`, `RosterEntry`, `Snapshot`, `Op`,
+  `JsonValue`, `Namespace`, `RoomEvents`.
+- Contract consts: `MAX_CONTROLLERS` (8), `ROOM_CODE_LENGTH` (6).
+- Plugin-owned public types: `RoomDescriptor`, `JoinResult` (session); `StageApi` (stage); `ControllerApi`
+  (controller).
+
+## Plugins (one line each)
+
+| Plugin | Tier | Depends | Purpose | Key API | Events |
+|---|---|---|---|---|---|
+| `transportPlugin` | Complex | — | WebRTC floor: handshake, chunking/backpressure, heartbeat, capped ICE recovery; owns `Wire`. | `connect`, `wire`, `disconnect`, `peers`, `close` | emits `room:network-warning` |
+| `sessionPlugin` | Complex | transport | Room code + QR + roster; star topology (`hostId()`); host-reload recovery. | `createRoom`, `joinRoom`, `leave`, `rejoin`, `roster`, `self`, `hostId`, `persistSnapshot`, `recoveryPhase` | emits `room:peer-joined`, `room:peer-left`, `room:host-reconnecting` |
+| `intentPlugin` | Standard | transport, session | Controller→host typed inputs; per-controller `cSeq` idempotent de-dup; reconnect buffer. | `register`, `onIntent`, `intent`, `setBuffering`, `drainBuffer`, `bufferedCount` | none |
+| `syncPlugin` | Complex | transport, session | Host→controller authoritative state: snapshot + throttled op-list deltas (custom codec). | `registerSlice`, `mutate`, `broadcast`, `read`, `subscribe`, `applyFrame`, `exportSnapshot`, `importSnapshot` | emits `room:sync-ready` |
+| `stagePlugin` | Standard (facade) | all four | Host-role facade → `StageApi` (`app.stage`). | `createRoom`, `mutate`, `broadcast`, `onIntent`, `roster` | re-declares all five |
+| `controllerPlugin` | Standard (facade) | all four | Controller-role facade → `ControllerApi` (`app.controller`). | `joinRoom`, `read`, `on`, `intent`, `requestWakeLock`, `releaseWakeLock` | re-declares all five |
+
+## Events — `room:*` (Moku `emit`, coarse lifecycle ONLY)
+
+ALL gameplay rides the `Wire` (`Frame`s), never these events.
+
+- `room:peer-joined` → `{ peerId: PeerId }` — controller channel connected + added to roster (session).
+- `room:peer-left` → `{ peerId: PeerId }` — controller left or heartbeat-declared dead (session).
+- `room:host-reconnecting` → `{}` (`Record<string, never>`) — host reloaded, recovery in flight (session).
+- `room:sync-ready` → `{}` — first full snapshot applied, replica readable (sync).
+- `room:network-warning` → `{ reason: "ice-failed" | "rendezvous-unreachable" | "channel-closed" }` — connectivity
+  hard-failure UX hook (transport, D2).
+
+Reload-path caveat: `room:host-reconnecting` fires during `session` `onInit`, before downstream hooks exist. On the
+reload path, POLL `app.session.recoveryPhase()` (non-`"stable"` = recovery in flight) instead of relying on it.
+
+## Frames — `Frame` union (the typed `Wire`, gameplay transport, NOT events)
+
+Discriminated on `t`. `Wire = { send(peerId, frame), broadcast(frame), on(handler) => unsubscribe }`. On a
+controller, `send`/`broadcast` collapse to "send to host".
+
+- `IntentFrame` (`t: "intent"`) — controller→host typed input; `{ name, payload, cSeq }`.
+- `SyncSnapshotFrame` (`t: "sync-snap"`) — host→controller full snapshot; `{ snapshot, sSeq }`.
+- `SyncDeltaFrame` (`t: "sync-delta"`) — host→controller op-list delta; `{ ops, sSeq }`.
+- `HeartbeatPingFrame` (`t: "ping"`) / `HeartbeatPongFrame` (`t: "pong"`) — `{ ts }` liveness.
+- `RecoveryHelloFrame` (`t: "recovery-hello"`) — controller→host re-entry claim; `{ hostToken, peerId }`.
+- `RecoveryWelcomeFrame` (`t: "recovery-welcome"`) — host→controller ack; `{ hostToken, sSeq }`.
+- `RecoveryFlushFrame` (`t: "recovery-flush"`) — controller→host buffered-intent flush; `{ buffered }`.
+
+## Config defaults (override via createApp pluginConfigs)
+
+- transport: `signaling=publicRendezvous()`, `iceServers=[one public STUN]`, `heartbeatIntervalMs=2000`,
+  `heartbeatTimeoutMs=6000`, `openTimeoutMs=3000`, `maxMessageBytes=14336`.
+- session: `joinUrlBase=""`, `generateQr=true`, `maxControllers=8`, `snapshotDebounceMs=500`,
+  `reconnectTimeoutMs=10000`, `intentBufferMax=256`, `intentBufferMaxAgeMs=8000`, `storageKeyPrefix="moku.room"`.
+- intent: `bufferCap=256`, `bufferMaxAgeMs=10000`.
+- sync: `broadcastHz=30` (clamped [5,60]), `skipEmptyDeltas=true`, `maxOpsPerDelta=512`, `resyncOnGap=true`.
+- stage / controller: no config (facades own no tunables).
+
+## End-to-end flow
+
+1. Stage `app.stage.createRoom()` → `{ code, joinUrl, qr }`; render the QR. Register slices + intent handlers.
+2. Controller scans QR, `await app.controller.joinRoom(code)`; `requestWakeLock()`.
+3. Controller `app.controller.intent("move", {...})` → `IntentFrame` over the Wire → host.
+4. Host `onIntent` validates + de-dups by `cSeq`, then `app.stage.mutate(ns, recipe)`.
+5. Sync coalesces mutates at `broadcastHz` and broadcasts `SyncDeltaFrame`s; new/late joiners get a
+   `SyncSnapshotFrame`.
+6. Controller `app.controller.on(ns, cb)` re-renders on each applied frame; first snapshot → `room:sync-ready`.
+7. Host reload: snapshot persisted → resume same code → token verified peer-side → controllers reconcile + flush
+   buffered intents.
+
+## Development
+
+- Scripts (bun): `bun run build` (tsdown), `bun run lint` (Biome + ESLint), `bun run test` /
+  `bun run test:unit` / `bun run test:integration` / `bun run test:coverage` (vitest, 90% threshold),
+  `bun run validate` (publint + attw).
+- Tests: framework-level in root `tests/unit/` + `tests/integration/`; plugin-specific colocated in
+  `src/plugins/<name>/__tests__/`. Integration uses the `inMemory()` adapter.
