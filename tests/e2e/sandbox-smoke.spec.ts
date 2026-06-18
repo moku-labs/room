@@ -4,7 +4,7 @@
  * page composes the public `roomPlugins.*` arrays through `@moku-labs/web`'s `createApp` and BOOTS in a
  * real browser. This is the regression guard that the published surface still wires up + runs client-side;
  * the real cross-device WebRTC gate is `real-webrtc-interop.spec.ts` (opt-in) and the manual hardware run
- * documented in `sandbox/README.md`.
+ * documented in `../sandbox/README.md`.
  */
 import { expect, test } from "@playwright/test";
 

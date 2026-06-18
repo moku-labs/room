@@ -2,15 +2,15 @@ import { defineConfig, devices } from "@playwright/test";
 
 /**
  * Playwright config for the `@moku-labs/room` sandbox e2e suite. Drives the runnable demo in
- * `../sandbox` through a real browser. The `webServer` block boots `sandbox/serve.ts` (Bun.build +
- * Bun.serve) and waits for it before the specs run.
+ * `tests/sandbox` through a real browser. The `webServer` block boots `tests/sandbox/serve.ts`
+ * (Bun.build + Bun.serve) and waits for it before the specs run.
  *
  * Two spec tiers live under `tests/e2e`:
  * - `*-smoke.spec.ts` — deterministic, offline (uses the `?signaling=memory` bus); runs in CI with just
  *   Chromium.
  * - `*-interop.spec.ts` — real-WebRTC over `publicRendezvous`; networked + flaky, gated behind
  *   `ROOM_E2E_LIVE=1`. The true cross-device gate (iPhone-Safari ↔ Bravia-7) is manual — see
- *   `sandbox/README.md`.
+ *   `tests/sandbox/README.md`.
  */
 const PORT = Number(process.env.PORT ?? 5179);
 
@@ -37,7 +37,7 @@ export default defineConfig({
     }
   ],
   webServer: {
-    command: "bun sandbox/serve.ts",
+    command: "bun tests/sandbox/serve.ts",
     url: `http://localhost:${PORT}`,
     reuseExistingServer: !process.env.CI,
     timeout: 120_000

@@ -101,6 +101,6 @@
     "test:integration": "vitest run --project integration",
     "test:coverage": "vitest run --project unit --project integration --coverage",
     "test:e2e": "playwright test",
-    "sandbox": "bun sandbox/serve.ts"
+    "sandbox": "bun tests/sandbox/serve.ts"
   }
 }

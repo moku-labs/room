@@ -5,7 +5,7 @@
  * and `window.x` type-check (the latter via `Window & typeof globalThis`). Kept intentionally minimal —
  * the full `App` is not exposed; the demo drives gameplay through the DOM, exactly as a player would.
  */
-import type { RoomDescriptor } from "../src/index";
+import type { RoomDescriptor } from "../../src/index";
 
 /** Host handle published by `stage.ts` once `createRoom()` has opened a room. */
 type RoomStageHandle = {

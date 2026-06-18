@@ -9,7 +9,7 @@ export default [
   {
     ignores: [
       "dist/**",
-      "sandbox/dist/**",
+      "tests/sandbox/dist/**",
       "coverage/**",
       "bun.lock",
       ".claude/**",
@@ -166,7 +166,7 @@ export default [
   // 8b. Sandbox (reference consumer demo, not shipped): relaxed like tests, plus DOM-demo allowances
   // (direct `getElementById`, single-char map binds, repeated UI strings).
   {
-    files: ["sandbox/**/*.ts"],
+    files: ["tests/sandbox/**/*.ts"],
     rules: {
       "jsdoc/require-jsdoc": "off",
       "jsdoc/require-example": "off",

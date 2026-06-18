@@ -33,7 +33,7 @@ function setStatus(text: string): void {
 }
 
 /**
- * Paints a {@link import("../src/index").QrMatrix} onto the canvas — `size × size` dark/light modules
+ * Paints a {@link import("../../src/index").QrMatrix} onto the canvas — `size × size` dark/light modules
  * scaled up to a comfortable scan target. No-op when QR generation was disabled (`null`).
  *
  * @param qr - The boolean module matrix from the async `app.stage.qr()` accessor, or `null` when

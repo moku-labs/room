@@ -3,7 +3,7 @@
 A minimal, runnable couch-multiplayer demo ("Tap Party") that composes the **public**
 `roomPlugins.{stage,controller}` arrays through `@moku-labs/web`'s `createApp`, exactly as a real consumer
 game would. It is both a manual playground and the target the Playwright e2e specs in
-[`../tests/e2e`](../tests/e2e) drive.
+[`../e2e`](../e2e) drive.
 
 > This is reference consumer code, not part of the published package. `bun run build` (tsdown) only bundles
 > `src/index.ts` + `src/browser.ts`; the sandbox is never shipped.

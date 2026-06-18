@@ -5,7 +5,7 @@
  * RTCDataChannel. Networked and therefore flaky, so it is GATED behind `ROOM_E2E_LIVE=1`.
  *
  * This does NOT replace the manual iPhone-Safari ↔ Sony Bravia-7 interop run (two real devices, two
- * engines, mDNS LAN path) documented in `sandbox/README.md` — that hardware spike is the actual gate.
+ * engines, mDNS LAN path) documented in `../sandbox/README.md` — that hardware spike is the actual gate.
  */
 import { expect, test } from "@playwright/test";
 

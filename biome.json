@@ -4,10 +4,9 @@
     "includes": [
       "src/**",
       "tests/**",
-      "sandbox/**",
-      "!sandbox/dist",
-      "!sandbox/**/*.css",
-      "!sandbox/**/*.d.ts",
+      "!tests/sandbox/dist",
+      "!tests/sandbox/**/*.css",
+      "!tests/sandbox/**/*.d.ts",
       "*.config.ts"
     ]
   },

@@ -6,7 +6,7 @@
  *
  * This is NOT library code — it is the reference consumer composition (the same shape a real couch game
  * would write) and doubles as the Playwright e2e target. It imports the live framework source
- * (`../src/index`) so the demo always tracks the working tree (Bun bundles it; no build step of the
+ * (`../../src/index`) so the demo always tracks the working tree (Bun bundles it; no build step of the
  * package is required), mirroring the integration harness's `../../../src/index` import note.
  *
  * Inference note: the per-app `pluginConfigs` is built by `roomConfigs()` as a SEPARATELY-typed value
@@ -20,8 +20,8 @@
  * @see ./README.md
  */
 import { createApp } from "@moku-labs/web/browser";
-import type { Signaling } from "../src/index";
-import { inMemory, publicRendezvous, roomPlugins } from "../src/index";
+import type { Signaling } from "../../src/index";
+import { inMemory, publicRendezvous, roomPlugins } from "../../src/index";
 
 /** The single authoritative sync slice the demo game keeps — a per-peer tap scoreboard (`peerId → count`). */
 export const SCORES = "scores";
