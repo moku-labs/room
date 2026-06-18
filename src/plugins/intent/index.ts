@@ -9,7 +9,7 @@
  * from this spec object (R1). The extracted factories take destructured per-app pieces; `@moku-labs/web`
  * infers `ctx` inline here, so `api`/`onInit` bind the resolved transport `Wire` + session host-id.
  */
-import { createPlugin } from "@moku-labs/web";
+import { createPlugin } from "@moku-labs/web/browser";
 import { sessionPlugin } from "../session";
 import { transportPlugin } from "../transport";
 import { createIntentApi } from "./api";

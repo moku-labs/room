@@ -1,4 +1,4 @@
-import { createPlugin } from "@moku-labs/web";
+import { createPlugin } from "@moku-labs/web/browser";
 import type { RoomEvents } from "../../contracts";
 import { intentPlugin } from "../intent";
 import { sessionPlugin } from "../session";

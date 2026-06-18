@@ -103,8 +103,8 @@ A game plugin composes the pre-bundled `roomPlugins.controller`, drives the cont
 is how all five events become visible — WARN-2):
 
 ```typescript
-import { createApp } from "@moku-labs/web";
-import { createPlugin } from "@moku-labs/web";
+import { createApp } from "@moku-labs/web/browser";
+import { createPlugin } from "@moku-labs/web/browser";
 import { roomPlugins, controllerPlugin } from "@moku-labs/room";
 
 // A couch-multiplayer game plugin that drives the phone-side controller.

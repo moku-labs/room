@@ -13,7 +13,7 @@
  *
  * @see README.md
  */
-import { createPlugin } from "@moku-labs/web";
+import { createPlugin } from "@moku-labs/web/browser";
 import type { RoomEvents } from "../../contracts";
 import { transportPlugin } from "../transport";
 import { createSessionApi, makeSessionDeps } from "./api";

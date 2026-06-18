@@ -48,7 +48,7 @@ they do not re-emit/proxy events.
 ## Quick reference — compose
 
 ```typescript
-import { createApp, createPlugin } from "@moku-labs/web";
+import { createApp, createPlugin } from "@moku-labs/web/browser";
 import { roomPlugins, stagePlugin } from "@moku-labs/room/browser";
 
 // roomPlugins.stage      = [transportPlugin, sessionPlugin, intentPlugin, syncPlugin, stagePlugin]

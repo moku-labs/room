@@ -1,4 +1,4 @@
-import { createPlugin } from "@moku-labs/web";
+import { createPlugin } from "@moku-labs/web/browser";
 import type { RoomEvents } from "../../contracts";
 import { createTransportApi } from "./api";
 import { tearDownState } from "./channel";

@@ -12,30 +12,17 @@
 const ROOT = import.meta.dir;
 const PORT = Number(process.env.PORT ?? 5179);
 
-// The Room library source imports `createPlugin` from `@moku-labs/web` (the MAIN entry, D1), which drags
-// in the full SSG graph — including the native `@resvg/resvg-js` (.node) OG-image renderer and other
-// server-only code that cannot be bundled for the browser. The `/browser` entry exports the SAME
-// `createPlugin` but is DOM-safe, so we alias the bare `@moku-labs/web` specifier to it at bundle time.
-// FINDING (see ../.planning/build/findings.md): a real Room consumer bundling for the browser must do the
-// same; the library would be more turnkey if its plugins imported `createPlugin` from `@moku-labs/web/browser`.
-const webBrowserEntry = Bun.resolveSync("@moku-labs/web/browser", ROOT);
-const aliasWebToBrowser = {
-  name: "alias-web-to-browser",
-  setup(build: Bun.PluginBuilder) {
-    build.onResolve({ filter: /^@moku-labs\/web$/ }, () => ({ path: webBrowserEntry }));
-  }
-};
-
+// Room's plugins import `createPlugin` from `@moku-labs/web/browser` (the DOM-safe entry), so a plain
+// browser-targeted Bun.build resolves cleanly — NO bundler alias and NO `external` are needed. This is the
+// whole point of the fix that made Room browser-turnkey: a real consumer bundles it the same way, with no
+// special config. (Previously the plugins imported the MAIN entry, which dragged the native
+// `@resvg/resvg-js` + lazy `mermaid-isomorphic` and required an alias here — see findings.md §5.9.x.)
 const result = await Bun.build({
   entrypoints: [`${ROOT}/stage.ts`, `${ROOT}/controller.ts`],
   outdir: `${ROOT}/dist`,
   target: "browser",
   splitting: true,
   sourcemap: "linked",
-  plugins: [aliasWebToBrowser],
-  // Belt-and-suspenders: the markdown renderer LAZY-loads the OPTIONAL, uninstalled `mermaid-isomorphic`
-  // peer dep. The demo never renders mermaid, so externalize it — the dynamic `import()` is never evaluated.
-  external: ["mermaid-isomorphic"],
   naming: { entry: "[name].js", chunk: "[name]-[hash].js", asset: "[name]-[hash][ext]" }
 });
 

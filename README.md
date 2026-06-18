@@ -71,7 +71,7 @@ from `@moku-labs/web`.
 ### Stage (the shared screen / host)
 
 ```typescript
-import { createApp, createPlugin } from "@moku-labs/web";
+import { createApp, createPlugin } from "@moku-labs/web/browser";
 import { roomPlugins, stagePlugin } from "@moku-labs/room/browser";
 
 // Your game logic — depends on the facade so the five room:* events are visible (WARN-2).
@@ -109,7 +109,7 @@ app.stage.onIntent("score", (payload, peerId) => {
 ### Controller (the phone)
 
 ```typescript
-import { createApp, createPlugin } from "@moku-labs/web";
+import { createApp, createPlugin } from "@moku-labs/web/browser";
 import { roomPlugins, controllerPlugin } from "@moku-labs/room/browser";
 
 const pad = createPlugin("pad", {
@@ -198,7 +198,7 @@ The transport plugin's `signaling` config selects the rendezvous backbone (the `
 - **`inMemory()`** — in-process, no `RTCPeerConnection`. Use for tests / simulation (deterministic, no relays).
 
 ```typescript
-import { createApp } from "@moku-labs/web";
+import { createApp } from "@moku-labs/web/browser";
 import { roomPlugins, inMemory } from "@moku-labs/room";
 
 const app = createApp({

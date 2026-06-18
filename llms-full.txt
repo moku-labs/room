@@ -708,7 +708,7 @@ A two-player scoreboard game. Stage app (the TV) and controller app (each phone)
 ### Stage app
 
 ```typescript
-import { createApp, createPlugin } from "@moku-labs/web";
+import { createApp, createPlugin } from "@moku-labs/web/browser";
 import { roomPlugins, stagePlugin } from "@moku-labs/room/browser";
 
 const scoreboard = createPlugin("scoreboard", {
@@ -743,7 +743,7 @@ await app.start();
 ### Controller app
 
 ```typescript
-import { createApp, createPlugin } from "@moku-labs/web";
+import { createApp, createPlugin } from "@moku-labs/web/browser";
 import { roomPlugins, controllerPlugin } from "@moku-labs/room/browser";
 
 const pad = createPlugin("pad", {
@@ -849,7 +849,7 @@ reach the facade API. Read game state from the synced replica (controller: `read
 and hook the lifecycle events:
 
 ```typescript
-import { createPlugin } from "@moku-labs/web";
+import { createPlugin } from "@moku-labs/web/browser";
 import { stagePlugin } from "@moku-labs/room";
 
 const myGame = createPlugin("myGame", {

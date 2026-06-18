@@ -102,8 +102,8 @@ hooks the `room:*` lifecycle by declaring `depends: [stagePlugin]` (which is how
 visible — WARN-2):
 
 ```typescript
-import { createApp } from "@moku-labs/web";
-import { createPlugin } from "@moku-labs/web";
+import { createApp } from "@moku-labs/web/browser";
+import { createPlugin } from "@moku-labs/web/browser";
 import { roomPlugins, stagePlugin } from "@moku-labs/room";
 
 // A couch-multiplayer game plugin that drives the host stage.
