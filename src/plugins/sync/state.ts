@@ -16,7 +16,7 @@ import type { State } from "./types";
  * `startBroadcast`; both stay `null` here so the at-rest state is plain-JSON-serializable. Per-`createApp`
  * via `ctx.state` (D14) — never a module-level singleton.
  *
- * @throws {Error} Always — skeleton stub.
+ * @returns The initial `syncPlugin` state with all fields at their documented defaults.
  * @example
  * ```ts
  * const state = createSyncState();
@@ -25,5 +25,14 @@ import type { State } from "./types";
  * ```
  */
 export function createSyncState(): State {
-  throw new Error("not implemented");
+  return {
+    snapshot: {},
+    dirty: {},
+    sSeq: 0,
+    ready: false,
+    stale: false,
+    broadcasting: false,
+    throttleHandle: null,
+    engine: null
+  };
 }

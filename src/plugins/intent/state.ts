@@ -17,7 +17,7 @@ import type { IntentState } from "./types";
  * construction). Typed return (no inline `as`) so `createIntentState` carries no type assertion (R6).
  * Per-`createApp` via `ctx.state` (D14) — never a module-level singleton.
  *
- * @throws {Error} Always, until implemented (skeleton stub).
+ * @returns A fresh, empty {@link IntentState} with all counters/maps at their zero values.
  * @example
  * ```ts
  * const state = createIntentState();
@@ -25,5 +25,11 @@ import type { IntentState } from "./types";
  * ```
  */
 export function createIntentState(): IntentState {
-  throw new Error("not implemented");
+  return {
+    registry: new Map(),
+    lastApplied: new Map(),
+    nextCSeq: 0,
+    buffering: false,
+    buffer: []
+  };
 }

@@ -14,6 +14,7 @@
  */
 import type { Wire } from "../../contracts";
 import type { SessionApi } from "../session/types";
+import { createSyncEngine } from "./engine";
 import type { Api, Config, State } from "./types";
 
 /**
@@ -35,7 +36,7 @@ type SyncReadyEmit = () => void;
  * @param wire - The transport `Wire` from `ctx.require(transportPlugin).wire()` (contracts section 2).
  * @param session - The `SessionApi` from `ctx.require(sessionPlugin)` (roster/`PeerId` access).
  * @param emit - The narrowed zero-arg `emit` closure that signals `room:sync-ready` (bound in `index.ts`).
- * @throws {Error} Always — skeleton stub.
+ * @returns The public role-agnostic `Api` surface backed by the one per-app engine.
  * @example
  * ```ts
  * const api = createSyncApi(
@@ -54,5 +55,27 @@ export function createSyncApi(
   session: SessionApi,
   emit: SyncReadyEmit
 ): Api {
-  throw new Error("not implemented");
+  // Build the ONE per-app engine and stash it on state.engine so onInit/hooks/onStart/onStop
+  // can reach the SAME instance (mandatory for subscribe Map correctness — D14).
+  const engine = createSyncEngine(state, config, wire, session, emit);
+  state.engine = engine;
+
+  // Return the public Api as a thin delegation over the engine. No logic here — the engine owns the
+  // state, subscription Map, and codec calls. Each method's contract is documented on the `Api` type.
+  /* eslint-disable jsdoc/require-jsdoc -- thin delegation; each method's contract is documented on the Api type in types.ts */
+  return {
+    registerSlice: (ns, initial) => engine.registerSlice(ns, initial),
+    mutate: (ns, recipe) => engine.mutate(ns, recipe),
+    broadcast: peerId => engine.broadcast(peerId),
+    onResyncRequest: handler => engine.onResyncRequest(handler),
+    read: ns => engine.read(ns),
+    subscribe: (ns, cb) => engine.subscribe(ns, cb),
+    applyFrame: frame => engine.applyFrame(frame),
+    isReady: () => engine.isReady(),
+    exportSnapshot: () => engine.exportSnapshot(),
+    importSnapshot: (snapshot, sSeq) => engine.importSnapshot(snapshot, sSeq),
+    startBroadcast: () => engine.startBroadcast(),
+    stopBroadcast: () => engine.stopBroadcast()
+  };
+  /* eslint-enable jsdoc/require-jsdoc */
 }

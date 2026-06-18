@@ -12,8 +12,9 @@
  * @file
  * @see README.md
  */
-import type { Wire } from "../../contracts";
+import type { JsonValue, Wire } from "../../contracts";
 import type { IntentState } from "./types";
+import { validateIntent } from "./validate";
 
 /**
  * Attaches the one-time host receive handler for inbound `IntentFrame`s. Reads/writes the same per-app
@@ -24,7 +25,6 @@ import type { IntentState } from "./types";
  *
  * @param state - The per-app intent state (validates against `registry`, de-dups against `lastApplied`).
  * @param wire - The resolved transport `Wire` whose `on` registers the single inbound-frame handler.
- * @throws {Error} Always, until implemented (skeleton stub).
  * @example
  * ```ts
  * // Inside the plugin's onInit:
@@ -32,5 +32,35 @@ import type { IntentState } from "./types";
  * ```
  */
 export function attachIntentReceive(state: IntentState, wire: Wire): void {
-  throw new Error("not implemented");
+  wire.on((peerId, frame) => {
+    if (frame.t !== "intent") {
+      return;
+    }
+
+    const { name, payload, cSeq } = frame;
+
+    // 1. Must be a registered intent kind
+    const registration = state.registry.get(name);
+    if (!registration) {
+      return;
+    }
+
+    // 2. Payload must pass the correctness-only shape-check (D6)
+    if (!validateIntent(registration.schema, payload)) {
+      return;
+    }
+
+    // 3. Idempotent de-dup: drop if cSeq <= lastApplied[peerId] (D4, contracts §4.3)
+    const lastSeen = state.lastApplied.get(peerId) ?? -1;
+    if (cSeq <= lastSeen) {
+      return;
+    }
+
+    // Advance the high-water mark
+    state.lastApplied.set(peerId, cSeq);
+
+    // 4. Dispatch to the registered handler. `payload` is `unknown` on the wire (contracts §2) but has
+    //    passed the correctness-only shape-check above, so it is a valid JsonValue for the handler (D6).
+    registration.handler(payload as JsonValue, { peerId, cSeq });
+  });
 }
