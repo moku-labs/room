@@ -137,6 +137,144 @@ describe("inMemory adapter", () => {
     await c2.leave();
   });
 
+  it("a peer queued before onPeer is registered is drained when onPeer arrives late", async () => {
+    // notifyPeer queues onto pendingPeers when the member has no onPeer yet; a later onPeer drains it.
+    const sig = inMemory();
+
+    // Host joins first WITHOUT registering onPeer — incoming peers must queue on its pendingPeers.
+    const host = await sig.join("K7M2QX", { selfId: "host_root" });
+
+    const ctrl = await sig.join("K7M2QX", { selfId: "p_ab12", passive: true });
+
+    // Register onPeer AFTER the controller already joined — the queued peer drains immediately.
+    const hostSaw = vi.fn<(peerId: string) => void>();
+    host.onPeer(hostSaw);
+    expect(hostSaw).toHaveBeenCalledWith("p_ab12");
+
+    await host.leave();
+    await ctrl.leave();
+  });
+
+  it("openWireChannel returns an open loopback channel between host and controller", async () => {
+    const sig = inMemory();
+    const host = await sig.join("K7M2QX", { selfId: "host_root" });
+    await sig.join("K7M2QX", { selfId: "p_ab12", passive: true });
+
+    const ch = (host as unknown as LoopbackSignaling).openWireChannel("p_ab12");
+    expect(ch).not.toBeNull();
+    expect(ch?.readyState).toBe("open");
+
+    await host.leave();
+  });
+
+  it("openWireChannel returns null for a peer that cannot be piped (absent member)", async () => {
+    // No member with this id exists on the bus → ensurePipe is a no-op and the lookup yields null.
+    const sig = inMemory();
+    const host = await sig.join("K7M2QX", { selfId: "host_root" });
+
+    const ch = (host as unknown as LoopbackSignaling).openWireChannel("nobody");
+    expect(ch).toBeNull();
+
+    await host.leave();
+  });
+
+  it("the loopback pipe delivers a frame sent AFTER onmessage is already bound (immediate path)", async () => {
+    const sig = inMemory();
+    const hostSession = await sig.join("K7M2QX", { selfId: "host_root" });
+    const ctrlSession = await sig.join("K7M2QX", { selfId: "p_ab12", passive: true });
+
+    const hostCh = (hostSession as unknown as LoopbackSignaling).openWireChannel("p_ab12");
+    const ctrlCh = (ctrlSession as unknown as LoopbackSignaling).openWireChannel("host_root");
+
+    const received: string[] = [];
+    if (ctrlCh) {
+      // Bind the sink BEFORE the send — `receive` takes the bound queueMicrotask path, not the buffer.
+      // eslint-disable-next-line unicorn/prefer-add-event-listener -- the loopback WireChannel exposes only `onmessage` (the unified inbound sink, as in channel.ts).
+      ctrlCh.onmessage = (event: { data: string }): void => {
+        received.push(event.data);
+      };
+      // Reading the getter back must return the bound handler (exercises `get onmessage`).
+      expect(typeof ctrlCh.onmessage).toBe("function");
+    }
+
+    hostCh?.send("live-frame");
+    await vi.waitFor(() => expect(received).toEqual(["live-frame"]));
+
+    await hostSession.leave();
+    await ctrlSession.leave();
+  });
+
+  it("the loopback pipe drops a send once its endpoint is closed (readyState !== open)", async () => {
+    const sig = inMemory();
+    const hostSession = await sig.join("K7M2QX", { selfId: "host_root" });
+    const ctrlSession = await sig.join("K7M2QX", { selfId: "p_ab12", passive: true });
+
+    const hostCh = (hostSession as unknown as LoopbackSignaling).openWireChannel("p_ab12");
+    const ctrlCh = (ctrlSession as unknown as LoopbackSignaling).openWireChannel("host_root");
+
+    const received: string[] = [];
+    if (ctrlCh) {
+      // eslint-disable-next-line unicorn/prefer-add-event-listener -- loopback exposes only `onmessage`.
+      ctrlCh.onmessage = (event: { data: string }): void => {
+        received.push(event.data);
+      };
+    }
+
+    // Close the sender and attempt a send — the guard short-circuits and nothing is delivered.
+    hostCh?.close();
+    hostCh?.send("after-close");
+
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(received).toEqual([]);
+
+    await hostSession.leave();
+    await ctrlSession.leave();
+  });
+
+  it("the loopback pipe close() is idempotent and a registered close listener fires once", async () => {
+    const sig = inMemory();
+    const hostSession = await sig.join("K7M2QX", { selfId: "host_root" });
+    await sig.join("K7M2QX", { selfId: "p_ab12", passive: true });
+
+    const hostCh = (hostSession as unknown as LoopbackSignaling).openWireChannel("p_ab12");
+    if (!hostCh) throw new Error("expected an open loopback channel");
+
+    // Register then immediately remove an unrelated-type listener (exercises the non-"close" branch).
+    const noop = vi.fn();
+    hostCh.addEventListener("bufferedamountlow", noop);
+    hostCh.removeEventListener("bufferedamountlow", noop);
+
+    // Register a real close listener; first close fires it, second close is a no-op.
+    const onClose = vi.fn();
+    hostCh.addEventListener("close", onClose);
+    hostCh.close();
+    hostCh.close();
+
+    expect(onClose).toHaveBeenCalledTimes(1);
+    expect(noop).not.toHaveBeenCalled();
+
+    await hostSession.leave();
+  });
+
+  it("clearing onmessage to null on the loopback pipe is a safe no-op", async () => {
+    const sig = inMemory();
+    const hostSession = await sig.join("K7M2QX", { selfId: "host_root" });
+    await sig.join("K7M2QX", { selfId: "p_ab12", passive: true });
+
+    const hostCh = (hostSession as unknown as LoopbackSignaling).openWireChannel("p_ab12");
+    if (!hostCh) throw new Error("expected an open loopback channel");
+
+    // Setting onmessage to null with no buffered frames takes the early-return in the setter.
+    expect(() => {
+      // eslint-disable-next-line unicorn/prefer-add-event-listener -- loopback exposes only `onmessage`.
+      hostCh.onmessage = null;
+    }).not.toThrow();
+    expect(hostCh.onmessage).toBeNull();
+
+    await hostSession.leave();
+  });
+
   it("a wire frame sent before the receiver binds onmessage is buffered, then delivered on bind", async () => {
     // The host pushes its join-baseline snapshot the instant a peer connects — one microtask BEFORE the
     // joiner wires its receive pump (handlePeerArrival → bindChannel). The loopback pipe must buffer that

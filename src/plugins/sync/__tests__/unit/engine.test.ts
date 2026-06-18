@@ -7,7 +7,7 @@
  * @see ../../README.md
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { Frame, PeerId } from "../../../../contracts";
+import type { Frame, PeerId, Snapshot } from "../../../../contracts";
 import type { SessionApi } from "../../../session/types";
 import { createSyncEngine } from "../../engine";
 import { createSyncState } from "../../state";
@@ -478,5 +478,351 @@ describe("engine", () => {
     expect(session.persistSnapshot).toHaveBeenCalledTimes(1);
 
     engine.stopBroadcast();
+  });
+
+  // ─────────────────────────────────────────────────────────────────────────────
+  // broadcastDirty edge branches: empty heartbeat delta, maxOpsPerDelta batching
+  // ─────────────────────────────────────────────────────────────────────────────
+
+  it("skipEmptyDeltas:false sends an empty heartbeat delta, bumps sSeq, and persists", () => {
+    const { engine, state, wire, session } = makeEngine({ skipEmptyDeltas: false });
+
+    engine.registerSlice("scores", { p1: 0 });
+    engine.startBroadcast();
+
+    expect(state.sSeq).toBe(0);
+
+    // No mutates this tick — with skipEmptyDeltas off, an empty delta is still emitted.
+    vi.advanceTimersByTime(34);
+
+    expect(state.sSeq).toBe(1);
+    expect(wire.broadcast).toHaveBeenCalledTimes(1);
+    expect(wire.broadcast.mock.calls[0]?.[0]).toEqual({ t: "sync-delta", ops: [], sSeq: 1 });
+    expect(session.persistSnapshot).toHaveBeenCalledTimes(1);
+
+    engine.stopBroadcast();
+  });
+
+  it("maxOpsPerDelta>0 splits a large dirty set into multiple delta frames", () => {
+    // maxOpsPerDelta=2 with 5 changed cells → ceil(5/2) = 3 delta frames, sSeq bumped once per frame.
+    const { engine, state, wire } = makeEngine({ maxOpsPerDelta: 2 });
+
+    engine.registerSlice("scores", { a: 0, b: 0, c: 0, d: 0, e: 0 });
+    engine.mutate("scores", () => ({ a: 1, b: 1, c: 1, d: 1, e: 1 }));
+
+    engine.broadcast(); // delta to everyone
+
+    expect(wire.broadcast).toHaveBeenCalledTimes(3);
+    // Each frame carries at most maxOpsPerDelta ops.
+    for (const call of wire.broadcast.mock.calls) {
+      const frame = call[0];
+      expect(frame.t).toBe("sync-delta");
+      if (frame.t !== "sync-delta") throw new Error("expected a sync-delta frame");
+      expect(frame.ops.length).toBeLessThanOrEqual(2);
+    }
+    // sSeq advanced once per emitted frame.
+    expect(state.sSeq).toBe(3);
+  });
+
+  it("maxOpsPerDelta:0 falls back to a single delta carrying all ops", () => {
+    // The `maxOpsPerDelta > 0 ? ... : allOps.length` ternary takes the else branch when the cap is 0.
+    const { engine, state, wire } = makeEngine({ maxOpsPerDelta: 0 });
+
+    engine.registerSlice("scores", { a: 0, b: 0, c: 0 });
+    engine.mutate("scores", () => ({ a: 1, b: 1, c: 1 }));
+
+    engine.broadcast();
+
+    expect(wire.broadcast).toHaveBeenCalledTimes(1);
+    const frame = wire.broadcast.mock.calls[0]?.[0];
+    if (frame?.t !== "sync-delta") throw new Error("expected a sync-delta frame");
+    expect(frame.ops).toHaveLength(3);
+    expect(state.sSeq).toBe(1);
+  });
+
+  it("broadcast() with nothing dirty and skipEmptyDeltas on is a no-op", () => {
+    const { engine, wire, state } = makeEngine({ skipEmptyDeltas: true });
+
+    engine.registerSlice("scores", { p1: 0 });
+    // No mutate → dirty set empty.
+    engine.broadcast();
+
+    expect(wire.broadcast).not.toHaveBeenCalled();
+    expect(state.sSeq).toBe(0);
+  });
+
+  // ─────────────────────────────────────────────────────────────────────────────
+  // applyDeltaFrame: stale short-circuit, duplicate/idempotent sSeq
+  // ─────────────────────────────────────────────────────────────────────────────
+
+  it("a delta arriving while stale is dropped (awaiting a fresh snapshot)", () => {
+    const { engine, state } = makeEngine();
+
+    // Force a gap so the replica is stale.
+    engine.applyFrame({ t: "sync-delta", ops: [{ ns: "scores", key: "p1", val: 1 }], sSeq: 5 });
+    expect(state.stale).toBe(true);
+    expect(state.sSeq).toBe(0);
+
+    // A subsequent (even contiguous-looking) delta is ignored entirely while stale.
+    engine.applyFrame({ t: "sync-delta", ops: [{ ns: "scores", key: "p1", val: 2 }], sSeq: 1 });
+    expect(state.sSeq).toBe(0);
+    expect(engine.read("scores")).toBeUndefined();
+  });
+
+  it("a duplicate/already-applied delta (sSeq <= local sSeq) is an idempotent no-op", () => {
+    const { engine, state } = makeEngine();
+
+    engine.applyFrame({ t: "sync-delta", ops: [{ ns: "scores", key: "p1", val: 10 }], sSeq: 1 });
+    expect(state.sSeq).toBe(1);
+    expect(engine.read("scores")).toEqual({ p1: 10 });
+
+    // Re-deliver the SAME sSeq — must not re-apply (idempotent).
+    engine.applyFrame({ t: "sync-delta", ops: [{ ns: "scores", key: "p1", val: 999 }], sSeq: 1 });
+    expect(state.sSeq).toBe(1);
+    expect(engine.read("scores")).toEqual({ p1: 10 });
+
+    // An older sSeq is likewise ignored.
+    engine.applyFrame({ t: "sync-delta", ops: [{ ns: "scores", key: "p1", val: 7 }], sSeq: 0 });
+    expect(engine.read("scores")).toEqual({ p1: 10 });
+  });
+
+  // ─────────────────────────────────────────────────────────────────────────────
+  // Inbound wire route (init): only sync-snap/sync-delta reach applyFrame
+  // ─────────────────────────────────────────────────────────────────────────────
+
+  it("the inbound wire handler routes sync-snap and sync-delta into the engine", () => {
+    const { engine, wire, state } = makeEngine();
+
+    // A sync-snap delivered through the wire (init wired the handler) re-baselines the replica.
+    wire._deliver("host_root", { t: "sync-snap", snapshot: { scores: { p1: 3 } }, sSeq: 4 });
+    expect(state.sSeq).toBe(4);
+    expect(engine.read("scores")).toEqual({ p1: 3 });
+
+    // A sync-delta through the wire applies contiguously.
+    wire._deliver("host_root", {
+      t: "sync-delta",
+      ops: [{ ns: "scores", key: "p1", val: 9 }],
+      sSeq: 5
+    });
+    expect(state.sSeq).toBe(5);
+    expect(engine.read("scores")).toEqual({ p1: 9 });
+  });
+
+  it("the inbound wire handler ignores non-sync frames (e.g. ping)", () => {
+    const { wire, state } = makeEngine();
+
+    // A non-sync frame must not touch engine state (the handler's `t` guard is false).
+    wire._deliver("host_root", { t: "ping", ts: 123 });
+    expect(state.sSeq).toBe(0);
+    expect(state.ready).toBe(false);
+  });
+
+  // ─────────────────────────────────────────────────────────────────────────────
+  // mutate no-op, unsubscribe of resync handler, stopBroadcast idempotence
+  // ─────────────────────────────────────────────────────────────────────────────
+
+  it("mutate that produces a deep-equal value does NOT mark the namespace dirty", () => {
+    const { engine, state } = makeEngine();
+
+    engine.registerSlice("scores", { p1: 0 });
+
+    // Recipe returns an equal-but-new object — JSON-equal, so no dirty flag and no snapshot swap.
+    const before = state.snapshot;
+    engine.mutate("scores", () => ({ p1: 0 }));
+
+    expect(state.dirty).not.toHaveProperty("scores");
+    expect(state.snapshot).toBe(before); // snapshot reference unchanged
+  });
+
+  it("onResyncRequest unsubscribe removes the handler so a later gap no longer fires it", () => {
+    const { engine } = makeEngine({ resyncOnGap: true });
+
+    const handler = vi.fn();
+    const off = engine.onResyncRequest(handler);
+
+    // First gap fires the handler.
+    engine.applyFrame({ t: "sync-delta", ops: [], sSeq: 5 });
+    expect(handler).toHaveBeenCalledTimes(1);
+
+    // Unsubscribe, then a fresh snapshot clears stale so a new gap can be detected again.
+    off();
+    engine.applyFrame({ t: "sync-snap", snapshot: { scores: { p1: 0 } }, sSeq: 6 });
+    engine.applyFrame({ t: "sync-delta", ops: [], sSeq: 20 });
+
+    // The handler was removed — still only the single original call.
+    expect(handler).toHaveBeenCalledTimes(1);
+  });
+
+  it("a gap with resyncOnGap:false sets stale WITHOUT firing resync handlers", () => {
+    const { engine, state } = makeEngine({ resyncOnGap: false });
+
+    const handler = vi.fn();
+    engine.onResyncRequest(handler);
+
+    engine.applyFrame({ t: "sync-delta", ops: [], sSeq: 5 });
+
+    expect(state.stale).toBe(true);
+    expect(handler).not.toHaveBeenCalled();
+  });
+
+  it("stopBroadcast is an idempotent no-op when broadcasting was never started", () => {
+    const { engine, state } = makeEngine();
+
+    expect(state.broadcasting).toBe(false);
+    expect(state.throttleHandle).toBeNull();
+
+    // Must hit the early-return guard and not throw.
+    expect(() => engine.stopBroadcast()).not.toThrow();
+    expect(state.broadcasting).toBe(false);
+    expect(state.throttleHandle).toBeNull();
+  });
+
+  it("importSnapshot skips namespaces that are already registered", () => {
+    const { engine } = makeEngine();
+
+    // Pre-register `scores` so importSnapshot must NOT re-register it (the `!registered.has` branch).
+    engine.registerSlice("scores", { p1: 0 });
+
+    // Import a snapshot covering the already-registered `scores` plus a new `round`.
+    engine.importSnapshot({ scores: { p1: 50 }, round: { n: 2 } }, 9);
+
+    // Both namespaces are now readable; the import overwrote the snapshot and adopted sSeq.
+    expect(engine.read("scores")).toEqual({ p1: 50 });
+    expect(engine.read("round")).toEqual({ n: 2 });
+
+    // `scores` was already registered, so a conflicting re-register still throws (it was not clobbered).
+    expect(() => engine.registerSlice("round", { n: 0 })).toThrow(/already registered/);
+  });
+
+  // ─────────────────────────────────────────────────────────────────────────────
+  // Remaining defensive / edge branches
+  // ─────────────────────────────────────────────────────────────────────────────
+
+  it("broadcastDirty contributes no ops (and no frame) for a dirty namespace absent from the snapshot", () => {
+    const { engine, state, wire, session } = makeEngine({ skipEmptyDeltas: false });
+
+    engine.registerSlice("scores", { p1: 1 });
+    // Mark a namespace dirty that has NO snapshot entry — the flatMap `!cells` guard returns [].
+    state.dirty = { ghost: true };
+
+    engine.broadcast();
+
+    // dirtyNs is non-empty (skips the heartbeat path) but allOps is empty, so the batching loop never
+    // runs: no delta frame is broadcast and sSeq is not bumped. persistSnapshot still runs once.
+    expect(wire.broadcast).not.toHaveBeenCalled();
+    expect(state.sSeq).toBe(0);
+    expect(session.persistSnapshot).toHaveBeenCalledTimes(1);
+    // The dirty flag is cleared regardless.
+    expect(state.dirty).not.toHaveProperty("ghost");
+  });
+
+  it("mutate on a registered namespace whose snapshot cells are absent uses the {} fallback", () => {
+    const { engine, state } = makeEngine();
+
+    engine.registerSlice("scores", { p1: 0 });
+    // Drop the snapshot entry while keeping the ns registered — mutate must fall back to `{}`.
+    state.snapshot = {};
+
+    engine.mutate("scores", draft => ({ ...draft, fresh: 1 }));
+
+    expect(engine.read("scores")).toEqual({ fresh: 1 });
+    expect(state.dirty).toHaveProperty("scores");
+  });
+
+  it("applyDeltaFrame skips notifying a namespace that a delete removed from the snapshot", () => {
+    const { engine, state } = makeEngine();
+
+    // Seed a single cell at sSeq 1.
+    engine.applyFrame({ t: "sync-delta", ops: [{ ns: "scores", key: "p1", val: 1 }], sSeq: 1 });
+
+    const cb = vi.fn();
+    engine.subscribe("scores", cb);
+    cb.mockClear();
+
+    // Delete the only cell — `scores` becomes empty and is dropped from the snapshot, so the affected-ns
+    // loop hits `if (cells)` false and skips notification for that (now-absent) namespace.
+    engine.applyFrame({ t: "sync-delta", ops: [{ ns: "scores", key: "p1", val: null }], sSeq: 2 });
+
+    expect(state.sSeq).toBe(2);
+    expect(engine.read("scores")).toBeUndefined();
+    expect(cb).not.toHaveBeenCalled();
+  });
+
+  it("applySnapshotFrame skips a namespace whose cells are absent in the decoded snapshot", () => {
+    const { engine, state } = makeEngine();
+
+    const cb = vi.fn();
+    engine.subscribe("ghost", cb);
+
+    // A snapshot key mapping to `undefined` decodes to an absent-cells entry → `if (cells)` false.
+    const snapshot = { scores: { p1: 1 }, ghost: undefined } as unknown as Snapshot;
+    engine.applyFrame({ t: "sync-snap", snapshot, sSeq: 3 });
+
+    expect(state.sSeq).toBe(3);
+    expect(engine.read("scores")).toEqual({ p1: 1 });
+    expect(cb).not.toHaveBeenCalled(); // ghost had no cells, so its subscriber never fired
+  });
+
+  it("applyFrame ignores a frame that is neither sync-snap nor sync-delta", () => {
+    const { engine, state } = makeEngine();
+
+    // Directly hand applyFrame a non-sync frame — both `t` guards are false, nothing happens.
+    engine.applyFrame({ t: "ping", ts: 1 });
+
+    expect(state.sSeq).toBe(0);
+    expect(state.ready).toBe(false);
+  });
+
+  it("a second subscribe to the same namespace reuses the existing subscriber list", () => {
+    const { engine } = makeEngine();
+
+    engine.registerSlice("scores", { p1: 0 });
+
+    const a = vi.fn();
+    const b = vi.fn();
+    engine.subscribe("scores", a); // creates the list
+    engine.subscribe("scores", b); // reuses it — the `!subscribers.has(ns)` guard is false
+
+    a.mockClear();
+    b.mockClear();
+
+    engine.applyFrame({ t: "sync-delta", ops: [{ ns: "scores", key: "p1", val: 5 }], sSeq: 1 });
+
+    expect(a).toHaveBeenCalledWith({ p1: 5 });
+    expect(b).toHaveBeenCalledWith({ p1: 5 });
+  });
+
+  it("calling a subscribe unsubscribe twice is a safe no-op the second time", () => {
+    const { engine } = makeEngine();
+
+    engine.registerSlice("scores", { p1: 0 });
+    const off = engine.subscribe("scores", vi.fn());
+
+    off();
+    // Second call — the handler is already gone, so `index !== -1` is false. Must not throw.
+    expect(() => off()).not.toThrow();
+  });
+
+  it("calling an onResyncRequest unsubscribe twice is a safe no-op the second time", () => {
+    const { engine } = makeEngine();
+
+    const off = engine.onResyncRequest(vi.fn());
+
+    off();
+    // Second call hits the `index !== -1` false branch — idempotent, no throw.
+    expect(() => off()).not.toThrow();
+  });
+
+  it("stopBroadcast clears the broadcasting flag even if the throttle handle is already null", () => {
+    const { engine, state } = makeEngine();
+
+    // Inconsistent state: marked broadcasting but with no live timer handle.
+    state.broadcasting = true;
+    state.throttleHandle = null;
+
+    engine.stopBroadcast();
+
+    expect(state.broadcasting).toBe(false);
+    expect(state.throttleHandle).toBeNull();
   });
 });

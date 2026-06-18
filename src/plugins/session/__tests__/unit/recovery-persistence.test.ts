@@ -13,8 +13,16 @@ import {
   recordSnapshot,
   teardownSession
 } from "../../recovery/persistence";
+import type { SessionStateWithRuntime } from "../../recovery/reentry";
 import { createSessionState } from "../../state";
-import type { SessionConfig, SessionDeps } from "../../types";
+import type { HostReentryRecord, JoinResult, SessionConfig, SessionDeps } from "../../types";
+
+/** Structural view of the internal `_update` member that `recordSnapshot` drives (not on the public surface). */
+type PersistHandleWithUpdate = {
+  flushNow(): void;
+  dispose(): void;
+  _update(record: HostReentryRecord, scheduleIdb: boolean): void;
+};
 
 /** Minimal config for persistence tests. */
 const testConfig: Readonly<SessionConfig> = {
@@ -55,6 +63,101 @@ class MockLocalStorage {
 
   clear(): void {
     this.store.clear();
+  }
+}
+
+/** A minimal in-memory IndexedDB object store mirroring the subset persistence.ts uses. */
+class MockObjectStore {
+  constructor(private readonly records: Map<string, unknown>) {}
+  put(value: unknown, key: string): void {
+    this.records.set(key, value);
+  }
+}
+
+/** A minimal in-memory IndexedDB transaction (only `complete`/`error` events + `objectStore`). */
+class MockTransaction {
+  readonly error: DOMException | null = null;
+  private readonly listeners = new Map<string, Array<() => void>>();
+  constructor(
+    private readonly records: Map<string, unknown>,
+    private readonly failTx: boolean
+  ) {}
+
+  objectStore(_name: string): MockObjectStore {
+    return new MockObjectStore(this.records);
+  }
+
+  addEventListener(type: string, cb: () => void): void {
+    const list = this.listeners.get(type) ?? [];
+    list.push(cb);
+    this.listeners.set(type, list);
+    // Fire "error" when the tx is configured to fail, otherwise "complete" (the put is synchronous).
+    if (this.failTx && type === "error") queueMicrotask(() => cb());
+    if (!this.failTx && type === "complete") queueMicrotask(() => cb());
+  }
+}
+
+/** A minimal in-memory IndexedDB database (only `transaction` + objectStore bookkeeping). */
+class MockIdbDatabase {
+  readonly objectStoreNames = {
+    contains: (name: string): boolean => this.stores.has(name)
+  };
+  private readonly stores: Set<string>;
+  constructor(
+    private readonly records: Map<string, unknown>,
+    private readonly failTx: boolean,
+    preSeededStores: readonly string[] = []
+  ) {
+    // Pre-seed stores so a later `upgradeneeded` sees `contains() === true` (the create-skip branch).
+    this.stores = new Set(preSeededStores);
+  }
+
+  createObjectStore(name: string): void {
+    this.stores.add(name);
+  }
+
+  transaction(_storeName: string, _mode: string): MockTransaction {
+    return new MockTransaction(this.records, this.failTx);
+  }
+}
+
+/**
+ * A minimal in-memory IndexedDB factory matching the `indexedDB.open` event flow persistence.ts drives.
+ * `failOpen` fires the open request's `error` event (openIdb rejects); `failTx` fires the write
+ * transaction's `error` event (writeToIdb rejects) — both exercise the best-effort `.catch()` paths.
+ */
+class MockIndexedDB {
+  readonly records = new Map<string, unknown>();
+  constructor(
+    private readonly failOpen = false,
+    private readonly failTx = false,
+    private readonly preSeededStores: readonly string[] = []
+  ) {}
+
+  open(_name: string, _version: number): IDBOpenDBRequest {
+    const db = new MockIdbDatabase(this.records, this.failTx, this.preSeededStores);
+    const listeners = new Map<string, Array<() => void>>();
+    const request = {
+      result: db,
+      error: null as DOMException | null,
+      addEventListener(type: string, cb: () => void): void {
+        const list = listeners.get(type) ?? [];
+        list.push(cb);
+        listeners.set(type, list);
+      }
+    } as unknown as IDBOpenDBRequest;
+
+    queueMicrotask(() => {
+      if (this.failOpen) {
+        // Open failed → openIdb rejects.
+        for (const cb of listeners.get("error") ?? []) cb();
+        return;
+      }
+      // Drive upgradeneeded (to create the store) then success on the next microtasks.
+      for (const cb of listeners.get("upgradeneeded") ?? []) cb();
+      for (const cb of listeners.get("success") ?? []) cb();
+    });
+    return request;
   }
 }
 
@@ -305,5 +408,367 @@ describe("recovery/persistence", () => {
     const deps = makeDeps();
     const result = readReentryRecord(deps);
     expect(result).toBeNull();
+  });
+
+  it("readReentryRecord skips localStorage keys that do not match the reentry prefix", () => {
+    const deps = makeDeps();
+    // An unrelated key must be skipped (the `continue` branch), then the real record is found.
+    mockStorage.setItem("some.other.key", "irrelevant");
+    const record = {
+      roomCode: "TEST01",
+      hostToken: "token-abc",
+      snapshot: emptySnapshot,
+      sSeq: 8,
+      savedAt: Date.now()
+    };
+    mockStorage.setItem("test.room.reentry.TEST01", JSON.stringify(record));
+
+    const result = readReentryRecord(deps);
+    expect(result?.roomCode).toBe("TEST01");
+    expect(result?.sSeq).toBe(8);
+  });
+
+  it("readReentryRecord returns null when localStorage is undefined (headless path)", () => {
+    const deps = makeDeps();
+    // Remove localStorage entirely to hit the DOM-guard early-return.
+    Object.defineProperty(globalThis, "localStorage", {
+      value: undefined,
+      writable: true,
+      configurable: true
+    });
+    const result = readReentryRecord(deps);
+    expect(result).toBeNull();
+  });
+
+  it("flushNow() is a no-op when no record has been recorded yet", () => {
+    const deps = makeDeps();
+    const handle = armPersistence(deps);
+    deps.state.recovery.persistHandle = handle;
+
+    // No recordSnapshot call → latestRecord is null → syncFlush early-returns, nothing written.
+    handle.flushNow();
+    expect(mockStorage.getItem("test.room.reentry.TEST01")).toBeNull();
+    handle.dispose();
+  });
+
+  it("persistence degrades to a no-op when localStorage is undefined", () => {
+    const deps = makeDeps();
+    const handle = armPersistence(deps);
+    deps.state.recovery.persistHandle = handle;
+
+    recordSnapshot(deps, {
+      roomCode: "TEST01",
+      hostToken: "token-abc",
+      snapshot: emptySnapshot,
+      sSeq: 11,
+      savedAt: Date.now()
+    });
+
+    // Remove localStorage → tryLocalStorageSet early-returns (no throw).
+    Object.defineProperty(globalThis, "localStorage", {
+      value: undefined,
+      writable: true,
+      configurable: true
+    });
+    expect(() => handle.flushNow()).not.toThrow();
+    handle.dispose();
+  });
+
+  it("tryLocalStorageGet swallows a throwing getItem and yields null", () => {
+    const deps = makeDeps();
+    // Replace localStorage with one whose getItem throws, but length/key resolve a matching key.
+    Object.defineProperty(globalThis, "localStorage", {
+      value: {
+        length: 1,
+        key: (_index: number): string | null => "test.room.reentry.TEST01",
+        getItem: (): string => {
+          throw new Error("storage disabled");
+        },
+        setItem: (): void => {}
+      },
+      writable: true,
+      configurable: true
+    });
+
+    // readReentryRecord scans → tryLocalStorageGet throws internally → caught → falls through to null.
+    const result = readReentryRecord(deps);
+    expect(result).toBeNull();
+  });
+
+  it("writes the latest snapshot through to (mock) IndexedDB on the debounce timer", async () => {
+    // Inject a mock indexedDB so the durable write path (openIdb + writeToIdb) actually runs.
+    const mockIdb = new MockIndexedDB();
+    const originalIndexedDB = globalThis.indexedDB;
+    Object.defineProperty(globalThis, "indexedDB", {
+      value: mockIdb,
+      writable: true,
+      configurable: true
+    });
+
+    try {
+      const deps = makeDeps();
+      const handle = armPersistence(deps);
+      deps.state.recovery.persistHandle = handle;
+
+      recordSnapshot(deps, {
+        roomCode: "TEST01",
+        hostToken: "token-abc",
+        snapshot: emptySnapshot,
+        sSeq: 21,
+        savedAt: Date.now()
+      });
+
+      // Fire the debounce timer → scheduleIdbWrite callback → writeToIdb → openIdb (async event flow).
+      await vi.advanceTimersByTimeAsync(150);
+
+      const key = "test.room.reentry.TEST01";
+      const written = mockIdb.records.get(key) as { sSeq: number } | undefined;
+      expect(written).toBeDefined();
+      expect(written?.sSeq).toBe(21);
+      handle.dispose();
+    } finally {
+      Object.defineProperty(globalThis, "indexedDB", {
+        value: originalIndexedDB,
+        writable: true,
+        configurable: true
+      });
+    }
+  });
+
+  it("skips createObjectStore on upgrade when the store already exists", async () => {
+    // Pre-seed the "records" store so upgradeneeded sees contains() === true (create-skip branch).
+    const mockIdb = new MockIndexedDB(false, false, ["records"]);
+    const originalIndexedDB = globalThis.indexedDB;
+    Object.defineProperty(globalThis, "indexedDB", {
+      value: mockIdb,
+      writable: true,
+      configurable: true
+    });
+
+    try {
+      const deps = makeDeps();
+      const handle = armPersistence(deps);
+      deps.state.recovery.persistHandle = handle;
+
+      recordSnapshot(deps, {
+        roomCode: "TEST01",
+        hostToken: "token-abc",
+        snapshot: emptySnapshot,
+        sSeq: 41,
+        savedAt: Date.now()
+      });
+
+      // The durable write still succeeds even though the store was not (re)created.
+      await vi.advanceTimersByTimeAsync(150);
+      const written = mockIdb.records.get("test.room.reentry.TEST01") as
+        | { sSeq: number }
+        | undefined;
+      expect(written?.sSeq).toBe(41);
+      handle.dispose();
+    } finally {
+      Object.defineProperty(globalThis, "indexedDB", {
+        value: originalIndexedDB,
+        writable: true,
+        configurable: true
+      });
+    }
+  });
+
+  it("swallows an IndexedDB open failure on the debounce timer (best-effort durable write)", async () => {
+    // failOpen → the open request fires "error" → openIdb rejects → writeToIdb's caller .catch() runs.
+    const mockIdb = new MockIndexedDB(true, false);
+    const originalIndexedDB = globalThis.indexedDB;
+    Object.defineProperty(globalThis, "indexedDB", {
+      value: mockIdb,
+      writable: true,
+      configurable: true
+    });
+
+    try {
+      const deps = makeDeps();
+      const handle = armPersistence(deps);
+      deps.state.recovery.persistHandle = handle;
+
+      recordSnapshot(deps, {
+        roomCode: "TEST01",
+        hostToken: "token-abc",
+        snapshot: emptySnapshot,
+        sSeq: 31,
+        savedAt: Date.now()
+      });
+
+      // The debounce fires writeToIdb → openIdb rejects → caught silently (no throw, no record written).
+      await vi.advanceTimersByTimeAsync(150);
+      expect(mockIdb.records.has("test.room.reentry.TEST01")).toBe(false);
+      handle.dispose();
+    } finally {
+      Object.defineProperty(globalThis, "indexedDB", {
+        value: originalIndexedDB,
+        writable: true,
+        configurable: true
+      });
+    }
+  });
+
+  it("swallows an IndexedDB transaction failure on the debounce timer", async () => {
+    // failTx → the write transaction fires "error" → writeToIdb rejects → caller .catch() runs.
+    const mockIdb = new MockIndexedDB(false, true);
+    const originalIndexedDB = globalThis.indexedDB;
+    Object.defineProperty(globalThis, "indexedDB", {
+      value: mockIdb,
+      writable: true,
+      configurable: true
+    });
+
+    try {
+      const deps = makeDeps();
+      const handle = armPersistence(deps);
+      deps.state.recovery.persistHandle = handle;
+
+      recordSnapshot(deps, {
+        roomCode: "TEST01",
+        hostToken: "token-abc",
+        snapshot: emptySnapshot,
+        sSeq: 32,
+        savedAt: Date.now()
+      });
+
+      // The tx fires "error" → writeToIdb rejects → the best-effort .catch() swallows it (no throw).
+      // Reaching the next line without an unhandled rejection is the assertion that the catch ran.
+      await vi.advanceTimersByTimeAsync(150);
+      expect(() => handle.flushNow()).not.toThrow();
+      handle.dispose();
+    } finally {
+      Object.defineProperty(globalThis, "indexedDB", {
+        value: originalIndexedDB,
+        writable: true,
+        configurable: true
+      });
+    }
+  });
+
+  it("teardownSession clears an in-flight join timeout and settles its pending resolver", () => {
+    const state = createSessionState();
+    state.role = "controller";
+    state.roomCode = "TEST01";
+
+    // No persist handle / recovery timer on this path — only the join runtime fields.
+    const runtime = state as unknown as SessionStateWithRuntime;
+    runtime._joinTimeout = setTimeout(() => {}, 99_999);
+
+    let settled: JoinResult | null = null;
+    runtime._pendingJoinResolve = (result: JoinResult): void => {
+      settled = result;
+    };
+
+    teardownSession(state);
+
+    // The reconnect timer was already null — that branch is the false side here.
+    expect(runtime._joinTimeout).toBeNull();
+    expect(runtime._pendingJoinResolve).toBeNull();
+    // A hung joinRoom() is settled as unreachable rather than left dangling (finding #3).
+    expect(settled).toEqual({ ok: false, reason: "unreachable" });
+  });
+
+  it("teardownSession leaves join runtime fields untouched when none are in flight", () => {
+    const state = createSessionState();
+    state.role = "host";
+
+    const runtime = state as unknown as SessionStateWithRuntime;
+    runtime._joinTimeout = null;
+    runtime._pendingJoinResolve = null;
+
+    // No persistHandle, no timer, no join in flight → all guard branches take the false side.
+    expect(() => teardownSession(state)).not.toThrow();
+    expect(runtime._joinTimeout).toBeNull();
+    expect(runtime._pendingJoinResolve).toBeNull();
+  });
+
+  it("recordSnapshot is a no-op when no persistHandle is armed", () => {
+    const deps = makeDeps();
+    // persistHandle stays null → recordSnapshot stamps sSeqAtSnapshot but takes the no-handle branch.
+    deps.state.recovery.persistHandle = null;
+    recordSnapshot(deps, {
+      roomCode: "TEST01",
+      hostToken: "token-abc",
+      snapshot: emptySnapshot,
+      sSeq: 51,
+      savedAt: Date.now()
+    });
+    expect(deps.state.sSeqAtSnapshot).toBe(51);
+  });
+
+  it("the visibilitychange listener does NOT flush while the page is still visible", () => {
+    const deps = makeDeps();
+    const handle = armPersistence(deps);
+    deps.state.recovery.persistHandle = handle;
+    recordSnapshot(deps, {
+      roomCode: "TEST01",
+      hostToken: "token-abc",
+      snapshot: emptySnapshot,
+      sSeq: 52,
+      savedAt: Date.now()
+    });
+
+    // visibilityState stays "visible" → onVisibilityChange takes the false side, no write.
+    const mockDoc = globalThis.document as unknown as { visibilityState: string };
+    mockDoc.visibilityState = "visible";
+    for (const listener of visibilityListeners) listener();
+
+    expect(mockStorage.getItem("test.room.reentry.TEST01")).toBeNull();
+    handle.dispose();
+  });
+
+  it("_update without scheduling skips the debounced IndexedDB write", () => {
+    const deps = makeDeps();
+    const handle = armPersistence(deps) as unknown as PersistHandleWithUpdate;
+    deps.state.recovery.persistHandle = handle;
+
+    // scheduleIdb=false → retains the record but arms no timer (the else of `if (scheduleIdb)`).
+    handle._update(
+      { roomCode: "TEST01", hostToken: "token-abc", snapshot: emptySnapshot, sSeq: 53, savedAt: 0 },
+      false
+    );
+
+    // Advancing timers triggers nothing (no debounce armed); the record is still flushable synchronously.
+    vi.advanceTimersByTime(1000);
+    handle.flushNow();
+    const parsed = JSON.parse(String(mockStorage.getItem("test.room.reentry.TEST01"))) as {
+      sSeq: number;
+    };
+    expect(parsed.sSeq).toBe(53);
+    handle.dispose();
+  });
+
+  describe("headless path (no document)", () => {
+    let savedDocument: typeof globalThis.document;
+
+    beforeEach(() => {
+      savedDocument = globalThis.document;
+      Object.defineProperty(globalThis, "document", {
+        value: undefined,
+        writable: true,
+        configurable: true
+      });
+    });
+
+    afterEach(() => {
+      Object.defineProperty(globalThis, "document", {
+        value: savedDocument,
+        writable: true,
+        configurable: true
+      });
+    });
+
+    it("armPersistence/dispose skip the visibilitychange listener when document is undefined", () => {
+      const deps = makeDeps();
+      // No document → the listener-registration guard takes its false side.
+      const handle = armPersistence(deps);
+      deps.state.recovery.persistHandle = handle;
+      // No listener was registered against our mock document.
+      expect(visibilityListeners).toHaveLength(0);
+      // dispose() likewise takes the document-undefined false side without throwing.
+      expect(() => handle.dispose()).not.toThrow();
+    });
   });
 });

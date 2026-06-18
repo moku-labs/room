@@ -5,6 +5,9 @@
  */
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { PeerId } from "../../../../contracts";
+import type { SessionStateWithRuntime } from "../../recovery/reentry";
+import { registerTransportBindings } from "../../recovery/reentry";
 import { armReconnectTimeout, degradeOrRejoin } from "../../recovery/timeout";
 import { createSessionState } from "../../state";
 import type { SessionConfig, SessionDeps } from "../../types";
@@ -128,5 +131,123 @@ describe("recovery/timeout", () => {
     const secondTimer = deps.state.recovery.timer;
     // The second arming replaces the first.
     expect(secondTimer).not.toBe(firstTimer);
+  });
+
+  it("degradeOrRejoin treats an undefined navigator as non-iOS", async () => {
+    // No navigator at all (headless/Bun) → isIosWebKit() returns false → non-iOS rejoin path.
+    Object.defineProperty(globalThis, "navigator", {
+      value: undefined,
+      writable: true,
+      configurable: true
+    });
+
+    const state = createSessionState();
+    state.recovery.phase = "host-absent";
+    state.roomCode = "TEST01";
+    const deps = makeDeps(state);
+
+    // connect rejects → rejoin fails → degraded (proves the non-iOS branch ran).
+    await degradeOrRejoin(deps);
+
+    expect(deps.state.recovery.phase).toBe("degraded");
+  });
+
+  it("degradeOrRejoin clears a pre-existing reconnect timer before deciding", async () => {
+    Object.defineProperty(globalThis, "navigator", {
+      value: { userAgent: "AppleWebKit/605.1.15 (iPhone)" },
+      writable: true,
+      configurable: true
+    });
+
+    const deps = makeDeps();
+    deps.state.recovery.phase = "host-absent";
+    // Arm a live timer so degradeOrRejoin must clear it (covers the timer !== null branch).
+    deps.state.recovery.timer = setTimeout(() => {}, 99_999);
+    expect(deps.state.recovery.timer).not.toBeNull();
+
+    await degradeOrRejoin(deps);
+
+    // Timer cleared and nulled by degradeOrRejoin itself.
+    expect(deps.state.recovery.timer).toBeNull();
+    expect(deps.state.recovery.phase).toBe("degraded");
+  });
+
+  it("degradeOrRejoin degrades when rejoinSameRoom throws (no stored roomCode)", async () => {
+    Object.defineProperty(globalThis, "navigator", {
+      value: {
+        userAgent: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120"
+      },
+      writable: true,
+      configurable: true
+    });
+
+    const state = createSessionState();
+    state.recovery.phase = "host-absent";
+    const deps = makeDeps(state);
+    // No roomCode → rejoinSameRoom throws synchronously → degradeOrRejoin catch path.
+    // (makeDeps sets roomCode, so clear it AFTER.)
+    deps.state.roomCode = "";
+
+    await degradeOrRejoin(deps);
+
+    expect(deps.state.recovery.phase).toBe("degraded");
+  });
+
+  it("degradeOrRejoin does NOT degrade when auto-rejoin succeeds (non-iOS)", async () => {
+    Object.defineProperty(globalThis, "navigator", {
+      value: {
+        userAgent: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120"
+      },
+      writable: true,
+      configurable: true
+    });
+
+    const state = createSessionState();
+    state.role = "controller";
+    state.recovery.phase = "host-absent";
+    state.roomCode = "TEST01";
+
+    // A transport whose onPeerConnected registration we can replay to simulate a successful connect.
+    const onPeerConnected = vi.fn<(peerId: PeerId) => void>();
+    const wire = { send: vi.fn(), broadcast: vi.fn(), on: vi.fn() };
+    const transport = {
+      connect: vi.fn().mockResolvedValue(undefined),
+      wire: vi.fn().mockReturnValue(wire),
+      disconnect: vi.fn(),
+      peers: vi.fn().mockReturnValue([]),
+      close: vi.fn().mockResolvedValue(undefined),
+      onPeerConnected: vi.fn((cb: (peerId: PeerId) => void) => {
+        onPeerConnected.mockImplementation(cb);
+      }),
+      onPeerLost: vi.fn()
+    };
+
+    const deps: SessionDeps = {
+      state,
+      config: testConfig,
+      emit: { peerJoined: vi.fn(), peerLeft: vi.fn(), hostReconnecting: vi.fn() },
+      log: { warn: vi.fn() },
+      requireTransport: vi.fn().mockReturnValue(transport)
+    };
+
+    // Wire the transport callbacks (registers the real onPeerConnected handler into our spy).
+    registerTransportBindings(deps);
+    expect(transport.onPeerConnected).toHaveBeenCalledOnce();
+
+    // Kick off the rejoin (do NOT await — it resolves once the host connects).
+    const decision = degradeOrRejoin(deps);
+
+    // Let the connect() promise + pending-resolver wiring settle.
+    await vi.advanceTimersByTimeAsync(0);
+
+    // Simulate the host channel opening → resolves the pending join with { ok: true }.
+    const rt = deps.state as unknown as SessionStateWithRuntime;
+    expect(rt._pendingJoinResolve).not.toBeNull();
+    onPeerConnected("host-peer");
+
+    await decision;
+
+    // Success path: rejoinSameRoom set phase to "stable"; degradeOrRejoin did NOT degrade.
+    expect(deps.state.recovery.phase).toBe("stable");
   });
 });

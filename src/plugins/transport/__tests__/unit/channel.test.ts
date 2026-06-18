@@ -4,7 +4,13 @@
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Frame, PeerId } from "../../../../contracts";
-import { createWire, disconnectPeer, startHeartbeat, tearDownState } from "../../channel";
+import {
+  bindPeerChannel,
+  createWire,
+  disconnectPeer,
+  startHeartbeat,
+  tearDownState
+} from "../../channel";
 import { createTransportState } from "../../state";
 import type { PeerConnection, TransportConfig, TransportState } from "../../types";
 
@@ -201,6 +207,56 @@ describe("channel — chunking", () => {
     channel.deliver(JSON.stringify({ t: "sync-delta", ops: [], sSeq: 1 }));
     expect(seen).toHaveLength(0);
   });
+
+  it("a non-object inbound message is treated as a raw frame, not a chunk envelope", () => {
+    // isChunkEnvelope must return false for a primitive parse (typeof !== "object" / null), routing the
+    // value straight to the consumer as a (degenerate) frame rather than the reassembly path.
+    const state = createTransportState();
+    state.role = "controller";
+    const channel = addConnectedPeer(state, "host_root");
+    const wire = createWire(state, cfg);
+    const seen: unknown[] = [];
+    wire.on((_p, f) => seen.push(f));
+
+    channel.deliver(JSON.stringify(42)); // a number — not an object, not a chunk envelope
+    expect(seen).toEqual([42]);
+  });
+
+  it("a null inbound message does not reach the consumer (parsed null is falsy)", () => {
+    const state = createTransportState();
+    state.role = "controller";
+    const channel = addConnectedPeer(state, "host_root");
+    const wire = createWire(state, cfg);
+    const seen: unknown[] = [];
+    wire.on((_p, f) => seen.push(f));
+
+    channel.deliver(JSON.stringify(null)); // parsed null → `if (!frame) return`
+    expect(seen).toHaveLength(0);
+  });
+
+  it("bindPeerChannel wires the receive pump on a freshly-connected peer", () => {
+    const state = createTransportState();
+    state.role = "controller";
+    const channel = addConnectedPeer(state, "host_root");
+    const seen: Frame[] = [];
+    state.frameConsumers.add((_p, f) => seen.push(f));
+
+    // Drive the public bindPeerChannel seam (called by handlers.ts) rather than going through Wire.
+    bindPeerChannel(state, state.peers.get("host_root") as PeerConnection);
+
+    channel.deliver(JSON.stringify({ t: "sync-delta", ops: [], sSeq: 1 }));
+    expect(seen).toEqual([{ t: "sync-delta", ops: [], sSeq: 1 }]);
+  });
+
+  it("bindPeerChannel is a no-op when the peer has no channel assigned", () => {
+    const state = createTransportState();
+    state.role = "controller";
+    addConnectedPeer(state, "host_root");
+    const peer = state.peers.get("host_root") as PeerConnection;
+    peer.channel = null; // attachReceive must short-circuit on `!channel`
+
+    expect(() => bindPeerChannel(state, peer)).not.toThrow();
+  });
 });
 
 describe("channel — backpressure", () => {
@@ -252,6 +308,74 @@ describe("channel — backpressure", () => {
     expect(fast.sent).toHaveLength(1);
     expect(state.peers.get("fast")?.paused).toBe(false);
   });
+
+  it("queues a SECOND frame onto the pending buffer while the peer is already paused", () => {
+    const state = createTransportState();
+    state.role = "host";
+    const channel = addConnectedPeer(state, "p1");
+    const wire = createWire(state, cfg);
+
+    // First send saturates the buffer → peer paused, frame #1 queued.
+    channel.bufferedAmount = 70 * 1024;
+    wire.send("p1", { t: "ping", ts: 1 });
+    expect(state.peers.get("p1")?.paused).toBe(true);
+
+    // Second send while still paused → appended to the pending buffer (lines 182-186), not written.
+    wire.send("p1", { t: "ping", ts: 2 });
+    expect(channel.sent).toHaveLength(0);
+
+    // On drain BOTH queued frames flush in order.
+    channel.fireBufferedAmountLow();
+    expect(state.peers.get("p1")?.paused).toBe(false);
+    const sentTs = channel.sent.map(s => JSON.parse(s).ts);
+    expect(sentTs).toEqual([1, 2]);
+  });
+
+  it("queues onto an existing pending buffer even after the peer is un-paused (pending-length branch)", () => {
+    // Exercises the `(pending && pending.length > 0)` half of the guard: a pending buffer that still
+    // holds entries forces subsequent sends to queue regardless of the `paused` flag.
+    const state = createTransportState();
+    state.role = "host";
+    const channel = addConnectedPeer(state, "p1");
+    const wire = createWire(state, cfg);
+
+    channel.bufferedAmount = 70 * 1024;
+    wire.send("p1", { t: "ping", ts: 1 }); // pause + queue frame #1
+    wire.send("p1", { t: "ping", ts: 2 }); // queue frame #2 while paused
+
+    // Manually clear `paused` but leave the pending buffer populated — the next send must still queue.
+    const peer = state.peers.get("p1") as PeerConnection;
+    peer.paused = false;
+    wire.send("p1", { t: "ping", ts: 3 });
+    expect(channel.sent).toHaveLength(0); // still queued via the pending-length branch
+
+    channel.fireBufferedAmountLow();
+    const sentTs = channel.sent.map(s => JSON.parse(s).ts);
+    expect(sentTs).toEqual([1, 2, 3]);
+  });
+
+  it("writeToPeer is a no-op when the peer has no channel assigned", () => {
+    const state = createTransportState();
+    state.role = "host";
+    addConnectedPeer(state, "p1");
+    // Null out the channel — sendFrame → writeToPeer must short-circuit on `!channel`.
+    const peer = state.peers.get("p1") as PeerConnection;
+    peer.channel = null;
+    const wire = createWire(state, cfg);
+
+    expect(() => wire.send("p1", { t: "ping", ts: 1 })).not.toThrow();
+  });
+
+  it("writeToPeer is a no-op when the channel is not open", () => {
+    const state = createTransportState();
+    state.role = "host";
+    const channel = addConnectedPeer(state, "p1");
+    channel.readyState = "connecting"; // not "open"
+    const wire = createWire(state, cfg);
+
+    wire.send("p1", { t: "ping", ts: 1 });
+    expect(channel.sent).toHaveLength(0);
+  });
 });
 
 describe("channel — heartbeat", () => {
@@ -272,6 +396,19 @@ describe("channel — heartbeat", () => {
     expect(channel.sent.length).toBeGreaterThanOrEqual(1);
     expect(JSON.parse(channel.sent.at(-1) as string).t).toBe("ping");
     expect(state.heartbeatTimer).not.toBeNull();
+  });
+
+  it("startHeartbeat is idempotent — a second call does not start a second interval", () => {
+    const state = createTransportState();
+    state.role = "host";
+    addConnectedPeer(state, "p1");
+    startHeartbeat(state, cfg, vi.fn());
+    const firstTimer = state.heartbeatTimer;
+    expect(firstTimer).not.toBeNull();
+
+    // Second call must early-return on the `state.heartbeatTimer !== null` guard.
+    startHeartbeat(state, cfg, vi.fn());
+    expect(state.heartbeatTimer).toBe(firstTimer);
   });
 
   it("a pong updates lastPongAt and keeps the peer alive", () => {

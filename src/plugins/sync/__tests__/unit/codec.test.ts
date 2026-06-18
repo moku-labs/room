@@ -179,4 +179,56 @@ describe("codec", () => {
     const ops = encodeNamespace("empty", {});
     expect(ops).toHaveLength(0);
   });
+
+  it("encodeNamespace maps a null-valued cell to a { val: null } op (cells[key] ?? null)", () => {
+    const ops = encodeNamespace("scores", { p1: null, p2: 10 });
+
+    expect(ops).toHaveLength(2);
+    const p1 = ops.find(o => o.key === "p1");
+    expect(p1).toEqual({ ns: "scores", key: "p1", val: null });
+  });
+
+  // ─────────────────────────────────────────────────────────────────────────────
+  // Edge branches: null cell values, absent namespace values, new namespace in applyOps
+  // ─────────────────────────────────────────────────────────────────────────────
+
+  it("diffToOps emits { val: null } when a cell's value changes to null (val ?? null branch)", () => {
+    const prev: Snapshot = { scores: { p1: 5 } };
+    const next: Snapshot = { scores: { p1: null } }; // p1 set to null (not removed)
+
+    const ops = diffToOps(prev, next);
+
+    expect(ops).toHaveLength(1);
+    expect(ops[0]).toEqual({ ns: "scores", key: "p1", val: null });
+  });
+
+  it("diffToOps skips a namespace whose value is absent in next (the !nextCells guard)", () => {
+    // A namespace key present in `next` but mapping to `undefined` is skipped (noUncheckedIndexedAccess).
+    const prev: Snapshot = { scores: { p1: 0 } };
+    const next = { scores: { p1: 0 }, ghost: undefined } as unknown as Snapshot;
+
+    const ops = diffToOps(prev, next);
+
+    // Only the unchanged `scores` ns is considered; `ghost` contributes nothing.
+    expect(ops).toHaveLength(0);
+  });
+
+  it("applyOps creates a namespace that did not exist in the snapshot (!(ns in result) branch)", () => {
+    const snap: Snapshot = { scores: { p1: 0 } };
+    const ops = [{ ns: "round", key: "n", val: 1 }];
+
+    const result = applyOps(snap, ops);
+
+    expect(result).toEqual({ scores: { p1: 0 }, round: { n: 1 } });
+  });
+
+  it("applyOps drops a namespace that becomes empty after deletes", () => {
+    const snap: Snapshot = { scores: { p1: 0 }, round: { n: 1 } };
+    const ops = [{ ns: "round", key: "n", val: null }]; // delete the only cell in round
+
+    const result = applyOps(snap, ops);
+
+    expect(result).toEqual({ scores: { p1: 0 } });
+    expect("round" in result).toBe(false);
+  });
 });

@@ -3,8 +3,32 @@
  * `generateQr:false` yields `qr:null`, and `modules.length === size * size`.
  */
 
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import { buildJoinUrl, buildQrMatrix } from "../../lifecycle/qr";
+
+describe("lifecycle/qr: join URL location fallback", () => {
+  let originalLocation: typeof globalThis.location;
+
+  afterEach(() => {
+    Object.defineProperty(globalThis, "location", {
+      value: originalLocation,
+      writable: true,
+      configurable: true
+    });
+  });
+
+  it("uses location.origin when joinUrlBase is empty and location is defined", () => {
+    originalLocation = globalThis.location;
+    Object.defineProperty(globalThis, "location", {
+      value: { origin: "https://tv.example" },
+      writable: true,
+      configurable: true
+    });
+
+    const url = buildJoinUrl("G7K2QF", "");
+    expect(url).toBe("https://tv.example?room=G7K2QF");
+  });
+});
 
 describe("lifecycle/qr: matrix", () => {
   it("returns null when generateQr is false", async () => {

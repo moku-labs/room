@@ -145,4 +145,22 @@ describe("lifecycle/roster", () => {
     expect(isStarViolation("host", "p-1", "host", "host")).toBe(false);
     expect(isStarViolation("p-1", "host", "host", "host")).toBe(false);
   });
+
+  it("isStarViolation on a controller role flags a channel that does not involve us", () => {
+    // On a controller (role !== "host"): a channel between two OTHER peers is a violation.
+    expect(isStarViolation("p-1", "p-2", "self", "controller")).toBe(true);
+  });
+
+  it("isStarViolation on a controller role allows a channel that involves us", () => {
+    // On a controller: a channel where we (selfId) are the `from` endpoint is allowed.
+    expect(isStarViolation("self", "p-2", "self", "controller")).toBe(false);
+    // ...and where we are the `to` endpoint.
+    expect(isStarViolation("p-1", "self", "self", "controller")).toBe(false);
+  });
+
+  it("isStarViolation on a none role behaves like the non-host branch", () => {
+    // role "none" also takes the non-host branch.
+    expect(isStarViolation("p-1", "p-2", "self", "none")).toBe(true);
+    expect(isStarViolation("self", "p-2", "self", "none")).toBe(false);
+  });
 });

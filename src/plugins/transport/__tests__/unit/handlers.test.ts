@@ -4,6 +4,8 @@
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { IceCandidateInit, RoomEvents, SignalMsg } from "../../../../contracts";
+import { inMemory } from "../../adapters/in-memory";
+import type { WireChannel } from "../../channel";
 import { handlePeerArrival, handlePeerLeave, handleSignal } from "../../handlers";
 import { createTransportState } from "../../state";
 import type { PeerConnection, TransportConfig, TransportState } from "../../types";
@@ -417,5 +419,468 @@ describe("handlePeerArrival — peerConnectedCb (D18 loopback path)", () => {
 
     expect(() => handlePeerArrival(state, cfg, "p_ab12", noopWarn)).not.toThrow();
     expect(state.peers.has("p_ab12")).toBe(true);
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// A WireChannel stand-in whose "open" listener is captured so a test can fire it
+// (the default FakePeerConnection.createDataChannel returns a no-op stub). Drives
+// the host-side and answerer-side "open" → peerConnectedCb paths.
+// ─────────────────────────────────────────────────────────────────────────────
+
+/** An open `WireChannel` double that remembers its registered `"open"` listener. */
+function openableChannel(): WireChannel & { fireOpen(): void } {
+  let openCb: (() => void) | null = null;
+  return {
+    readyState: "open",
+    bufferedAmount: 0,
+    bufferedAmountLowThreshold: 0,
+    onmessage: null,
+    send: vi.fn(),
+    close: vi.fn(),
+    addEventListener(type: string, cb: () => void): void {
+      if (type === "open") openCb = cb;
+    },
+    removeEventListener: vi.fn(),
+    fireOpen(): void {
+      openCb?.();
+    }
+  };
+}
+
+describe("handlePeerArrival — loopback duplicate + null-channel guards", () => {
+  it("returns early on a duplicate loopback arrival (no second peer record, no extra cb)", () => {
+    const state = createTransportState();
+    const peerConnectedCb = vi.fn();
+    state.peerConnectedCb = peerConnectedCb;
+    const openWireChannel = vi.fn((peerId: string) =>
+      peerId === "p_ab12" ? (openableChannel() as unknown as WireChannel) : null
+    );
+    state.session = {
+      onPeer: vi.fn(),
+      onPeerLeave: vi.fn(),
+      onSignal: vi.fn(),
+      send: vi.fn(),
+      leave: vi.fn().mockResolvedValue(undefined),
+      openWireChannel
+    } as unknown as (typeof state)["session"];
+
+    handlePeerArrival(state, cfg, "p_ab12", noopWarn);
+    const firstPeer = state.peers.get("p_ab12") as PeerConnection;
+
+    // Second arrival for the same peer short-circuits before opening another channel.
+    handlePeerArrival(state, cfg, "p_ab12", noopWarn);
+
+    expect(state.peers.get("p_ab12")).toBe(firstPeer);
+    expect(peerConnectedCb).toHaveBeenCalledTimes(1);
+    expect(openWireChannel).toHaveBeenCalledTimes(1);
+  });
+
+  it("drives the loopback branch end-to-end via the inMemory adapter", async () => {
+    const sig = inMemory();
+    await sig.join("K7M2QX", { selfId: "p_ab12", passive: true });
+    const hostSession = await sig.join("K7M2QX", { selfId: "host_root" });
+
+    const state = createTransportState();
+    state.role = "host";
+    state.selfId = "host_root";
+    state.session = hostSession;
+    const peerConnectedCb = vi.fn();
+    state.peerConnectedCb = peerConnectedCb;
+
+    handlePeerArrival(state, cfg, "p_ab12", noopWarn);
+
+    const peer = state.peers.get("p_ab12") as PeerConnection;
+    expect(peer).toBeDefined();
+    // Loopback peers are marked connected immediately with no RTCPeerConnection handshake.
+    expect(peer.state).toBe("connected");
+    expect(peer.channel).not.toBeNull();
+    expect(peerConnectedCb).toHaveBeenCalledWith("p_ab12");
+  });
+});
+
+describe("handlePeerArrival — host channel open + ICE callbacks (real path)", () => {
+  it("fires peerConnectedCb and clears the open timer when the host data channel opens", () => {
+    const channel = openableChannel();
+    class OpenableHostPc extends FakePeerConnection {
+      override createDataChannel(): RTCDataChannel {
+        return channel as unknown as RTCDataChannel;
+      }
+    }
+    globalThis.RTCPeerConnection = OpenableHostPc as unknown as typeof RTCPeerConnection;
+
+    const state = createTransportState();
+    state.role = "host";
+    state.session = fakeSession();
+    const peerConnectedCb = vi.fn();
+    state.peerConnectedCb = peerConnectedCb;
+
+    handlePeerArrival(state, cfg, "p_ab12", noopWarn);
+    const peer = state.peers.get("p_ab12") as PeerConnection;
+    expect(peer.openTimer).not.toBeNull();
+
+    channel.fireOpen();
+
+    expect(peerConnectedCb).toHaveBeenCalledTimes(1);
+    expect(peerConnectedCb).toHaveBeenCalledWith("p_ab12");
+    // The "open" listener clears the armed open-timeout timer.
+    expect(peer.openTimer).toBeNull();
+  });
+
+  it("trickles each local ICE candidate to the peer over the signaling plane", async () => {
+    const state = createTransportState();
+    state.role = "host";
+    const session = fakeSession();
+    state.session = session;
+
+    handlePeerArrival(state, cfg, "p_ab12", noopWarn);
+    await vi.waitFor(() => expect(state.peers.has("p_ab12")).toBe(true));
+    const pc = state.peers.get("p_ab12")?.pc as unknown as FakePeerConnection;
+
+    // Reset to drop the offer send recorded by handlePeerArrival's IIFE.
+    session.send.mockClear();
+    pc.onicecandidate?.({
+      candidate: {
+        candidate: "candidate:1 1 udp 2122 192.168.0.2 5000 typ host",
+        sdpMid: "0",
+        sdpMLineIndex: 0,
+        usernameFragment: "ufrag"
+      } as unknown as RTCIceCandidate
+    });
+
+    const [target, msg] = session.send.mock.calls[0] as [string, SignalMsg];
+    expect(target).toBe("p_ab12");
+    expect(msg.kind).toBe("candidate");
+  });
+
+  it("does not send when an end-of-candidates (null) ICE event fires", async () => {
+    const state = createTransportState();
+    state.role = "host";
+    const session = fakeSession();
+    state.session = session;
+
+    handlePeerArrival(state, cfg, "p_ab12", noopWarn);
+    await vi.waitFor(() => expect(state.peers.has("p_ab12")).toBe(true));
+    const pc = state.peers.get("p_ab12")?.pc as unknown as FakePeerConnection;
+
+    session.send.mockClear();
+    pc.onicecandidate?.({ candidate: null });
+    expect(session.send).not.toHaveBeenCalled();
+  });
+
+  it("clears the open timer and leaves the session once ICE reaches connected", async () => {
+    const state = createTransportState();
+    state.role = "host";
+    const session = fakeSession();
+    state.session = session;
+
+    handlePeerArrival(state, cfg, "p_ab12", noopWarn);
+    await vi.waitFor(() => expect(state.peers.has("p_ab12")).toBe(true));
+    const peer = state.peers.get("p_ab12") as PeerConnection;
+    expect(peer.openTimer).not.toBeNull();
+
+    (peer.pc as unknown as FakePeerConnection).goConnected();
+
+    expect(peer.state).toBe("connected");
+    expect(peer.openTimer).toBeNull();
+    await vi.waitFor(() => expect(session.leave).toHaveBeenCalledTimes(1));
+    // leave() resolving nulls the live session (contracts §1.2).
+    await vi.waitFor(() => expect(state.session).toBeNull());
+  });
+
+  it("ignores a non-terminal ICE transition (checking) without restartIce or teardown", async () => {
+    const state = createTransportState();
+    state.role = "host";
+    state.session = fakeSession();
+
+    handlePeerArrival(state, cfg, "p_ab12", noopWarn);
+    await vi.waitFor(() => expect(state.peers.has("p_ab12")).toBe(true));
+    const pc = state.peers.get("p_ab12")?.pc as unknown as FakePeerConnection;
+
+    pc.iceConnectionState = "checking";
+    pc.oniceconnectionstatechange?.();
+
+    expect(pc.restartIce).not.toHaveBeenCalled();
+    expect(state.peers.get("p_ab12")?.state).toBe("connecting");
+  });
+});
+
+describe("retryHandshake — early return + warn de-dup", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("does not retry or warn when the peer reaches connected before the open timer fires", async () => {
+    const state = createTransportState();
+    state.role = "host";
+    state.session = fakeSession();
+    const warn = emitWarningSpy();
+
+    handlePeerArrival(state, cfg, "p_ab12", warn);
+    await vi.advanceTimersByTimeAsync(0);
+    const peer = state.peers.get("p_ab12") as PeerConnection;
+
+    // Mark connected (but leave the openTimer armed) so the timer's retryHandshake sees
+    // peer.state === "connected" and returns early without tearing the peer down.
+    peer.state = "connected";
+    await vi.advanceTimersByTimeAsync(cfg.openTimeoutMs);
+
+    expect(warn).not.toHaveBeenCalled();
+    expect(state.peers.has("p_ab12")).toBe(true);
+    expect((peer.pc as unknown as FakePeerConnection).closed).not.toHaveBeenCalled();
+  });
+
+  it("emits ice-failed only once even when a stale ice-failed key is already present", async () => {
+    const state = createTransportState();
+    state.role = "host";
+    state.session = fakeSession();
+    const warn = emitWarningSpy();
+    // Pre-seed the de-dup guard: a prior epoch already warned for this peer.
+    state.warned.add("ice-failed:p_ab12");
+
+    handlePeerArrival(state, cfg, "p_ab12", warn);
+    await vi.waitFor(() => expect(state.peers.has("p_ab12")).toBe(true));
+
+    // Exhaust the retry budget; the de-dup guard suppresses a second emit.
+    for (let cycle = 0; cycle < 6; cycle += 1) {
+      await vi.advanceTimersByTimeAsync(cfg.openTimeoutMs);
+    }
+
+    expect(warn).not.toHaveBeenCalled();
+    expect(state.peers.has("p_ab12")).toBe(false);
+  });
+});
+
+describe("handleSignal — loopback no-op + answerer datachannel path", () => {
+  it("is a no-op over a loopback session (no SDP applied, nothing sent)", () => {
+    const state = createTransportState();
+    state.role = "controller";
+    const send = vi.fn();
+    state.session = {
+      onPeer: vi.fn(),
+      onPeerLeave: vi.fn(),
+      onSignal: vi.fn(),
+      send,
+      leave: vi.fn().mockResolvedValue(undefined),
+      openWireChannel: vi.fn(() => null)
+    } as unknown as (typeof state)["session"];
+
+    handleSignal(state, cfg, "host_root", { kind: "offer", sdp: "v=0...offer" });
+    handleSignal(state, cfg, "host_root", { kind: "answer", sdp: "v=0...answer" });
+
+    expect(send).not.toHaveBeenCalled();
+    expect(state.peers.has("host_root")).toBe(false);
+  });
+
+  it("binds the host-offered data channel and fires peerConnectedCb on open (answerer)", async () => {
+    const state = createTransportState();
+    state.role = "controller";
+    state.selfId = "p_ab12";
+    state.session = fakeSession();
+    const peerConnectedCb = vi.fn();
+    state.peerConnectedCb = peerConnectedCb;
+
+    handleSignal(state, cfg, "host_root", { kind: "offer", sdp: "v=0...offer" });
+    await vi.waitFor(() => expect(state.peers.has("host_root")).toBe(true));
+    const peer = state.peers.get("host_root") as PeerConnection;
+    const pc = peer.pc as unknown as FakePeerConnection;
+    expect(peer.openTimer).not.toBeNull();
+
+    // The host's negotiated DataChannel arrives, then opens.
+    const channel = openableChannel();
+    pc.ondatachannel?.({ channel: channel as unknown as RTCDataChannel });
+    expect(peer.channel).not.toBeNull();
+
+    channel.fireOpen();
+
+    expect(peerConnectedCb).toHaveBeenCalledTimes(1);
+    expect(peerConnectedCb).toHaveBeenCalledWith("host_root");
+    // The "open" listener clears the answerer's armed open-timeout timer.
+    expect(peer.openTimer).toBeNull();
+  });
+
+  it("nulls the answerer open timer when it elapses before the channel opens", async () => {
+    vi.useFakeTimers();
+    try {
+      const state = createTransportState();
+      state.role = "controller";
+      state.selfId = "p_ab12";
+      state.session = fakeSession();
+
+      handleSignal(state, cfg, "host_root", { kind: "offer", sdp: "v=0...offer" });
+      await vi.advanceTimersByTimeAsync(0);
+      const peer = state.peers.get("host_root") as PeerConnection;
+      expect(peer.openTimer).not.toBeNull();
+
+      // The answerer's open-timeout guard fires: it only nulls its own handle (no retry).
+      await vi.advanceTimersByTimeAsync(cfg.openTimeoutMs);
+      expect(peer.openTimer).toBeNull();
+      expect(state.peers.has("host_root")).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
+
+describe("handlePeerLeave — clears the open timer of a half-open peer", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("clears a not-yet-connected peer's armed open timer before removing it", () => {
+    const state = createTransportState();
+    const pc = seedPeer(state, "p_ab12");
+    const peer = state.peers.get("p_ab12") as PeerConnection;
+    const cleared = vi.fn();
+    peer.openTimer = setTimeout(cleared, 10_000) as unknown as PeerConnection["openTimer"];
+
+    handlePeerLeave(state, "p_ab12");
+
+    expect(state.peers.has("p_ab12")).toBe(false);
+    expect(pc.closed).toHaveBeenCalled();
+    // The timer was cleared by handlePeerLeave, so advancing past it never runs the callback.
+    vi.advanceTimersByTime(20_000);
+    expect(cleared).not.toHaveBeenCalled();
+  });
+});
+
+describe("handlers — non-fatal failure paths (best-effort signaling)", () => {
+  it("swallows a leave() rejection after ICE connects (signaling is best-effort post-ICE)", async () => {
+    const state = createTransportState();
+    state.role = "host";
+    const session = fakeSession();
+    session.leave.mockRejectedValue(new Error("relay gone"));
+    state.session = session;
+
+    handlePeerArrival(state, cfg, "p_ab12", noopWarn);
+    await vi.waitFor(() => expect(state.peers.has("p_ab12")).toBe(true));
+    const peer = state.peers.get("p_ab12") as PeerConnection;
+
+    // ICE connects → leave() runs and rejects; the .catch keeps it non-fatal.
+    expect(() => (peer.pc as unknown as FakePeerConnection).goConnected()).not.toThrow();
+    await vi.waitFor(() => expect(session.leave).toHaveBeenCalledTimes(1));
+    // leave() rejected, so the session is NOT nulled (the success-only branch never ran).
+    expect(state.session).toBe(session);
+  });
+
+  it("swallows a createOffer rejection on the host arrival path (open-timeout retry recovers)", async () => {
+    class RejectingOfferPc extends FakePeerConnection {
+      override async createOffer(): Promise<RTCSessionDescriptionInit> {
+        throw new Error("createOffer failed");
+      }
+    }
+    globalThis.RTCPeerConnection = RejectingOfferPc as unknown as typeof RTCPeerConnection;
+
+    const state = createTransportState();
+    state.role = "host";
+    const session = fakeSession();
+    state.session = session;
+
+    expect(() => handlePeerArrival(state, cfg, "p_ab12", noopWarn)).not.toThrow();
+    await vi.waitFor(() => expect(state.peers.has("p_ab12")).toBe(true));
+    // The peer is still registered; no offer was sent because createOffer rejected.
+    expect(session.send).not.toHaveBeenCalled();
+  });
+
+  it("sends an offer with an empty sdp when createOffer yields no sdp", async () => {
+    class NoSdpOfferPc extends FakePeerConnection {
+      override async createOffer(): Promise<RTCSessionDescriptionInit> {
+        return { type: "offer" };
+      }
+    }
+    globalThis.RTCPeerConnection = NoSdpOfferPc as unknown as typeof RTCPeerConnection;
+
+    const state = createTransportState();
+    state.role = "host";
+    const session = fakeSession();
+    state.session = session;
+
+    handlePeerArrival(state, cfg, "p_ab12", noopWarn);
+    await vi.waitFor(() => expect(session.send).toHaveBeenCalled());
+
+    const [, msg] = session.send.mock.calls[0] as [string, SignalMsg];
+    expect(msg.kind).toBe("offer");
+    expect(msg).toEqual({ kind: "offer", sdp: "" });
+  });
+
+  it("swallows an addIceCandidate rejection (trickle-ICE may deliver out of order)", async () => {
+    const state = createTransportState();
+    state.role = "host";
+    state.session = fakeSession();
+    const pc = seedPeer(state, "p_ab12");
+    const rejection = vi.fn().mockRejectedValue(new Error("bad candidate"));
+    (pc as unknown as { addIceCandidate: () => Promise<void> }).addIceCandidate = rejection;
+
+    const candidate: IceCandidateInit = {
+      candidate: "candidate:bad",
+      sdpMid: "0",
+      sdpMLineIndex: 0
+    };
+    expect(() =>
+      handleSignal(state, cfg, "p_ab12", { kind: "candidate", candidate })
+    ).not.toThrow();
+    await vi.waitFor(() => expect(rejection).toHaveBeenCalledTimes(1));
+  });
+
+  it("swallows a setRemoteDescription rejection on an inbound answer", async () => {
+    const state = createTransportState();
+    state.role = "host";
+    state.session = fakeSession();
+    const pc = seedPeer(state, "p_ab12");
+    const rejection = vi.fn().mockRejectedValue(new Error("bad answer"));
+    (pc as unknown as { setRemoteDescription: () => Promise<void> }).setRemoteDescription =
+      rejection;
+
+    expect(() =>
+      handleSignal(state, cfg, "p_ab12", { kind: "answer", sdp: "v=0...answer" })
+    ).not.toThrow();
+    await vi.waitFor(() => expect(rejection).toHaveBeenCalledTimes(1));
+  });
+
+  it("swallows an answer-creation rejection on an inbound offer", async () => {
+    class RejectingAnswerPc extends FakePeerConnection {
+      override async createAnswer(): Promise<RTCSessionDescriptionInit> {
+        throw new Error("createAnswer failed");
+      }
+    }
+    globalThis.RTCPeerConnection = RejectingAnswerPc as unknown as typeof RTCPeerConnection;
+
+    const state = createTransportState();
+    state.role = "controller";
+    const session = fakeSession();
+    state.session = session;
+
+    expect(() =>
+      handleSignal(state, cfg, "host_root", { kind: "offer", sdp: "v=0...offer" })
+    ).not.toThrow();
+    await vi.waitFor(() => expect(state.peers.has("host_root")).toBe(true));
+    // createAnswer rejected → no answer was sent back.
+    expect(session.send).not.toHaveBeenCalled();
+  });
+
+  it("answers with an empty sdp when createAnswer yields no sdp", async () => {
+    class NoSdpAnswerPc extends FakePeerConnection {
+      override async createAnswer(): Promise<RTCSessionDescriptionInit> {
+        return { type: "answer" };
+      }
+    }
+    globalThis.RTCPeerConnection = NoSdpAnswerPc as unknown as typeof RTCPeerConnection;
+
+    const state = createTransportState();
+    state.role = "controller";
+    const session = fakeSession();
+    state.session = session;
+
+    handleSignal(state, cfg, "host_root", { kind: "offer", sdp: "v=0...offer" });
+    await vi.waitFor(() => expect(session.send).toHaveBeenCalled());
+
+    const [, msg] = session.send.mock.calls[0] as [string, SignalMsg];
+    expect(msg).toEqual({ kind: "answer", sdp: "" });
   });
 });
