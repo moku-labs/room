@@ -1,6 +1,6 @@
 {
   "name": "@moku-labs/room",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Couch-multiplayer foundation for Moku — shared screen + phones, WebRTC, multi-device state sync.",
   "keywords": [
     "moku",
@@ -50,7 +50,11 @@
       }
     }
   },
-  "files": ["dist", "LICENSE", "README.md"],
+  "files": [
+    "dist",
+    "LICENSE",
+    "README.md"
+  ],
   "publishConfig": {
     "access": "public",
     "registry": "https://registry.npmjs.org/"
