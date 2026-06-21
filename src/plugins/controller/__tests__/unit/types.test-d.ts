@@ -48,11 +48,11 @@ const padGame = createPlugin("padGame", {
       expectTypeOf(p).toMatchTypeOf<Record<string, never>>();
     },
     "room:network-warning": (p: {
-      reason: "ice-failed" | "rendezvous-unreachable" | "channel-closed";
+      reason: "ice-failed" | "rendezvous-unreachable" | "channel-closed" | "room-evicted";
     }) => {
-      // room:network-warning payload narrows to the 3-value reason union
+      // room:network-warning payload narrows to the 4-value reason union (room-evicted — D25, §3.1)
       expectTypeOf(p.reason).toMatchTypeOf<
-        "ice-failed" | "rendezvous-unreachable" | "channel-closed"
+        "ice-failed" | "rendezvous-unreachable" | "channel-closed" | "room-evicted"
       >();
     }
   }),
