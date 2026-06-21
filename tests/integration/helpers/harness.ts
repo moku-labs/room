@@ -34,6 +34,20 @@ export function makeBus(): Bus {
 }
 
 /**
+ * A fresh, isolated in-process signaling bus in **server mode** (`inMemory({ server: true })`) — the
+ * deterministic stand-in for the opt-in `serverSignaling` Worker tier. Its sessions are `persistent: true`
+ * and simulate the contracts §1.3 server protocol (join / peer-arrived / relay / reclaim / evict), so the
+ * server-tier opt-in is exercisable through the public `roomPlugins` arrays without a live Durable Object.
+ * Like {@link makeBus}, pass the SAME instance to every app that must rendezvous.
+ *
+ * Note: the server-mode bus omits the transport-internal loopback capability, so it brokers signaling only
+ * (no in-process `WireChannel` pair) — the channel-establishment assertions in this suite use {@link makeBus}.
+ */
+export function makeServerBus(): Bus {
+  return inMemory({ server: true });
+}
+
+/**
  * Shared `pluginConfigs` for every Room app in the harness: the required `site` block (web's core
  * plugin), the in-memory `signaling` bus on transport, and the `session.generateQr` toggle. QR is OFF
  * by default (the DOM-free test bus has no camera path); pass `generateQr: true` to exercise the public
