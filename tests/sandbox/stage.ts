@@ -7,6 +7,7 @@
  * @see ./shared.ts
  * @see ./controller.ts
  */
+import type { RoomDescriptor } from "../../src/index";
 import { makeStageApp, SCORES, TAP } from "./shared";
 
 /**
@@ -113,15 +114,34 @@ async function boot(): Promise<void> {
       app.stage.broadcast();
     });
 
-    // Open the room (synchronous — the descriptor is ready the instant the code is minted).
-    const descriptor = app.stage.createRoom();
-    byId("code").textContent = descriptor.code;
+    // Reclaim-aware (server signaling, D25): `app.start()` runs the host-reload detector first. When a
+    // prior tab persisted a host re-entry record, it has ALREADY restored `role:"host"` + the room code and
+    // is re-attaching to the warm DO with the saved reclaim token — so adopt THAT room instead of minting a
+    // fresh one (`createRoom()` throws "a room is already active" once a reload was detected). On a normal
+    // first boot the role is still "none" and we open a new room synchronously.
+    const restored = app.session.self();
+    const reclaiming = restored.role === "host" && restored.roomCode !== "";
+
+    let code: string;
+    let joinUrl: string;
+    let descriptor: RoomDescriptor | undefined;
+    if (reclaiming) {
+      code = restored.roomCode;
+      joinUrl = `${globalThis.location.origin}?room=${code}`;
+    } else {
+      descriptor = app.stage.createRoom();
+      code = descriptor.code;
+      joinUrl = descriptor.joinUrl;
+    }
+
+    byId("code").textContent = code;
     const link = byId("join-url") as HTMLAnchorElement;
-    link.textContent = descriptor.joinUrl;
-    link.href = descriptor.joinUrl;
+    link.textContent = joinUrl;
+    link.href = joinUrl;
 
     // Render the join QR via the public async accessor. `createRoom()` is synchronous (so `descriptor.qr`
-    // is always null), but QR generation is async — the `qrcode` encoder is lazy-imported host-only.
+    // is always null), but QR generation is async — the `qrcode` encoder is lazy-imported host-only. The
+    // accessor reads the (restored or fresh) room code, so a reclaimed room re-paints its QR too.
     const qr = await app.stage.qr();
     renderQr(qr);
     byId("qr-hint").textContent = qr ? "Scan to join" : "Enter the code on your phone to join";
@@ -131,8 +151,12 @@ async function boot(): Promise<void> {
     setInterval(renderLeaderboard, 750);
     renderLeaderboard();
 
-    globalThis.roomStage = { code: descriptor.code, joinUrl: descriptor.joinUrl, descriptor };
-    setStatus(`room ${descriptor.code} open — waiting for players`);
+    globalThis.roomStage = { code, joinUrl, ...(descriptor ? { descriptor } : {}) };
+    setStatus(
+      reclaiming
+        ? `room ${code} reclaimed — recovering players`
+        : `room ${code} open — waiting for players`
+    );
   } catch (error) {
     setStatus(`host failed to start: ${(error as Error).message}`);
     console.error(error);

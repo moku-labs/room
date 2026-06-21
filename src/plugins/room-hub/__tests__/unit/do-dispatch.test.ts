@@ -247,7 +247,7 @@ describe("RoomHub DO — unknown frames", () => {
 });
 
 describe("RoomHub DO — webSocketClose", () => {
-  it("deletes the row and announces peer-left to the star subset", async () => {
+  it("deletes a controller row and announces peer-left to the star subset", async () => {
     const fake = makeFakeRoom();
     const host = fake.addSocket();
     const ctrl = fake.addSocket();
@@ -258,6 +258,37 @@ describe("RoomHub DO — webSocketClose", () => {
 
     expect(fake.sql.rows.has("p_ab12")).toBe(false);
     expect(host.sent).toContainEqual({ kind: "peer-left", peerId: "p_ab12" });
+  });
+
+  // Regression (Cycle-2 W4, real-workerd): a host reload closes the OLD socket FIRST, then reclaims with
+  // the persisted token. The host row + its reclaim token MUST survive that close — deleting it (as a
+  // controller's row is) makes `findPeerByReclaimToken` miss and rejects the warm re-entry with 1008. The
+  // W3 fake-based reclaim test skipped the close, so the wrangler/Playwright run is what surfaced this.
+  it("KEEPS the host row on close so a subsequent warm reclaim still succeeds", async () => {
+    const fake = makeFakeRoom();
+    const host = fake.addSocket();
+    const ctrl = fake.addSocket();
+    await join(fake.room, host, "host_root", "host");
+    await join(fake.room, ctrl, "p_ab12", "controller");
+    const token = host.sent[0]?.kind === "join-ack" ? host.sent[0].reclaimToken : "";
+
+    await fake.room.webSocketClose(asWs(host));
+
+    // Row preserved (token intact), but the controller is still told the host left.
+    expect(fake.sql.rows.get("host_root")?.reclaim_token).toBe(token);
+    expect(ctrl.sent).toContainEqual({ kind: "peer-left", peerId: "host_root" });
+
+    // The reload's fresh socket reclaims with the persisted token → re-bind, NOT a 1008 rejection.
+    fake.sockets.splice(fake.sockets.indexOf(host), 1);
+    const host2 = fake.addSocket();
+    await fake.room.webSocketMessage(
+      asWs(host2),
+      JSON.stringify({ kind: "reclaim", selfId: "host_v2", reclaimToken: token })
+    );
+
+    expect(host2.lastSent()?.kind).toBe("reclaim-ack");
+    expect(fake.sql.rows.has("host_root")).toBe(false); // superseded by the reclaiming id
+    expect(fake.sql.rows.get("host_v2")?.reclaim_token).toBe(token);
   });
 });
 

@@ -5,18 +5,24 @@ import { defineConfig, devices } from "@playwright/test";
  * `tests/sandbox` through a real browser. The `webServer` block boots `tests/sandbox/serve.ts`
  * (Bun.build + Bun.serve) and waits for it before the specs run.
  *
- * Two spec tiers live under `tests/e2e`:
+ * Spec tiers under `tests/e2e` served by THIS config (the Bun static `serve.ts` on :5179):
  * - `*-smoke.spec.ts` — deterministic, offline (uses the `?signaling=memory` bus); runs in CI with just
  *   Chromium.
  * - `*-interop.spec.ts` — real-WebRTC over `publicRendezvous`; networked + flaky, gated behind
  *   `ROOM_E2E_LIVE=1`. The true cross-device gate (iPhone-Safari ↔ Bravia-7) is manual — see
  *   `tests/sandbox/README.md`.
+ *
+ * `room-hub-worker.spec.ts` is NOT served here — it needs the worker over real `workerd` and lives in its
+ * own `playwright.worker.config.ts` (boots `wrangler dev`), run via `bun run test:e2e:worker`. It is
+ * excluded below so the default CI run stays workerd-free.
  */
 const PORT = Number(process.env.PORT ?? 5179);
 
 export default defineConfig({
   testDir: "./tests/e2e",
   testMatch: "**/*.spec.ts",
+  // The worker tier runs over `wrangler dev` from its own config — keep it out of the default/CI run.
+  testIgnore: "**/room-hub-worker.spec.ts",
   fullyParallel: false,
   forbidOnly: !!process.env.CI,
   retries: process.env.CI ? 1 : 0,

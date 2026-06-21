@@ -212,7 +212,12 @@ export class RoomHub extends defineDurableObject("RoomHub") {
   }
 
   /**
-   * Clears the peer's attachment row from SQLite and broadcasts `peer-left` to its star subset.
+   * Handles a socket close: announces `peer-left` to the star subset, and drops a CONTROLLER's SQLite row
+   * so the roster reflects only live peers. The HOST's row is deliberately KEPT — it carries the reclaim
+   * token, and a host reload's `{kind:"reclaim"}` races just behind this close, so deleting here would make
+   * `findPeerByReclaimToken` miss and reject the warm re-entry (§5.1, D25). The reclaim path supersedes the
+   * stale host row, and the idle Alarm GCs it (`deleteAll()`) if the host never returns. Star fan-out reads
+   * LIVE sockets via `getWebSockets()` — never this row — so a lingering host row never mis-announces.
    *
    * @param ws - The closing WebSocket.
    * @example
@@ -222,10 +227,9 @@ export class RoomHub extends defineDurableObject("RoomHub") {
    */
   async webSocketClose(ws: WebSocket): Promise<void> {
     const att = readAttachment(ws);
-    if (att?.peerId && att.role) {
-      deleteSession(this.ctx.storage.sql, att.peerId);
-      this.announce(ws, { kind: "peer-left", peerId: att.peerId }, att.role);
-    }
+    if (!att?.peerId || !att.role) return;
+    if (att.role === "controller") deleteSession(this.ctx.storage.sql, att.peerId);
+    this.announce(ws, { kind: "peer-left", peerId: att.peerId }, att.role);
   }
 
   /**

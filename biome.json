@@ -5,6 +5,8 @@
       "src/**",
       "tests/**",
       "!tests/sandbox/dist",
+      "!tests/sandbox/.wrangler",
+      "!.wrangler-sandbox",
       "!tests/sandbox/**/*.css",
       "!tests/sandbox/**/*.d.ts",
       "*.config.ts"

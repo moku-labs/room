@@ -98,7 +98,8 @@
     "tsdown": "0.22.1",
     "typescript": "6.0.3",
     "typescript-eslint": "8.58.0",
-    "vitest": "4.0.18"
+    "vitest": "4.0.18",
+    "wrangler": "4.103.0"
   },
   "scripts": {
     "build": "tsdown",
@@ -112,6 +113,8 @@
     "test:integration": "vitest run --project integration",
     "test:coverage": "vitest run --project unit --project integration --coverage",
     "test:e2e": "playwright test",
-    "sandbox": "bun tests/sandbox/serve.ts"
+    "test:e2e:worker": "playwright test -c playwright.worker.config.ts",
+    "sandbox": "bun tests/sandbox/serve.ts",
+    "sandbox:worker": "bun tests/sandbox/build-client.ts && wrangler dev --config tests/sandbox/wrangler.jsonc --port 5180 --persist-to .wrangler-sandbox"
   }
 }
