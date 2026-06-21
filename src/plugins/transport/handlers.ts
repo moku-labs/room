@@ -118,14 +118,18 @@ function createPeer(state: TransportState, cfg: TransportConfig, peerId: PeerId)
         clearTimeout(peer.openTimer);
         peer.openTimer = null;
       }
-      state.session
-        ?.leave()
-        .then(() => {
-          if (state.session) state.session = null;
-        })
-        .catch(() => {
-          // leave() failure is non-fatal: signaling is best-effort post-ICE (contracts section 1.2)
-        });
+      // Persistent guard (contracts §1.1, D25): keep a server-backed session alive post-ICE as the
+      // discovery-push / host-reload reclaim conduit. Non-persistent adapters still leave immediately.
+      if (state.session && !state.session.persistent) {
+        state.session
+          .leave()
+          .then(() => {
+            if (state.session && !state.session.persistent) state.session = null;
+          })
+          .catch(() => {
+            // best-effort post-ICE (contracts §1.2)
+          });
+      }
     } else if (pc.iceConnectionState === "disconnected") {
       // Transient ICE blip: ask the agent to re-gather rather than waiting for heartbeat teardown.
       pc.restartIce();

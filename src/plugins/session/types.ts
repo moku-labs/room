@@ -88,6 +88,13 @@ export type SessionConfig = {
    * `"moku.room"`.
    */
   readonly storageKeyPrefix: string;
+  /**
+   * Number of characters in a minted room code. Default `ROOM_CODE_LENGTH` (6) from contracts §6.2.
+   * **`serverSignaling` deployments SHOULD set `8`** (~57 bits) to resist room-code enumeration of
+   * the public DO endpoint (D24, Cycle 2). `lifecycle/code.ts` reads this; the `ROOM_CODE_LENGTH`
+   * const is unchanged. Optional + defaulted — additive, non-breaking for existing consumers.
+   */
+  readonly codeLength?: number;
 };
 
 /** This device's role for the current room. `"none"` until `createRoom`/`joinRoom` is called. */

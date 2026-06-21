@@ -70,6 +70,9 @@ export function createTransportApi(
       );
       session.onSignal((peerId, msg) => handleSignal(state, config, peerId, msg));
       session.onPeerLeave(peerId => handlePeerLeave(state, peerId));
+      // onEvict wiring (contracts §1.1, D25): surfaces serverSignaling eviction as a network warning.
+      // No-op for publicRendezvous/inMemory (onEvict is optional; contracts §1.1).
+      session.onEvict?.(() => emitWarning("room-evicted"));
       startHeartbeat(state, config, reason => emitWarning(reason));
     },
 

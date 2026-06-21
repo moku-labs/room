@@ -35,7 +35,11 @@
       },
       "peerDependencies": {
         "@moku-labs/web": "^1.12.4",
+        "@moku-labs/worker": "^0.10.0",
       },
+      "optionalPeers": [
+        "@moku-labs/worker",
+      ],
     },
   },
   "packages": {

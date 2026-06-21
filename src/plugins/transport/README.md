@@ -10,11 +10,17 @@ planes:
    `bufferedAmount` backpressure (~64 KiB), a MANDATORY app-layer heartbeat (~2 s ping / ~6 s dead —
    WebKit bug 303052: `onclose` does not fire on iOS), and a ~3 s DataChannel-open timeout that retries
    the handshake (the iOS-Safari to Sony-Bravia interop mitigation).
-3. **The general `Signaling` seam** — a DOM-free `adapter.ts` contract plus two v1 adapters:
-   `publicRendezvous()` (DEFAULT — Trystero v0.25.x, lazy-loaded) and `inMemory()` (tests).
+3. **The general `Signaling` seam** — a DOM-free `adapter.ts` contract plus three adapters:
+   `publicRendezvous()` (DEFAULT — Trystero v0.25.x, lazy-loaded), `inMemory()` (tests), and
+   `serverSignaling(url)` (opt-in worker-backed, lazy-loaded). The server adapter opens one persistent
+   WebSocket per room speaking the contracts §1.3 `ClientEnvelope`/`ServerEnvelope` protocol and returns a
+   `persistent: true` session that survives post-ICE as the in-band discovery / host-reload-reclaim
+   conduit; imminent room teardown surfaces as `room:network-warning { reason: "room-evicted" }` via the
+   session's `onEvict` seam.
 
-Emits exactly one Moku event: `room:network-warning { reason }`. **No gameplay traffic ever flows through
-Moku `emit`** — all device-to-host frames ride the `Wire`.
+Emits exactly one Moku event: `room:network-warning { reason }` (`ice-failed` | `rendezvous-unreachable` |
+`channel-closed` | `room-evicted`). **No gameplay traffic ever flows through Moku `emit`** — all
+device-to-host frames ride the `Wire`.
 
 ## API
 

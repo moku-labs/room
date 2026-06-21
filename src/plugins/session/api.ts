@@ -75,7 +75,7 @@ export function createSessionApi(deps: SessionDeps): SessionApi {
 
       // Mint identity for the host.
       deps.state.selfId = mintHostToken(); // re-use UUID for selfId (both are random unique ids)
-      const code = generateRoomCode();
+      const code = generateRoomCode(undefined, deps.config.codeLength);
       const hostToken = mintHostToken();
       const joinUrlBase = deps.config.joinUrlBase;
       const joinUrl = buildJoinUrl(code, joinUrlBase);
