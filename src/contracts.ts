@@ -136,6 +136,14 @@ export type SignalingJoinOpts = {
    * authoritative star hub; controllers are passive. See §6 (star topology).
    */
   readonly passive?: boolean;
+  /**
+   * (`serverSignaling` only) The DO-issued host re-entry token from a PRIOR `join-ack`, persisted by
+   * `session` across a host reload (§5.1). When present, `serverSignaling` sends a `{kind:"reclaim",…}`
+   * envelope (§1.3) INSTEAD of `{kind:"join"}`, so the warm Durable Object re-binds this host to the
+   * existing room (controllers re-handshake) rather than spinning up a fresh, empty room. Ignored by
+   * `publicRendezvous`/`inMemory` (they have no DO to reclaim) — they perform a normal join (D25).
+   */
+  readonly reclaimToken?: string;
 };
 
 /**
@@ -204,6 +212,15 @@ export type SignalingSession = {
    * `publicRendezvous`/`inMemory` ⇒ unchanged "leave once connected" lifecycle (§1.2, D25).
    */
   readonly persistent?: true;
+
+  /**
+   * (`serverSignaling` only) The DO-issued host re-entry token carried in the `join-ack`/`reclaim-ack`
+   * (§1.3). `session` reads it after `connect()` (via `transport.reclaimToken()`), persists it in the
+   * `HostReentryRecord`, and feeds it back through {@link SignalingJoinOpts.reclaimToken} on the next
+   * host-reload `join` — completing the host-reclaim conduit (§5.1, D25). Absent for
+   * `publicRendezvous`/`inMemory` (no DO ⇒ no token); host reload there falls back to a fresh room.
+   */
+  readonly reclaimToken?: string;
 };
 
 /**

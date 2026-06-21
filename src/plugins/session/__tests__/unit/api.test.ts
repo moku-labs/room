@@ -11,6 +11,7 @@
 import { describe, expect, it, vi } from "vitest";
 import type { RosterEntry, Snapshot } from "../../../../contracts";
 import { createSessionApi } from "../../api";
+import * as persistence from "../../recovery/persistence";
 import { createSessionState } from "../../state";
 import type { SessionConfig, SessionDeps } from "../../types";
 
@@ -44,6 +45,7 @@ function makeMockTransport(connectResolves = true): MockTransport {
     connect,
     wire: vi.fn().mockReturnValue(mockWire),
     disconnect: vi.fn(),
+    reclaimToken: vi.fn().mockReturnValue(null),
     peers: vi.fn().mockReturnValue([]),
     close: vi.fn().mockResolvedValue(undefined),
     onPeerConnected: vi.fn(),
@@ -457,6 +459,38 @@ describe("createSessionApi", () => {
 
       expect(() => api.persistSnapshot(snapshot, 13)).not.toThrow();
       expect(deps.state.sSeqAtSnapshot).toBe(13);
+    });
+
+    it("captures the transport reclaim token into the persisted record (serverSignaling)", () => {
+      const transport = makeMockTransport();
+      vi.mocked(transport.reclaimToken).mockReturnValue("tok-DO");
+      const deps = makeDeps({ requireTransport: vi.fn().mockReturnValue(transport) });
+      deps.state.role = "host";
+      deps.state.roomCode = "ABC234";
+      const recordSpy = vi.spyOn(persistence, "recordSnapshot");
+      const api = createSessionApi(deps);
+
+      api.persistSnapshot(snapshot, 9);
+
+      expect(recordSpy).toHaveBeenCalledWith(
+        deps,
+        expect.objectContaining({ reclaimToken: "tok-DO" })
+      );
+    });
+
+    it("omits reclaimToken from the record when transport has none (publicRendezvous/inMemory)", () => {
+      const deps = makeDeps(); // default mock transport returns reclaimToken() → null
+      deps.state.role = "host";
+      deps.state.roomCode = "ABC234";
+      const recordSpy = vi.spyOn(persistence, "recordSnapshot");
+      recordSpy.mockClear(); // vi.spyOn reuses the underlying mock across tests — start from a clean call log
+      const api = createSessionApi(deps);
+
+      api.persistSnapshot(snapshot, 4);
+
+      const record = recordSpy.mock.calls[0]?.[1];
+      expect(record).toBeDefined();
+      expect(record && "reclaimToken" in record).toBe(false);
     });
   });
 

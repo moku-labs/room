@@ -197,6 +197,13 @@ export type HostReentryRecord = {
   readonly sSeq: number;
   /** Epoch-ms the record was written (staleness check on reload). */
   readonly savedAt: number;
+  /**
+   * (`serverSignaling` deployments only) The DO-issued host re-entry token captured from
+   * `transport.reclaimToken()` after `connect()`. Replayed via `ConnectOpts.reclaimToken` on host reload
+   * so the warm Durable Object re-binds this host instead of opening a fresh room (§1.3/§5.1, D25).
+   * Absent on `publicRendezvous`/`inMemory` deployments (no DO ⇒ no token).
+   */
+  readonly reclaimToken?: string;
 };
 
 /** Lightweight QR payload: the module size + a row-major boolean matrix the consumer renders however it likes. */

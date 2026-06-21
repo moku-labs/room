@@ -242,6 +242,47 @@ describe("serverSignaling — evict → onEvict", () => {
   });
 });
 
+describe("serverSignaling — reclaim (host reload)", () => {
+  it("sends a {kind:reclaim} frame (not join) when opts.reclaimToken is set", async () => {
+    const sig = serverSignaling("wss://r.example.com");
+    const joinPromise = sig.join("K7M2QX", { selfId: "host_v2", reclaimToken: "tok-T" });
+
+    await vi.waitFor(() => expect(MockWebSocket.instances).toHaveLength(1));
+    const ws = MockWebSocket.instances[0];
+    if (!ws) throw new Error("missing ws");
+    ws.open();
+
+    const sent = ws.sentFrames[0] ? (JSON.parse(ws.sentFrames[0]) as ClientEnvelope) : null;
+    expect(sent).toEqual({ kind: "reclaim", selfId: "host_v2", reclaimToken: "tok-T" });
+
+    // The DO acknowledges the reclaim; the session resolves with the presented token preserved.
+    ws.receiveFromServer({ kind: "reclaim-ack", peers: ["p_ab12"] });
+    const session = await joinPromise;
+    expect(session.reclaimToken).toBe("tok-T");
+  });
+
+  it("exposes the DO-issued reclaimToken from join-ack on the session", async () => {
+    const { session } = await openSession(); // openSession delivers join-ack reclaimToken "tok123"
+    expect(session.reclaimToken).toBe("tok123");
+  });
+
+  it("queues reclaim-ack peers for onPeer so the host re-offers", async () => {
+    const sig = serverSignaling("wss://r.example.com");
+    const joinPromise = sig.join("K7M2QX", { selfId: "host_v2", reclaimToken: "tok-T" });
+
+    await vi.waitFor(() => expect(MockWebSocket.instances).toHaveLength(1));
+    const ws = MockWebSocket.instances[0];
+    if (!ws) throw new Error("missing ws");
+    ws.open();
+    ws.receiveFromServer({ kind: "reclaim-ack", peers: ["p_ab12"] });
+    const session = await joinPromise;
+
+    const onPeer = vi.fn();
+    session.onPeer(onPeer);
+    expect(onPeer).toHaveBeenCalledWith("p_ab12");
+  });
+});
+
 describe("serverSignaling — leave → ws.close(1000)", () => {
   it("closes the WS with code 1000 on leave()", async () => {
     const { session, ws } = await openSession();

@@ -11,10 +11,10 @@ import { roomHubPlugin } from "./plugins/room-hub";
 export { roomHubPlugin } from "./plugins/room-hub";
 export { RoomHub } from "./plugins/room-hub/room-hub-do";
 
-// Module-local: the composed app's inferred type references non-exported @moku-labs/core internals,
-// so it is NOT part of the public .d.ts surface (consumers deploy via `default` or compose via
-// `roomHubPlugin`). Kept local to keep `@moku-labs/room/server` types portable.
-const app = createApp({
+// Exported per spec/07 §Overview so a consumer can re-compose around the existing instance. Safe to
+// export: the `./server` tsdown entry is JS-only (`dts: false`) — the composed app's inferred type
+// (which references non-exported @moku-labs/core internals) never reaches a published `.d.ts`.
+export const app = createApp({
   config: { name: "room-hub", compatibilityDate: "2026-06-17" },
   plugins: [durableObjectsPlugin, kvPlugin, roomHubPlugin],
   pluginConfigs: {

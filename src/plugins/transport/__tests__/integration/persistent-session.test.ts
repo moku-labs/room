@@ -150,6 +150,57 @@ describe("inMemory({ server: true }) — server-sim signaling", () => {
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
+// inMemory({ server: true }) — host reclaim (host reload re-entry, §1.3/§5.1, D25)
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe("inMemory({ server: true }) — host reclaim", () => {
+  it("mints a reclaim token on the host session (controllers get none)", async () => {
+    const sig = inMemory({ server: true });
+    const host = await sig.join("K7M2QX", { selfId: "host_root" });
+    const ctrl = await sig.join("K7M2QX", { selfId: "p_ab12", passive: true });
+
+    expect(typeof host.reclaimToken).toBe("string");
+    expect(ctrl.reclaimToken).toBeUndefined();
+
+    await host.leave();
+    await ctrl.leave();
+  });
+
+  it("re-binds the host on reload (same token) and re-announces it to the controller", async () => {
+    const sig = inMemory({ server: true });
+    const host = await sig.join("K7M2QX", { selfId: "host_root" });
+    const token = host.reclaimToken;
+    if (token === undefined) throw new Error("expected a host reclaim token");
+
+    const ctrl = await sig.join("K7M2QX", { selfId: "p_ab12", passive: true });
+    const ctrlSawPeer = vi.fn<(peerId: string) => void>();
+    ctrl.onPeer(ctrlSawPeer);
+
+    // Host reload: the old session is gone; a fresh join presents the persisted token + a new selfId.
+    await host.leave();
+    const host2 = await sig.join("K7M2QX", { selfId: "host_v2", reclaimToken: token });
+
+    // Same token is preserved across reclaim, and the surviving controller learns the host returned.
+    expect(host2.reclaimToken).toBe(token);
+    expect(ctrlSawPeer).toHaveBeenCalledWith("host_v2");
+
+    await host2.leave();
+    await ctrl.leave();
+  });
+
+  it("rejects a reclaim presenting an unknown token (mirrors the DO's close-1008)", async () => {
+    const sig = inMemory({ server: true });
+    const host = await sig.join("K7M2QX", { selfId: "host_root" });
+
+    await expect(
+      sig.join("K7M2QX", { selfId: "intruder", reclaimToken: "not-the-token" })
+    ).rejects.toThrow(/reclaim/i);
+
+    await host.leave();
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
 // handlers.ts persistent guard — post-ICE session lifecycle
 // ─────────────────────────────────────────────────────────────────────────────
 

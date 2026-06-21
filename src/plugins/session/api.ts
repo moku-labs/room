@@ -177,12 +177,16 @@ export function createSessionApi(deps: SessionDeps): SessionApi {
     /** @inheritdoc */
     persistSnapshot(snapshot: import("../../contracts").Snapshot, sSeq: number): void {
       if (deps.state.role !== "host") return; // No-op on controller.
+      // Capture the DO reclaim token (serverSignaling only; null otherwise) so a host reload can
+      // re-attach to the warm room (§5.1, D25). exact-optional: omit the key when there is none.
+      const reclaimToken = deps.requireTransport().reclaimToken();
       recordSnapshot(deps, {
         roomCode: deps.state.roomCode,
         hostToken: deps.state.hostToken,
         snapshot,
         sSeq,
-        savedAt: Date.now()
+        savedAt: Date.now(),
+        ...(reclaimToken === null ? {} : { reclaimToken })
       });
     },
 

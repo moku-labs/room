@@ -314,6 +314,12 @@ type ServerSessionImpl = {
   /** Test-only: simulate the DO sending `{kind:"evict"}`. Fires the registered `onEvict` callback. */
   _evict(): void;
   readonly persistent: true;
+  /**
+   * The simulated DO-issued host re-entry token (host sessions only — controllers get none). Minted on
+   * the first host `join` and re-used (not re-minted) when the host re-joins with a matching
+   * `opts.reclaimToken`, mirroring the real DO's stable-token reclaim (§1.3/§5.1, D25).
+   */
+  readonly reclaimToken?: string;
 };
 
 /**
@@ -345,12 +351,18 @@ function notifyServerPeer(member: ServerMember, peerId: string): void {
  */
 function inMemoryServer(): Signaling {
   const rooms = new Map<string, ServerRoom>();
+  // code → the host's reclaim token, so a host reload that presents a matching token re-attaches to the
+  // warm room (controllers preserved) instead of opening a fresh one (mirrors the DO, §1.3/§5.1, D25).
+  const reclaimTokens = new Map<string, string>();
 
   /**
-   * Joins the server-sim bus and returns a `persistent: true` session.
+   * Joins the server-sim bus and returns a `persistent: true` session. A host `join` mints (or, on a
+   * matching `opts.reclaimToken`, re-uses) a reclaim token exposed on `session.reclaimToken`; the
+   * existing-member announce loop already re-notifies live controllers, so a reclaim re-binds the host
+   * to the warm room.
    *
    * @param code - The room code to join.
-   * @param opts - Self id and passive/active role.
+   * @param opts - Self id, passive/active role, and an optional host-reload `reclaimToken`.
    * @returns A persistent server-sim session with `onEvict` and `_evict()`.
    * @example
    * ```ts
@@ -371,6 +383,20 @@ function inMemoryServer(): Signaling {
       pendingPeers: []
     };
 
+    // Host re-entry token (host only): re-use the presented token when it matches the stored one
+    // (reclaim), mint a fresh one on the host's first join, and REJECT a presented-but-unknown token —
+    // mirroring the real DO's error+close(1008) so the sim cannot give a reclaim-rejection false pass.
+    // Controllers get none.
+    let reclaimToken: string | undefined;
+    if (!self.passive) {
+      const stored = reclaimTokens.get(code);
+      if (opts.reclaimToken !== undefined && opts.reclaimToken !== stored) {
+        throw new Error("serverSignaling(inMemory): reclaim rejected — unknown reclaim token");
+      }
+      reclaimToken = opts.reclaimToken ?? globalThis.crypto.randomUUID();
+      reclaimTokens.set(code, reclaimToken);
+    }
+
     const existing = [...room.members.values()];
     room.members.set(self.selfId, self);
     for (const other of existing) {
@@ -382,6 +408,7 @@ function inMemoryServer(): Signaling {
     /* eslint-disable jsdoc/require-jsdoc -- structural server-sim SignalingSession; semantics documented on the contract in contracts.ts §1 and on ServerSessionImpl above */
     const session: ServerSessionImpl = {
       persistent: true,
+      ...(reclaimToken === undefined ? {} : { reclaimToken }),
       onPeer(cb) {
         self.onPeer = cb;
         const queued = self.pendingPeers.splice(0);

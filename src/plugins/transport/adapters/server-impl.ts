@@ -47,8 +47,13 @@ function waitForClose(ws: WebSocket): Promise<void> {
  * Builds a live `SignalingSession` over a single persistent WebSocket to the room-hub worker.
  *
  * Protocol:
- *  - On open: sends `{kind:"join", selfId, role}`.
- *  - `join-ack`: resolves the promise; pre-existing `peers` are queued for `onPeer`.
+ *  - On open: sends `{kind:"join", selfId, role}` — or `{kind:"reclaim", selfId, reclaimToken}` when
+ *    `opts.reclaimToken` is set (host-reload re-entry, §1.3/§5.1, D25).
+ *  - `join-ack`: resolves the promise; pre-existing `peers` are queued for `onPeer`; the DO-issued
+ *    `reclaimToken` is exposed on `session.reclaimToken` for `session` to persist.
+ *  - `reclaim-ack`: resolves a reclaim `join` (the host re-attached to the warm DO); `peers` (the live
+ *    controllers) are queued for `onPeer` so the host re-offers; `session.reclaimToken` is the token
+ *    that was presented (the DO keeps it stable across reclaim).
  *  - `peer-arrived` → `onPeer` callback.
  *  - `peer-left` → `onPeerLeave` callback.
  *  - `relay` → `onSignal` callback.
@@ -119,9 +124,59 @@ export function buildServerSession(
       }
     }
 
-    // WS lifecycle: open → send join, error → reject, message → dispatch ServerEnvelope.
-    /* eslint-disable jsdoc/require-jsdoc -- anonymous WS event callbacks; documented by the parent function's JSDoc protocol section */
+    /**
+     * Builds the live `SignalingSession` once the DO acknowledges (`join-ack` or `reclaim-ack`). Shared
+     * by both acks so a reclaimed host and a fresh joiner get an identical session surface; the only
+     * difference is the `reclaimToken` carried (the DO mints it on `join-ack` and echoes the presented
+     * one on `reclaim-ack`).
+     *
+     * @param token - The DO-issued reclaim token to expose on `session.reclaimToken`.
+     * @returns The persistent signaling session.
+     * @example
+     * ```ts
+     * resolve(makeSession("f81d4fae-7dec-11d0-a765-00a0c91e6bf6"));
+     * ```
+     */
+    /* eslint-disable jsdoc/require-jsdoc -- structural SignalingSession methods; semantics are documented on the contract in contracts.ts §1 */
+    function makeSession(token: string | undefined): SignalingSession {
+      const base: SignalingSession = {
+        persistent: true,
+        onPeer(cb) {
+          onPeerCallback = cb;
+          // Drain any peers that arrived before onPeer was registered.
+          const queued = pendingPeers.splice(0);
+          for (const peerId of queued) cb(peerId);
+        },
+        onPeerLeave(cb) {
+          onPeerLeaveCallback = cb;
+        },
+        onSignal(cb) {
+          onSignalCallback = cb;
+        },
+        send(to, msg) {
+          sendFrame({ kind: "relay", to, msg });
+        },
+        async leave() {
+          ws.close(1000, "leave");
+          await waitForClose(ws);
+        },
+        onEvict(cb) {
+          onEvictCallback = cb;
+        }
+      };
+      // exactOptionalPropertyTypes: only attach reclaimToken when the DO actually issued one.
+      return token === undefined ? base : { ...base, reclaimToken: token };
+    }
+
+    // WS lifecycle: open → send join (or reclaim on host-reload re-entry), error → reject,
+    // message → dispatch ServerEnvelope.
     ws.addEventListener("open", () => {
+      // A persisted reclaim token means this is a host reload re-attaching to the warm DO (§5.1, D25):
+      // send {kind:"reclaim",…} so controllers keep their room; otherwise a normal {kind:"join",…}.
+      if (opts.reclaimToken !== undefined) {
+        sendFrame({ kind: "reclaim", selfId: opts.selfId, reclaimToken: opts.reclaimToken });
+        return;
+      }
       const role = opts.passive === true ? "controller" : "host";
       sendFrame({ kind: "join", selfId: opts.selfId, role });
     });
@@ -144,32 +199,17 @@ export function buildServerSession(
           for (const peerId of envelope.peers) {
             notifyPeer(peerId);
           }
-          const session: SignalingSession = {
-            persistent: true,
-            onPeer(cb) {
-              onPeerCallback = cb;
-              // Drain any peers that arrived before onPeer was registered.
-              const queued = pendingPeers.splice(0);
-              for (const peerId of queued) cb(peerId);
-            },
-            onPeerLeave(cb) {
-              onPeerLeaveCallback = cb;
-            },
-            onSignal(cb) {
-              onSignalCallback = cb;
-            },
-            send(to, msg) {
-              sendFrame({ kind: "relay", to, msg });
-            },
-            async leave() {
-              ws.close(1000, "leave");
-              await waitForClose(ws);
-            },
-            onEvict(cb) {
-              onEvictCallback = cb;
-            }
-          };
-          resolve(session);
+          // Expose the DO-issued reclaim token so session can persist it for host-reload re-entry.
+          resolve(makeSession(envelope.reclaimToken));
+          break;
+        }
+        case "reclaim-ack": {
+          // The host re-attached to the warm DO: its live controllers come back as `peers` so the host
+          // re-offers to each (the active side of the star); the presented token stays the session token.
+          for (const peerId of envelope.peers) {
+            notifyPeer(peerId);
+          }
+          resolve(makeSession(opts.reclaimToken));
           break;
         }
         case "peer-arrived": {
@@ -188,8 +228,7 @@ export function buildServerSession(
           onEvictCallback?.();
           break;
         }
-        // reclaim-ack, full, error — no action needed at the signaling-seam level.
-        case "reclaim-ack":
+        // full, error — no action needed at the signaling-seam level.
         case "full":
         case "error": {
           break;
@@ -199,6 +238,5 @@ export function buildServerSession(
         }
       }
     });
-    /* eslint-enable jsdoc/require-jsdoc */
   });
 }
