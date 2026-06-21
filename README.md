@@ -1,3 +1,5 @@
+<div align="center">
+
 # @moku-labs/room
 
 **Couch multiplayer for Moku — one shared screen, phones as controllers, connected peer-to-peer over the LAN.**
@@ -18,7 +20,14 @@ pre-composed Room plugin array into it — that is the whole integration model.
 
 <br/>
 
-[Install](#install) · [Why](#why-moku-labsroom) · [How it works](#how-it-works) · [Plugins](#plugins) · [Usage](#usage) · [Scripts](#scripts)
+[Install](#install) ·
+[Why](#why-moku-labsroom) ·
+[How it works](#how-it-works) ·
+[Plugins](#plugins) ·
+[Usage](#usage) ·
+[Scripts](#scripts)
+
+</div>
 
 ---
 
