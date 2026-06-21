@@ -1,8 +1,9 @@
 /**
- * @file Room-code generation (§6.2). A 6-char code (`ROOM_CODE_LENGTH`) drawn from
+ * @file Room-code generation (§6.2). A `codeLength`-char code (default `ROOM_CODE_LENGTH` = 6) drawn from
  * `crypto.getRandomValues` over a confusable-free alphanumeric alphabet (excludes `0/O`, `1/I/L`). No
  * server uniqueness check — collisions are an accepted per-room rendezvous risk for the home-LAN target
- * (D2/D6). Pure module: a seeded RNG can be injected in tests.
+ * (D2/D6). Pure module: a seeded RNG and custom length can be injected in tests. `serverSignaling`
+ * deployments SHOULD pass `length: 8` (~57 bits) to resist room-code enumeration (D24, Cycle 2).
  * @see ../README.md
  */
 
@@ -15,18 +16,24 @@ import { ROOM_CODE_LENGTH } from "../../../contracts";
 const ALPHABET = "ABCDEFGHJKMNPQRSTUVWXYZ23456789";
 
 /**
- * Generates a fresh room code: `ROOM_CODE_LENGTH` characters drawn uniformly from the confusable-free
+ * Generates a fresh room code: `length` characters drawn uniformly from the confusable-free
  * alphabet via `crypto.getRandomValues` (§6.2). The optional `randomBytes` seam lets unit tests inject a
- * deterministic source.
+ * deterministic source. The optional `length` parameter defaults to `ROOM_CODE_LENGTH` (6) so existing
+ * callers are unaffected; `serverSignaling` deployments pass `8` for ~57 bits of entropy (D24, Cycle 2).
  *
  * @param randomBytes - Optional injectable RNG returning `n` random bytes; defaults to `crypto.getRandomValues`.
- * @returns A 6-character room code drawn from the confusable-free alphabet.
+ * @param length - Number of characters to generate. Defaults to `ROOM_CODE_LENGTH` (6).
+ * @returns A room code of `length` characters drawn from the confusable-free alphabet.
  * @example
  * ```ts
- * const code = generateRoomCode(); // e.g. "G7K2QF"
+ * const code = generateRoomCode(); // e.g. "G7K2QF" (6 chars, default)
+ * const longCode = generateRoomCode(undefined, 8); // e.g. "G7K2QFAB" (8 chars, serverSignaling)
  * ```
  */
-export function generateRoomCode(randomBytes?: (n: number) => Uint8Array): string {
+export function generateRoomCode(
+  randomBytes?: (n: number) => Uint8Array,
+  length: number = ROOM_CODE_LENGTH
+): string {
   const getRandBytes =
     randomBytes ??
     ((n: number): Uint8Array => {
@@ -41,12 +48,12 @@ export function generateRoomCode(randomBytes?: (n: number) => Uint8Array): strin
   const maxUsable = Math.floor(256 / alphabetLength) * alphabetLength;
 
   let code = "";
-  while (code.length < ROOM_CODE_LENGTH) {
-    const bytes = getRandBytes(ROOM_CODE_LENGTH * 2);
+  while (code.length < length) {
+    const bytes = getRandBytes(length * 2);
     for (const byte of bytes) {
       if (byte < maxUsable) {
         code += ALPHABET[byte % alphabetLength];
-        if (code.length === ROOM_CODE_LENGTH) break;
+        if (code.length === length) break;
       }
     }
   }

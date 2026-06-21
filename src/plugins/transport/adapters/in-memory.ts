@@ -10,6 +10,11 @@
  * `RTCPeerConnection`. Real adapters omit this capability and transport falls back to the WebRTC
  * handshake. A module-level registry keyed by `code` pairs sessions — an intentional process-global
  * test/dev bus, distinct from per-app plugin state (D14 governs plugin state, not this adapter bus).
+ *
+ * When called with `{ server: true }`, `inMemory` returns a **server-mode** adapter that simulates the
+ * §1.3 server protocol (join / peer-arrived / relay / reclaim / evict) and returns `persistent: true`
+ * sessions, so persistent-reconnect + host-reload recovery are testable without a live Durable Object.
+ * The default (no-arg / `{ server: false }`) path is byte-for-byte unchanged (D23).
  */
 import type { Signaling, SignalingJoinOpts, SignalMsg } from "../../../contracts";
 import type { LoopbackEndpoint, LoopbackSignaling } from "../channel";
@@ -116,21 +121,51 @@ function notifyPeer(member: Member, peerId: string): void {
 }
 
 /**
+ * Options for {@link inMemory}. The default (omitted / `{ server: false }`) returns the original
+ * loopback adapter unchanged. `{ server: true }` activates the server-protocol simulation (D23):
+ * sessions return `persistent: true` and expose `onEvict` + a test-only `_evict()` escape hatch.
+ *
+ * @example
+ * ```ts
+ * const sig = inMemory({ server: true }); // server-sim mode for persistent-session tests
+ * ```
+ */
+export type InMemoryOptions = {
+  /**
+   * When `true`, activates the §1.3 server-protocol simulation: sessions are `persistent: true` and
+   * expose `onEvict`. Used to test persistent-reconnect + host-reload recovery without a live DO (D23).
+   */
+  readonly server?: boolean;
+};
+
+/**
  * Creates an in-process `Signaling` adapter (contracts section 1). Sessions joined on the same `code`
  * share one in-memory bus: each fires the other's `onPeer`, and `send` delivers `SignalMsg`s to the
  * recipient's `onSignal`. On pairing it also opens an in-process `WireChannel` pair (the loopback
  * capability) so transport carries real frames end-to-end with no `RTCPeerConnection`. `leave()` is
  * idempotent. Used by `tests/integration/` for a deterministic transport (the DOM-free proof, D12).
  *
+ * Pass `{ server: true }` to activate the §1.3 server-protocol simulation (persistent sessions +
+ * `onEvict` + `_evict()` escape hatch) so persistent-reconnect tests run without a live DO (D23).
+ *
+ * @param options - Optional mode selector (`{ server: true }` for server-sim).
  * @returns A `Signaling` adapter backed by an in-process, per-`code` bus.
  * @example
  * ```ts
  * const sig = inMemory();
  * const host = await sig.join("K7M2QX", { selfId: "host_root" });
  * const ctrl = await sig.join("K7M2QX", { selfId: "p_ab12", passive: true });
+ *
+ * // Server-sim mode (persistent sessions, onEvict):
+ * const serverSig = inMemory({ server: true });
+ * const serverSession = await serverSig.join("K7M2QX", { selfId: "host_root" });
+ * serverSession.onEvict?.(() => void 0);
  * ```
  */
-export function inMemory(): Signaling {
+export function inMemory(options?: InMemoryOptions): Signaling {
+  if (options?.server === true) {
+    return inMemoryServer();
+  }
   const rooms = new Map<string, Room>();
 
   /**
@@ -244,3 +279,169 @@ type SignalingSessionImpl = LoopbackSignaling & {
   send(peerId: string, msg: SignalMsg): void;
   leave(): Promise<void>;
 };
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Server-protocol simulation (D23 — `inMemory({ server: true })`)
+// ─────────────────────────────────────────────────────────────────────────────
+
+/** A live participant on the server-sim bus — one per `join` call. */
+type ServerMember = {
+  readonly selfId: string;
+  readonly passive: boolean;
+  onPeer: ((peerId: string) => void) | null;
+  onPeerLeave: ((peerId: string) => void) | null;
+  onSignal: ((peerId: string, msg: SignalMsg) => void) | null;
+  onEvict: (() => void) | null;
+  readonly pendingPeers: string[];
+};
+
+/** A room on the server-sim bus. */
+type ServerRoom = {
+  readonly members: Map<string, ServerMember>;
+};
+
+/**
+ * The server-sim session shape: `SignalingSession` plus a test-only `_evict()` escape hatch that
+ * fires the registered `onEvict` callback, simulating a DO eviction for integration tests.
+ */
+type ServerSessionImpl = {
+  onPeer(cb: (peerId: string) => void): void;
+  onPeerLeave(cb: (peerId: string) => void): void;
+  onSignal(cb: (peerId: string, msg: SignalMsg) => void): void;
+  send(peerId: string, msg: SignalMsg): void;
+  leave(): Promise<void>;
+  onEvict(cb: () => void): void;
+  /** Test-only: simulate the DO sending `{kind:"evict"}`. Fires the registered `onEvict` callback. */
+  _evict(): void;
+  readonly persistent: true;
+  /**
+   * The simulated DO-issued host re-entry token (host sessions only — controllers get none). Minted on
+   * the first host `join` and re-used (not re-minted) when the host re-joins with a matching
+   * `opts.reclaimToken`, mirroring the real DO's stable-token reclaim (§1.3/§5.1, D25).
+   */
+  readonly reclaimToken?: string;
+};
+
+/**
+ * Delivers a peer arrival to `member` now if its `onPeer` is registered, else queues it
+ * on `pendingPeers` so a later `onPeer` registration drains it (mirrors `notifyPeer` above).
+ *
+ * @param member - The server-sim bus member to notify.
+ * @param peerId - The id of the peer that just joined the same code.
+ * @example
+ * ```ts
+ * notifyServerPeer(hostMember, "p_ab12");
+ * ```
+ */
+function notifyServerPeer(member: ServerMember, peerId: string): void {
+  if (member.onPeer) member.onPeer(peerId);
+  else member.pendingPeers.push(peerId);
+}
+
+/**
+ * Server-simulation variant of the in-process `Signaling` adapter. Sessions return
+ * `persistent: true` and expose `onEvict` + a `_evict()` test escape hatch to simulate DO eviction.
+ * The bus semantics (star topology, `send`/`onSignal` relay) mirror the default `inMemory()`.
+ *
+ * @returns A `Signaling` adapter with server-sim persistent sessions.
+ * @example
+ * ```ts
+ * const sig = inMemoryServer(); // called by inMemory({ server: true })
+ * ```
+ */
+function inMemoryServer(): Signaling {
+  const rooms = new Map<string, ServerRoom>();
+  // code → the host's reclaim token, so a host reload that presents a matching token re-attaches to the
+  // warm room (controllers preserved) instead of opening a fresh one (mirrors the DO, §1.3/§5.1, D25).
+  const reclaimTokens = new Map<string, string>();
+
+  /**
+   * Joins the server-sim bus and returns a `persistent: true` session. A host `join` mints (or, on a
+   * matching `opts.reclaimToken`, re-uses) a reclaim token exposed on `session.reclaimToken`; the
+   * existing-member announce loop already re-notifies live controllers, so a reclaim re-binds the host
+   * to the warm room.
+   *
+   * @param code - The room code to join.
+   * @param opts - Self id, passive/active role, and an optional host-reload `reclaimToken`.
+   * @returns A persistent server-sim session with `onEvict` and `_evict()`.
+   * @example
+   * ```ts
+   * const session = await inMemoryServer().join("K7M2QX", { selfId: "host_root" });
+   * ```
+   */
+  const join = async (code: string, opts: SignalingJoinOpts): Promise<ServerSessionImpl> => {
+    const room = rooms.get(code) ?? { members: new Map<string, ServerMember>() };
+    rooms.set(code, room);
+
+    const self: ServerMember = {
+      selfId: opts.selfId,
+      passive: opts.passive ?? false,
+      onPeer: null,
+      onPeerLeave: null,
+      onSignal: null,
+      onEvict: null,
+      pendingPeers: []
+    };
+
+    // Host re-entry token (host only): re-use the presented token when it matches the stored one
+    // (reclaim), mint a fresh one on the host's first join, and REJECT a presented-but-unknown token —
+    // mirroring the real DO's error+close(1008) so the sim cannot give a reclaim-rejection false pass.
+    // Controllers get none.
+    let reclaimToken: string | undefined;
+    if (!self.passive) {
+      const stored = reclaimTokens.get(code);
+      if (opts.reclaimToken !== undefined && opts.reclaimToken !== stored) {
+        throw new Error("serverSignaling(inMemory): reclaim rejected — unknown reclaim token");
+      }
+      reclaimToken = opts.reclaimToken ?? globalThis.crypto.randomUUID();
+      reclaimTokens.set(code, reclaimToken);
+    }
+
+    const existing = [...room.members.values()];
+    room.members.set(self.selfId, self);
+    for (const other of existing) {
+      if (self.passive && other.passive) continue;
+      self.pendingPeers.push(other.selfId);
+      notifyServerPeer(other, self.selfId);
+    }
+
+    /* eslint-disable jsdoc/require-jsdoc -- structural server-sim SignalingSession; semantics documented on the contract in contracts.ts §1 and on ServerSessionImpl above */
+    const session: ServerSessionImpl = {
+      persistent: true,
+      ...(reclaimToken === undefined ? {} : { reclaimToken }),
+      onPeer(cb) {
+        self.onPeer = cb;
+        const queued = self.pendingPeers.splice(0);
+        for (const peerId of queued) cb(peerId);
+      },
+      onPeerLeave(cb) {
+        self.onPeerLeave = cb;
+      },
+      onSignal(cb) {
+        self.onSignal = cb;
+      },
+      onEvict(cb) {
+        self.onEvict = cb;
+      },
+      send(peerId, msg) {
+        room.members.get(peerId)?.onSignal?.(self.selfId, msg);
+      },
+      async leave() {
+        if (!room.members.has(self.selfId)) return;
+        room.members.delete(self.selfId);
+        for (const [peerId] of room.members) {
+          const other = room.members.get(peerId);
+          other?.onPeerLeave?.(self.selfId);
+        }
+        if (room.members.size === 0) rooms.delete(code);
+      },
+      _evict() {
+        self.onEvict?.();
+      }
+    };
+    /* eslint-enable jsdoc/require-jsdoc */
+    return session;
+  };
+
+  return { join };
+}

@@ -9,7 +9,7 @@
  * `ctx`): `@moku-labs/web` infers `ctx` inline in `index.ts`, so the declared `room:network-warning`
  * event flows into the bound `emitWarning` closure.
  */
-import type { RoomEvents, Wire } from "../../contracts";
+import type { RoomEvents, SignalingJoinOpts, Wire } from "../../contracts";
 import { createWire, disconnectPeer, startHeartbeat, tearDownState } from "./channel";
 import { handlePeerArrival, handlePeerLeave, handleSignal } from "./handlers";
 import type { ConnectOpts, TransportApi, TransportConfig, TransportState } from "./types";
@@ -54,12 +54,20 @@ export function createTransportApi(
         });
         state.session = null;
       }
+      // Star role → passive flag; thread the host-reload reclaim token only when present (exact-optional:
+      // omit the key entirely rather than passing `undefined`). serverSignaling sends {kind:"reclaim"}
+      // when it is set; other adapters ignore it (contracts §1.3, D25).
+      const joinOpts: SignalingJoinOpts =
+        opts.reclaimToken === undefined
+          ? { selfId: opts.selfId, passive: opts.role === "controller" }
+          : {
+              selfId: opts.selfId,
+              passive: opts.role === "controller",
+              reclaimToken: opts.reclaimToken
+            };
       let session: TransportState["session"];
       try {
-        session = await config.signaling.join(opts.code, {
-          selfId: opts.selfId,
-          passive: opts.role === "controller"
-        });
+        session = await config.signaling.join(opts.code, joinOpts);
       } catch (error) {
         emitWarning("rendezvous-unreachable");
         throw error;
@@ -70,6 +78,9 @@ export function createTransportApi(
       );
       session.onSignal((peerId, msg) => handleSignal(state, config, peerId, msg));
       session.onPeerLeave(peerId => handlePeerLeave(state, peerId));
+      // onEvict wiring (contracts §1.1, D25): surfaces serverSignaling eviction as a network warning.
+      // No-op for publicRendezvous/inMemory (onEvict is optional; contracts §1.1).
+      session.onEvict?.(() => emitWarning("room-evicted"));
       startHeartbeat(state, config, reason => emitWarning(reason));
     },
 
@@ -81,6 +92,11 @@ export function createTransportApi(
     /** @inheritdoc */
     disconnect(peerId): void {
       disconnectPeer(state, peerId);
+    },
+
+    /** @inheritdoc */
+    reclaimToken(): string | null {
+      return state.session?.reclaimToken ?? null;
     },
 
     /** @inheritdoc */

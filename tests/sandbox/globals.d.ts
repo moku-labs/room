@@ -7,14 +7,17 @@
  */
 import type { RoomDescriptor } from "../../src/index";
 
-/** Host handle published by `stage.ts` once `createRoom()` has opened a room. */
+/** Host handle published by `stage.ts` once a room is open (freshly created OR reclaimed on host reload). */
 type RoomStageHandle = {
   /** The 6-char room code controllers join with. */
   readonly code: string;
   /** The full controller join URL the QR encodes. */
   readonly joinUrl: string;
-  /** The verbatim descriptor `stage.createRoom()` returned. */
-  readonly descriptor: RoomDescriptor;
+  /**
+   * The verbatim descriptor `stage.createRoom()` returned. Absent on a host-reload RECLAIM, where the room
+   * was restored from the persisted re-entry record rather than minted by a fresh `createRoom()` call.
+   */
+  readonly descriptor?: RoomDescriptor;
 };
 
 /** Controller handle published by `controller.ts`; `joined` flips to `true` once the channel is live. */

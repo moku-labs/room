@@ -43,3 +43,7 @@ report.[0-9]_.[0-9]_.[0-9]_.[0-9]_.json
 test-results
 playwright-report
 tests/sandbox/dist
+
+# Wrangler dev (worker e2e harness) — transient local state, never committed
+tests/sandbox/.wrangler
+.wrangler-sandbox

@@ -194,6 +194,13 @@ export type ConnectOpts = {
   readonly selfId: PeerId;
   /** The 6-char room code that scopes the rendezvous (contracts section 6.2). */
   readonly code: string;
+  /**
+   * (`serverSignaling` host reload only) The DO-issued reclaim token persisted across the reload,
+   * threaded into `Signaling.join` so the warm Durable Object re-binds this host instead of opening a
+   * fresh room (contracts §1.3, §5.1, D25). Omitted on a normal host/controller connect and ignored by
+   * `publicRendezvous`/`inMemory` (no DO to reclaim).
+   */
+  readonly reclaimToken?: string;
 };
 
 /**
@@ -298,6 +305,22 @@ export type TransportApi = {
    * ```
    */
   onPeerConnected(cb: (peerId: PeerId) => void): () => void;
+
+  /**
+   * Returns the DO-issued host re-entry token from the active `serverSignaling` session's
+   * `join-ack`/`reclaim-ack` (contracts §1.3), or `null` for non-server adapters and before/after a live
+   * session. `sessionPlugin` reads it after `connect()` resolves and persists it in the
+   * `HostReentryRecord`, then feeds it back via {@link ConnectOpts.reclaimToken} on host-reload re-entry
+   * so the warm DO re-binds the host (§5.1, D25).
+   *
+   * @returns The persistent session's reclaim token, or `null` when there is none.
+   * @example
+   * ```ts
+   * await app.transport.connect({ role: "host", selfId, code });
+   * const token = app.transport.reclaimToken(); // persist for host-reload re-entry
+   * ```
+   */
+  reclaimToken(): string | null;
 
   /**
    * Registers the single consumer fired when an ESTABLISHED peer is lost via the heartbeat dead-peer

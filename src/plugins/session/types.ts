@@ -88,6 +88,13 @@ export type SessionConfig = {
    * `"moku.room"`.
    */
   readonly storageKeyPrefix: string;
+  /**
+   * Number of characters in a minted room code. Default `ROOM_CODE_LENGTH` (6) from contracts §6.2.
+   * **`serverSignaling` deployments SHOULD set `8`** (~57 bits) to resist room-code enumeration of
+   * the public DO endpoint (D24, Cycle 2). `lifecycle/code.ts` reads this; the `ROOM_CODE_LENGTH`
+   * const is unchanged. Optional + defaulted — additive, non-breaking for existing consumers.
+   */
+  readonly codeLength?: number;
 };
 
 /** This device's role for the current room. `"none"` until `createRoom`/`joinRoom` is called. */
@@ -190,6 +197,13 @@ export type HostReentryRecord = {
   readonly sSeq: number;
   /** Epoch-ms the record was written (staleness check on reload). */
   readonly savedAt: number;
+  /**
+   * (`serverSignaling` deployments only) The DO-issued host re-entry token captured from
+   * `transport.reclaimToken()` after `connect()`. Replayed via `ConnectOpts.reclaimToken` on host reload
+   * so the warm Durable Object re-binds this host instead of opening a fresh room (§1.3/§5.1, D25).
+   * Absent on `publicRendezvous`/`inMemory` deployments (no DO ⇒ no token).
+   */
+  readonly reclaimToken?: string;
 };
 
 /** Lightweight QR payload: the module size + a row-major boolean matrix the consumer renders however it likes. */

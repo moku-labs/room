@@ -6,8 +6,9 @@
 
 ## Responsibilities
 
-1. **Room lifecycle** (`api.ts` + `lifecycle/`) — `createRoom()` (host, mints a 6-char code + join URL +
-   `hostToken`, synchronously), `qr()` (host, async — builds the join-QR matrix; the encoder is
+1. **Room lifecycle** (`api.ts` + `lifecycle/`) — `createRoom()` (host, mints a room code [6 chars by
+   default; see `codeLength`] + join URL + `hostToken`, synchronously), `qr()` (host, async — builds the
+   join-QR matrix; the encoder is
    lazy-imported so it stays out of the controller bundle), `joinRoom(code)` (controller, passive),
    `leave()`, `rejoin()`. Delegates the SDP/ICE handshake to `transport` (the `Signaling` seam) — never
    touches `RTCPeerConnection` directly.
@@ -71,7 +72,11 @@ migration deferred to v2). `recovery/` does not pretend to recover a crash.
 All fields default; override via `createApp({ pluginConfigs: { session: { ... } } })`. Defaults encode
 the D11 / contracts §5 constants: `joinUrlBase:""`, `generateQr:true`, `maxControllers:8`,
 `snapshotDebounceMs:500`, `reconnectTimeoutMs:10_000`, `intentBufferMax:256`, `intentBufferMaxAgeMs:8000`,
-`storageKeyPrefix:"moku.room"`.
+`storageKeyPrefix:"moku.room"`, `codeLength:6`.
+
+`codeLength` (default `ROOM_CODE_LENGTH` = 6) sets the generated room-code length. `serverSignaling`
+deployments SHOULD set `codeLength: 8` (~57 bits) to resist room-code enumeration of the public
+Durable-Object endpoint (D24, security baseline). The default (6) is unchanged for existing consumers.
 
 ## Structure
 

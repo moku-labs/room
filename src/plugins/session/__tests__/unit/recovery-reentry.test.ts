@@ -473,6 +473,31 @@ describe("recovery/reentry", () => {
       expect(readSpy).toHaveBeenCalledWith(deps);
     });
 
+    it("with a serverSignaling record: replays the reclaim token into transport.connect", () => {
+      const record: HostReentryRecord = {
+        roomCode: "RELOADX",
+        hostToken: "tok-h",
+        snapshot: {},
+        sSeq: 3,
+        savedAt: 1_700_000_000_003,
+        reclaimToken: "tok-DO"
+      };
+      vi.spyOn(persistence, "readReentryRecord").mockReturnValue(record);
+      vi.spyOn(persistence, "armPersistence").mockReturnValue({
+        flushNow: vi.fn(),
+        dispose: vi.fn()
+      });
+
+      const deps = makeDeps();
+
+      detectHostReload(deps);
+
+      const transport = deps.requireTransport();
+      expect(vi.mocked(transport.connect)).toHaveBeenCalledWith(
+        expect.objectContaining({ role: "host", code: "RELOADX", reclaimToken: "tok-DO" })
+      );
+    });
+
     it("with a record: a pre-set selfId is preserved (not re-minted)", async () => {
       const record: HostReentryRecord = {
         roomCode: "RELOAD2",

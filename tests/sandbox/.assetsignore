@@ -1,0 +1,9 @@
+# Files in this folder that `wrangler dev` must NOT serve as static assets (it points `assets.directory`
+# here so it can reach the sibling HTML). Keeps the worker's ASSETS surface to the actual web client:
+# the HTML pages, styles.css, and the built dist/*.js — never the TypeScript sources, dev config, or docs.
+*.ts
+*.jsonc
+*.md
+.assetsignore
+.wrangler
+dist/*.map

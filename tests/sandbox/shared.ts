@@ -21,7 +21,7 @@
  */
 import { createApp } from "@moku-labs/web/browser";
 import type { Signaling } from "../../src/index";
-import { inMemory, publicRendezvous, roomPlugins } from "../../src/index";
+import { inMemory, publicRendezvous, roomPlugins, serverSignaling } from "../../src/index";
 
 /** The single authoritative sync slice the demo game keeps — a per-peer tap scoreboard (`peerId → count`). */
 export const SCORES = "scores";
@@ -36,17 +36,40 @@ export const SANDBOX_PORT = 5179;
 export const ROOM_PARAM = "room";
 
 /**
- * Selects the signaling backbone from the page URL so the sandbox can run two ways without a rebuild:
+ * Resolves the same-origin `ws(s)://<host>` base for the worker-backed signaling hub. `serverSignaling`
+ * appends `/<code>` to reach the per-room Durable Object, so this is just the page origin re-schemed to the
+ * WebSocket protocol — `wrangler dev` serves the client AND the DO from one origin (`bun run sandbox:worker`
+ * on :5180), and a real deploy is `wss://` behind TLS.
+ *
+ * @returns The `ws://`/`wss://` origin of the room-hub worker.
+ * @example
+ * ```ts
+ * workerWsOrigin(); // on http://localhost:5180 → "ws://localhost:5180"
+ * ```
+ */
+function workerWsOrigin(): string {
+  const location = globalThis.location;
+  const secure = location?.protocol === "https:";
+  const host = location?.host ?? "localhost:5180";
+  return `${secure ? "wss:" : "ws:"}//${host}`;
+}
+
+/**
+ * Selects the signaling backbone from the page URL so the sandbox can run three ways without a rebuild:
  * `?signaling=memory` uses the in-process `inMemory()` bus (single JS context only — handy for a
- * deterministic same-page smoke test), anything else (the default) uses the real `publicRendezvous`
- * serverless WebRTC path (the two-device v1 GATE). A `?backbone=torrent` switches the BitTorrent fallback.
+ * deterministic same-page smoke test); `?signaling=server` uses the worker-backed `serverSignaling` adapter
+ * over the same-origin room-hub DO (the `wrangler dev` worker harness, D21/D25); anything else (the default)
+ * uses the real serverless `publicRendezvous` WebRTC path (the two-device v1 GATE). A `?backbone=torrent`
+ * switches the BitTorrent fallback for the `publicRendezvous` path.
  *
  * @returns The chosen `Signaling` adapter instance.
  */
 export function pickSignaling(): Signaling {
   const params = new URLSearchParams(globalThis.location?.search ?? "");
+  const mode = params.get("signaling");
 
-  if (params.get("signaling") === "memory") return inMemory();
+  if (mode === "memory") return inMemory();
+  if (mode === "server") return serverSignaling(workerWsOrigin());
 
   const backbone = params.get("backbone") === "torrent" ? "torrent" : "nostr";
   return publicRendezvous({ backbone });

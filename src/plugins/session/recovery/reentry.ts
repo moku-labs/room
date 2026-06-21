@@ -124,13 +124,17 @@ export function detectHostReload(deps: SessionDeps): void {
   // Emit the host-reconnecting signal.
   deps.emit.hostReconnecting({});
 
-  // Instruct transport to rejoin the same room code (async, but we don't await in onInit).
+  // Instruct transport to rejoin the same room code (async, but we don't await in onInit). Replay the
+  // persisted reclaim token (serverSignaling only) so the warm DO re-binds this host and its controllers
+  // re-handshake, instead of opening a fresh, empty room (§1.3/§5.1, D25). exact-optional: omit the key
+  // when there is no token (publicRendezvous/inMemory deployments).
   const transport = deps.requireTransport();
   transport
     .connect({
       role: "host",
       selfId: deps.state.selfId,
-      code: record.roomCode
+      code: record.roomCode,
+      ...(record.reclaimToken === undefined ? {} : { reclaimToken: record.reclaimToken })
     })
     .catch(() => {
       // Best-effort: failure is surfaced via room:network-warning from transport.

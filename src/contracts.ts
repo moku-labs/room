@@ -136,6 +136,14 @@ export type SignalingJoinOpts = {
    * authoritative star hub; controllers are passive. See §6 (star topology).
    */
   readonly passive?: boolean;
+  /**
+   * (`serverSignaling` only) The DO-issued host re-entry token from a PRIOR `join-ack`, persisted by
+   * `session` across a host reload (§5.1). When present, `serverSignaling` sends a `{kind:"reclaim",…}`
+   * envelope (§1.3) INSTEAD of `{kind:"join"}`, so the warm Durable Object re-binds this host to the
+   * existing room (controllers re-handshake) rather than spinning up a fresh, empty room. Ignored by
+   * `publicRendezvous`/`inMemory` (they have no DO to reclaim) — they perform a normal join (D25).
+   */
+  readonly reclaimToken?: string;
 };
 
 /**
@@ -185,6 +193,34 @@ export type SignalingSession = {
    * @returns A promise that resolves once the session resources are released.
    */
   leave(): Promise<void>;
+
+  /**
+   * (serverSignaling only) Registers a callback fired when the server signals imminent room teardown
+   * (`ServerEnvelope {kind:"evict"}`, §1.3) — the DO is about to TTL-`deleteAll()`. `transport/handlers.ts`
+   * registers this and emits `room:network-warning {reason:"room-evicted"}` (§3.1) so the UI warns instead
+   * of silently re-handshaking — the adapter itself has no `ctx.emit`. No-op for `publicRendezvous`/
+   * `inMemory` (they never call it).
+   *
+   * @param cb - Invoked once when the session learns the room is being evicted.
+   */
+  onEvict?(cb: () => void): void;
+
+  /**
+   * When `true`, this session MUST persist after the WebRTC DataChannel reaches `connected`
+   * (transport does NOT call `leave()` post-ICE). Set ONLY by `serverSignaling`: the WS stays open
+   * as the in-band discovery-push channel and the host-reload reclaim conduit. Absent/`false` for
+   * `publicRendezvous`/`inMemory` ⇒ unchanged "leave once connected" lifecycle (§1.2, D25).
+   */
+  readonly persistent?: true;
+
+  /**
+   * (`serverSignaling` only) The DO-issued host re-entry token carried in the `join-ack`/`reclaim-ack`
+   * (§1.3). `session` reads it after `connect()` (via `transport.reclaimToken()`), persists it in the
+   * `HostReentryRecord`, and feeds it back through {@link SignalingJoinOpts.reclaimToken} on the next
+   * host-reload `join` — completing the host-reclaim conduit (§5.1, D25). Absent for
+   * `publicRendezvous`/`inMemory` (no DO ⇒ no token); host reload there falls back to a fresh room.
+   */
+  readonly reclaimToken?: string;
 };
 
 /**
@@ -203,6 +239,39 @@ export type Signaling = {
    */
   join(code: string, opts: SignalingJoinOpts): Promise<SignalingSession>;
 };
+
+// ---------------------------------------------------------------------------
+// §1.3 — Server protocol envelopes (sibling unions to `SignalMsg`, DOM-free).
+// The persistent client↔Durable-Object WebSocket protocol for `serverSignaling`
+// (D21/D23). NOT merged into `SignalMsg` (preserves its handshake-only invariant);
+// the `relay` variant CARRIES a `SignalMsg`. Single home in this file (D16) so the
+// `inMemory` adapter can simulate the full server path before a real DO exists.
+// ---------------------------------------------------------------------------
+
+/**
+ * Client → Durable-Object control + relay frames on the persistent `serverSignaling` WebSocket.
+ * DOM-free / plain-JSON so the DO (workerd) and the `inMemory` simulator both handle it untouched.
+ * The `relay` variant carries a §1 {@link SignalMsg} — the DO never inspects gameplay (D2/D21).
+ */
+export type ClientEnvelope =
+  | { readonly kind: "join"; readonly selfId: PeerId; readonly role: "host" | "controller" }
+  | { readonly kind: "reclaim"; readonly selfId: PeerId; readonly reclaimToken: string }
+  | { readonly kind: "relay"; readonly to: PeerId; readonly msg: SignalMsg };
+
+/**
+ * Durable-Object → client control + relay frames. `peer-arrived` is the offerer cue (mirrors the
+ * §1 `onPeer` callback); `relay` delivers another peer's {@link SignalMsg}; `evict` precedes the DO's
+ * TTL `deleteAll()` and maps to `room:network-warning {reason:"room-evicted"}` (§3, D25).
+ */
+export type ServerEnvelope =
+  | { readonly kind: "join-ack"; readonly peers: readonly PeerId[]; readonly reclaimToken: string }
+  | { readonly kind: "peer-arrived"; readonly peerId: PeerId; readonly role: "host" | "controller" }
+  | { readonly kind: "peer-left"; readonly peerId: PeerId }
+  | { readonly kind: "reclaim-ack"; readonly peers: readonly PeerId[] }
+  | { readonly kind: "relay"; readonly from: PeerId; readonly msg: SignalMsg }
+  | { readonly kind: "full" }
+  | { readonly kind: "evict" }
+  | { readonly kind: "error"; readonly code: number; readonly message: string };
 
 // ---------------------------------------------------------------------------
 // §2 — The typed `Wire` channel + `Frame` union (device↔host DataChannel).
@@ -370,5 +439,7 @@ export type RoomEvents = {
   /** The first authoritative frame (snapshot, or gap-free delta) has been applied; replica readable (§4). */
   "room:sync-ready": Record<string, never>;
   /** A network condition surfaced to the consumer for failure UX (D2 accepted hard-failure). */
-  "room:network-warning": { reason: "ice-failed" | "rendezvous-unreachable" | "channel-closed" };
+  "room:network-warning": {
+    reason: "ice-failed" | "rendezvous-unreachable" | "channel-closed" | "room-evicted";
+  };
 };

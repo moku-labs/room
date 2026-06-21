@@ -10,6 +10,8 @@ export default [
     ignores: [
       "dist/**",
       "tests/sandbox/dist/**",
+      "tests/sandbox/.wrangler/**",
+      ".wrangler-sandbox/**",
       "coverage/**",
       "bun.lock",
       ".claude/**",

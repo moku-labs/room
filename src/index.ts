@@ -40,9 +40,10 @@ export const roomPlugins = {
   controller: [transportPlugin, sessionPlugin, intentPlugin, syncPlugin, controllerPlugin]
 } as const;
 
-// --- Signaling adapter factories (publicRendezvous = DEFAULT, inMemory = tests) ---
+// --- Signaling adapter factories (publicRendezvous = DEFAULT, inMemory = tests, serverSignaling = opt-in worker-backed) ---
 export { publicRendezvous } from "./plugins/transport/adapters/public-rendezvous";
 export { inMemory } from "./plugins/transport/adapters/in-memory";
+export { serverSignaling } from "./plugins/transport/adapters/server";
 
 // --- Public contract types (D16 — single physical home: ./contracts) ---
 export type {

@@ -1,7 +1,8 @@
 /**
  * @file Unit tests for `lifecycle/code.ts` + `lifecycle/roster.ts`: room-code generation (6 chars,
- * confusable-free alphabet, seeded RNG), join-URL composition (with/without `joinUrlBase`), roster
- * upsert/cap enforcement (9th rejected), star-topology rejection, sorted defensive-copy read.
+ * confusable-free alphabet, seeded RNG, configurable codeLength), join-URL composition
+ * (with/without `joinUrlBase`), roster upsert/cap enforcement (9th rejected), star-topology
+ * rejection, sorted defensive-copy read.
  */
 
 import { describe, expect, it } from "vitest";
@@ -19,6 +20,10 @@ import { createSessionState } from "../../state";
 
 // The confusable-free alphabet — excludes 0, O, 1, I, L.
 const CONFUSABLE = new Set(["0", "O", "1", "I", "L"]);
+
+// Seeded RNG for determinism tests (all bytes = 0 → index 0 in alphabet → always 'A').
+// Module-scope per unicorn/consistent-function-scoping.
+const allZeroBytes = (n: number): Uint8Array => new Uint8Array(n).fill(0);
 
 describe("lifecycle/code: room code", () => {
   it("generates ROOM_CODE_LENGTH (6) characters", () => {
@@ -52,6 +57,41 @@ describe("lifecycle/code: room code", () => {
     expect(code2).toBe("AAAAAA");
     // RNG was called at least once per generateRoomCode call.
     expect(callCount).toBeGreaterThanOrEqual(2);
+  });
+
+  // --- Cycle 2: codeLength parameter (D24 security baseline) ---
+
+  it("honours a custom length of 8 (serverSignaling deployment)", () => {
+    // When codeLength=8 is passed, the generated code must be exactly 8 chars.
+    const code = generateRoomCode(undefined, 8);
+    expect(code).toHaveLength(8);
+  });
+
+  it("honours a custom length of 4", () => {
+    const code = generateRoomCode(undefined, 4);
+    expect(code).toHaveLength(4);
+  });
+
+  it("custom length still draws from the confusable-free alphabet", () => {
+    for (let i = 0; i < 20; i++) {
+      const code = generateRoomCode(undefined, 8);
+      for (const char of code) {
+        expect(CONFUSABLE.has(char), `code ${code} contains confusable char '${char}'`).toBe(false);
+        expect(char).toMatch(/^[A-Z2-9]$/);
+      }
+    }
+  });
+
+  it("custom length is deterministic under a seeded RNG", () => {
+    const code = generateRoomCode(allZeroBytes, 8);
+    // All bytes = 0 → index 0 → always 'A', now 8 chars.
+    expect(code).toBe("AAAAAAAA");
+  });
+
+  it("no length arg defaults to ROOM_CODE_LENGTH (6) — existing behaviour unchanged", () => {
+    // Re-assert that omitting length still returns a 6-char code (non-breaking default).
+    expect(generateRoomCode()).toHaveLength(ROOM_CODE_LENGTH);
+    expect(ROOM_CODE_LENGTH).toBe(6);
   });
 });
 
