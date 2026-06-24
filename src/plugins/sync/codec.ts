@@ -10,8 +10,15 @@
  * never produce or accept non-JSON (no `Map`, `Set`, function, or `undefined`-hole, spec/11 section 1.7).
  * Shared contract types are imported from `../../contracts` (D16); `Cells` is sync's internal alias.
  */
-import type { Namespace, Op, Snapshot } from "../../contracts";
+import type { JsonValue, Namespace, Op, Snapshot } from "../../contracts";
 import type { Cells } from "./types";
+
+/**
+ * The mutable working shape used while applying ops: a `Snapshot` (contracts section 4.1) with its
+ * `readonly` modifiers dropped so cells can be set/deleted in place before the result is returned as a
+ * `Snapshot`. Namespace → (key → {@link JsonValue}), matching the `Snapshot`/`Op.val` cell contract.
+ */
+type MutableSnapshot = Record<string, Record<string, JsonValue>>;
 
 /**
  * Serializes a whole `Snapshot` to the exact plain-JSON byte shape `sessionPlugin` persists and the host
@@ -162,7 +169,7 @@ export function applyOps(snapshot: Snapshot, ops: readonly Op[]): Snapshot {
   }
 
   // Build a mutable working copy of the snapshot namespaces
-  const result: { [ns: string]: { [key: string]: unknown } } = {};
+  const result: MutableSnapshot = {};
   for (const ns of Object.keys(snapshot)) {
     result[ns] = { ...snapshot[ns] };
   }

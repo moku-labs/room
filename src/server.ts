@@ -11,9 +11,19 @@ import { roomHubPlugin } from "./plugins/room-hub";
 export { roomHubPlugin } from "./plugins/room-hub";
 export { RoomHub } from "./plugins/room-hub/room-hub-do";
 
-// Exported per spec/07 §Overview so a consumer can re-compose around the existing instance. Safe to
-// export: the `./server` tsdown entry is JS-only (`dts: false`) — the composed app's inferred type
-// (which references non-exported @moku-labs/core internals) never reaches a published `.d.ts`.
+/**
+ * The composed Room worker app — `durableObjects` + `kv` + `roomHub` on `@moku-labs/worker`. Deployable
+ * as-is via the default `{ fetch }` export below, or re-composed by a consumer around this instance
+ * (spec/07 §Overview). Safe to export despite the inferred type referencing non-exported
+ * `@moku-labs/core` internals: the `./server` tsdown entry is JS-only (`dts: false`), so that inferred
+ * type never reaches a published `.d.ts`.
+ *
+ * @example
+ * ```ts
+ * import { app } from "@moku-labs/room/server";
+ * export default { fetch: (req, env, ctx) => app.roomHub.handle(req, env, ctx) };
+ * ```
+ */
 export const app = createApp({
   config: { name: "room-hub", compatibilityDate: "2026-06-17" },
   plugins: [durableObjectsPlugin, kvPlugin, roomHubPlugin],

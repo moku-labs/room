@@ -9,8 +9,7 @@
  */
 
 import type { HostReentryRecord, SessionDeps, SessionState } from "../types";
-import type { SessionStateWithRuntime } from "./reentry";
-import type { PersistHandle } from "./types";
+import type { PersistHandleInternal } from "./types";
 
 /** IndexedDB database name for the host re-entry record. */
 const IDB_DB = "moku-room-reentry";
@@ -121,37 +120,20 @@ async function writeToIdb(record: HostReentryRecord, key: string): Promise<void>
 }
 
 /**
- * Internal extension of `PersistHandle` that adds the record updater used by {@link recordSnapshot}.
- * `_update` is a package-internal detail — NOT part of the public `PersistHandle` surface.
- */
-type PersistHandleInternal = PersistHandle & {
-  /**
-   * Updates the retained latest record and optionally schedules the debounced IndexedDB write.
-   *
-   * @param record - The new latest `HostReentryRecord`.
-   * @param scheduleIdb - Whether to (re)schedule the debounced durable write.
-   * @example
-   * ```ts
-   * (handle as PersistHandleInternal)._update(record, true);
-   * ```
-   */
-  _update(record: HostReentryRecord, scheduleIdb: boolean): void;
-};
-
-/**
  * Arms the persistence driver for the HOST: holds the latest record, schedules debounced IndexedDB
  * writes, and registers the synchronous `localStorage`-on-`visibilitychange` listener (§5.1). The
  * returned `PersistHandle` is stored into `deps.state.recovery.persistHandle`; the driver retains the
  * latest record internally so `flushNow()` needs no `state`. DOM/storage access is DOM-guarded.
  *
  * @param deps - This app's destructured per-instance pieces (`config` and `state`).
- * @returns A `PersistHandle` with `flushNow`/`dispose` for the `onStop` teardown path.
+ * @returns A `PersistHandleInternal` with `flushNow`/`dispose` (public) plus the internal `_update`, for
+ *   the `onStop` teardown path. Assignable to the public `PersistHandle | null` recovery field.
  * @example
  * ```ts
  * deps.state.recovery.persistHandle = armPersistence(deps);
  * ```
  */
-export function armPersistence(deps: SessionDeps): PersistHandle {
+export function armPersistence(deps: SessionDeps): PersistHandleInternal {
   let latestRecord: HostReentryRecord | null = null;
   let debounceTimer: ReturnType<typeof setTimeout> | null = null;
 
@@ -207,10 +189,12 @@ export function armPersistence(deps: SessionDeps): PersistHandle {
     }
   };
 
+  // Register the synchronous visibilitychange flush before building the handle.
   if (typeof document !== "undefined") {
     document.addEventListener("visibilitychange", onVisibilityChange);
   }
 
+  // Build and return the PersistHandle.
   const handle: PersistHandleInternal = {
     /**
      * Cancels any pending debounce and writes the latest record synchronously (the `onStop` final-persist
@@ -270,7 +254,7 @@ export function armPersistence(deps: SessionDeps): PersistHandle {
  */
 export function recordSnapshot(deps: SessionDeps, record: HostReentryRecord): void {
   deps.state.sSeqAtSnapshot = record.sSeq;
-  const handle = deps.state.recovery.persistHandle as PersistHandleInternal | null;
+  const handle = deps.state.recovery.persistHandle;
   if (handle) handle._update(record, true);
 }
 
@@ -332,7 +316,7 @@ export function teardownSession(state: SessionState): void {
   }
   // A joinRoom() in flight when the app stops must not leave its reconnect timer dangling (it would
   // fire post-teardown → stale promise resolution) nor leave an awaiting joinRoom() hung forever.
-  const runtime = state as unknown as SessionStateWithRuntime;
+  const runtime = state;
   if (runtime._joinTimeout) {
     clearTimeout(runtime._joinTimeout);
     runtime._joinTimeout = null;

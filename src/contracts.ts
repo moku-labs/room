@@ -426,7 +426,7 @@ export type Wire = {
 
 /**
  * Room's coarse lifecycle events on the Moku `emit` plane. Declared via the register-callback pattern
- * (spec/14 §2) by the engine that owns each. Facades re-declare/forward them (§3.3). These are the
+ * (spec/14 §2) by the engine that owns each. Facades re-declare (but never forward/re-emit) them (§3.3). These are the
  * ONLY events Room emits — all device↔host traffic is the §2 wire, never these.
  */
 export type RoomEvents = {

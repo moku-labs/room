@@ -12,7 +12,13 @@
  * directly to its in-process channel and marked `connected` with no `RTCPeerConnection`. Real adapters
  * lack it and the full WebRTC handshake runs.
  */
-import type { IceCandidateInit, PeerId, RoomEvents, SignalMsg } from "../../contracts";
+import type {
+  IceCandidateInit,
+  PeerId,
+  RoomEvents,
+  SignalingSession,
+  SignalMsg
+} from "../../contracts";
 import type { LoopbackSignaling, WireChannel } from "./channel";
 import { bindPeerChannel } from "./channel";
 import type { PeerConnection, TransportConfig, TransportState } from "./types";
@@ -28,9 +34,31 @@ type EmitWarning = (reason: RoomEvents["room:network-warning"]["reason"]) => voi
 const MAX_OPEN_RETRIES = 3;
 
 /**
- * Detects the transport-internal loopback capability on a signaling session. Returns the session cast
- * as a `LoopbackSignaling` if it exposes `openWireChannel` (the `inMemory` adapter), or `null` for
- * real adapters that fall back to the WebRTC handshake.
+ * User-defined type guard: narrows a `SignalingSession` to one that ALSO exposes the transport-internal
+ * loopback capability. Keys off the distinguishing structural member `openWireChannel` (declared by
+ * `LoopbackSignaling`, present only on the `inMemory` adapter) — sound because `SignalingSession` itself
+ * never declares it, so the `in` check cleanly partitions loopback sessions from real ones.
+ *
+ * @param session - The signaling session to test.
+ * @returns `true` if `session` also satisfies `LoopbackSignaling` (narrowing `session` to the intersection).
+ * @example
+ * ```ts
+ * if (isLoopbackSignaling(session)) session.openWireChannel(peerId);
+ * ```
+ */
+function isLoopbackSignaling(
+  session: SignalingSession
+): session is SignalingSession & LoopbackSignaling {
+  return (
+    "openWireChannel" in session &&
+    typeof (session as Partial<LoopbackSignaling>).openWireChannel === "function"
+  );
+}
+
+/**
+ * Detects the transport-internal loopback capability on a signaling session. Returns the session narrowed
+ * to `LoopbackSignaling` if it exposes `openWireChannel` (the `inMemory` adapter), or `null` for real
+ * adapters that fall back to the WebRTC handshake.
  *
  * @param session - The current signaling session, or `null` if not yet joined.
  * @returns The session as a `LoopbackSignaling` if the loopback capability is present; otherwise `null`.
@@ -41,8 +69,8 @@ const MAX_OPEN_RETRIES = 3;
  * ```
  */
 function asLoopback(session: TransportState["session"]): LoopbackSignaling | null {
-  if (session && typeof (session as Partial<LoopbackSignaling>).openWireChannel === "function") {
-    return session as unknown as LoopbackSignaling;
+  if (session && isLoopbackSignaling(session)) {
+    return session;
   }
   return null;
 }
@@ -62,7 +90,11 @@ function asLoopback(session: TransportState["session"]): LoopbackSignaling | nul
  * const peer = createPeer(state, cfg, "p_ab12");
  * ```
  */
-function createPeer(state: TransportState, cfg: TransportConfig, peerId: PeerId): PeerConnection {
+function createPeer(
+  state: TransportState,
+  cfg: Readonly<TransportConfig>,
+  peerId: PeerId
+): PeerConnection {
   const pc = new RTCPeerConnection({ iceServers: [...cfg.iceServers] });
   const peer: PeerConnection = {
     peerId,
@@ -152,6 +184,9 @@ function createPeer(state: TransportState, cfg: TransportConfig, peerId: PeerId)
  * ```
  */
 function bindChannel(state: TransportState, peer: PeerConnection, channel: WireChannel): void {
+  // DOM-boundary bridge (store side): `peer.channel` is typed as the DOM `RTCDataChannel`, but on the
+  // loopback path the open channel is the in-process pipe — both satisfy `WireChannel` structurally and
+  // are read back through the single `asWireChannel` adapter, so this one write is the only inverse cast.
   peer.channel = channel as unknown as PeerConnection["channel"];
   bindPeerChannel(state, peer);
 }
@@ -177,7 +212,7 @@ function bindChannel(state: TransportState, peer: PeerConnection, channel: WireC
  */
 export function handlePeerArrival(
   state: TransportState,
-  cfg: TransportConfig,
+  cfg: Readonly<TransportConfig>,
   peerId: PeerId,
   emitWarning: EmitWarning,
   retries = 0
@@ -190,6 +225,8 @@ export function handlePeerArrival(
     if (!channel) return;
     const peer: PeerConnection = {
       peerId,
+      // DOM-boundary stub: the loopback peer has no real WebRTC handshake, so `pc` is a minimal
+      // `RTCPeerConnection`-shaped object whose only used member is the inert `close()` that teardown calls.
       // eslint-disable-next-line jsdoc/require-jsdoc -- inert close() on the loopback peer's fake RTCPeerConnection (no real pc to tear down)
       pc: { close() {} } as unknown as RTCPeerConnection,
       channel: null,
@@ -253,7 +290,7 @@ export function handlePeerArrival(
  */
 function retryHandshake(
   state: TransportState,
-  cfg: TransportConfig,
+  cfg: Readonly<TransportConfig>,
   peerId: PeerId,
   emitWarning: EmitWarning
 ): void {
@@ -291,7 +328,7 @@ function retryHandshake(
  */
 export function handleSignal(
   state: TransportState,
-  cfg: TransportConfig,
+  cfg: Readonly<TransportConfig>,
   peerId: PeerId,
   msg: SignalMsg
 ): void {
@@ -344,7 +381,7 @@ export function handleSignal(
  */
 function createAnswerer(
   state: TransportState,
-  cfg: TransportConfig,
+  cfg: Readonly<TransportConfig>,
   peerId: PeerId
 ): PeerConnection {
   const peer = createPeer(state, cfg, peerId);

@@ -38,9 +38,8 @@ export function createTransportApi(
   cfg: Readonly<TransportConfig>,
   emitWarning: (reason: RoomEvents["room:network-warning"]["reason"]) => void
 ): TransportApi {
-  const config = cfg as TransportConfig;
   // Stable per-app Wire — same identity every `wire()` call (contracts section 2).
-  const wire: Wire = createWire(state, config);
+  const wire: Wire = createWire(state, cfg);
 
   return {
     /** @inheritdoc */
@@ -67,21 +66,21 @@ export function createTransportApi(
             };
       let session: TransportState["session"];
       try {
-        session = await config.signaling.join(opts.code, joinOpts);
+        session = await cfg.signaling.join(opts.code, joinOpts);
       } catch (error) {
         emitWarning("rendezvous-unreachable");
         throw error;
       }
       state.session = session;
       session.onPeer(peerId =>
-        handlePeerArrival(state, config, peerId, reason => emitWarning(reason))
+        handlePeerArrival(state, cfg, peerId, reason => emitWarning(reason))
       );
-      session.onSignal((peerId, msg) => handleSignal(state, config, peerId, msg));
+      session.onSignal((peerId, msg) => handleSignal(state, cfg, peerId, msg));
       session.onPeerLeave(peerId => handlePeerLeave(state, peerId));
       // onEvict wiring (contracts §1.1, D25): surfaces serverSignaling eviction as a network warning.
       // No-op for publicRendezvous/inMemory (onEvict is optional; contracts §1.1).
       session.onEvict?.(() => emitWarning("room-evicted"));
-      startHeartbeat(state, config, reason => emitWarning(reason));
+      startHeartbeat(state, cfg, reason => emitWarning(reason));
     },
 
     /** @inheritdoc */

@@ -197,6 +197,7 @@ export function inMemory(options?: InMemoryOptions): Signaling {
       channels: new Map()
     };
 
+    // Define the idempotent loopback-pipe opener.
     /**
      * Opens a paired loopback channel between `self` and member `peerId` (idempotent — once per pair).
      *
@@ -231,6 +232,7 @@ export function inMemory(options?: InMemoryOptions): Signaling {
       notifyPeer(other, self.selfId);
     }
 
+    // Assemble and return the session surface.
     /* eslint-disable jsdoc/require-jsdoc -- structural SignalingSession + loopback wiring; method semantics live on the contract (contracts.ts §1) and channel.ts LoopbackSignaling */
     const session: SignalingSessionImpl = {
       onPeer(cb) {
@@ -370,9 +372,11 @@ function inMemoryServer(): Signaling {
    * ```
    */
   const join = async (code: string, opts: SignalingJoinOpts): Promise<ServerSessionImpl> => {
+    // Get or create the server-sim room.
     const room = rooms.get(code) ?? { members: new Map<string, ServerMember>() };
     rooms.set(code, room);
 
+    // Build this session's Member record.
     const self: ServerMember = {
       selfId: opts.selfId,
       passive: opts.passive ?? false,
@@ -383,6 +387,7 @@ function inMemoryServer(): Signaling {
       pendingPeers: []
     };
 
+    // Resolve or mint the host reclaim token (controllers get none).
     // Host re-entry token (host only): re-use the presented token when it matches the stored one
     // (reclaim), mint a fresh one on the host's first join, and REJECT a presented-but-unknown token —
     // mirroring the real DO's error+close(1008) so the sim cannot give a reclaim-rejection false pass.
@@ -397,6 +402,7 @@ function inMemoryServer(): Signaling {
       reclaimTokens.set(code, reclaimToken);
     }
 
+    // Fan out arrivals to existing members.
     const existing = [...room.members.values()];
     room.members.set(self.selfId, self);
     for (const other of existing) {
@@ -405,6 +411,7 @@ function inMemoryServer(): Signaling {
       notifyServerPeer(other, self.selfId);
     }
 
+    // Assemble and return the persistent session.
     /* eslint-disable jsdoc/require-jsdoc -- structural server-sim SignalingSession; semantics documented on the contract in contracts.ts §1 and on ServerSessionImpl above */
     const session: ServerSessionImpl = {
       persistent: true,

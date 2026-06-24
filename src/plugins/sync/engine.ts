@@ -119,6 +119,7 @@ export function createSyncEngine(
    * ```
    */
   function broadcastDirty(): number {
+    // Nothing dirty: send heartbeat delta or skip per config
     const dirtyNs = Object.keys(state.dirty);
     if (dirtyNs.length === 0) {
       if (config.skipEmptyDeltas) {
@@ -131,7 +132,7 @@ export function createSyncEngine(
       return 1;
     }
 
-    // Build ops for all dirty namespaces
+    // Build serialised ops for every dirty namespace
     const allOps = dirtyNs.flatMap(ns => {
       const cells = state.snapshot[ns];
       if (!cells) {
@@ -140,10 +141,8 @@ export function createSyncEngine(
       return encodeNamespace(ns, cells);
     });
 
-    // Clear dirty before bumping sSeq
+    // Clear dirty flags and broadcast in at-most maxOpsPerDelta batches
     state.dirty = {};
-
-    // Batch ops respecting maxOpsPerDelta cap
     const maxOps = config.maxOpsPerDelta > 0 ? config.maxOpsPerDelta : allOps.length;
     let frameCount = 0;
 
@@ -154,7 +153,7 @@ export function createSyncEngine(
       frameCount++;
     }
 
-    // Persist snapshot after all delta frames for this tick
+    // Persist snapshot after the delta frames for this tick
     session.persistSnapshot(encodeSnapshot(state.snapshot), state.sSeq);
 
     return frameCount;
@@ -274,6 +273,7 @@ export function createSyncEngine(
         );
       }
 
+      // Seed the snapshot with the registered initial value and mark the engine ready
       registered.set(ns, initialJson);
 
       // Set initial state in snapshot (clone to avoid external mutation)
@@ -352,6 +352,7 @@ export function createSyncEngine(
     },
 
     subscribe(ns: Namespace, cb: (cells: Cells) => void): () => void {
+      // Ensure the subscriber list for this namespace exists
       if (!subscribers.has(ns)) {
         subscribers.set(ns, []);
       }
@@ -359,9 +360,11 @@ export function createSyncEngine(
       if (!subs) {
         return () => {};
       }
+
+      // Register the callback
       subs.push(cb);
 
-      // Fire immediately if namespace is already present
+      // Deliver the current value immediately if the namespace is already present
       const cells = state.snapshot[ns];
       if (cells) {
         const frozen = Object.freeze(structuredClone(cells) as Cells);

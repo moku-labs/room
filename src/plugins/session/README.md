@@ -34,6 +34,7 @@
 | `rejoin` | `() => Promise<JoinResult>` | iOS "rescan QR" path; re-uses the persisted `reconnectToken`. |
 | `roster` | `() => readonly RosterEntry[]` | Sorted defensive copy (by `joinedAt`). |
 | `self` | `() => SelfInfo` | `{ selfId, role, roomCode }`. |
+| `hostId` | `() => PeerId` | The host's stable peer id (the star hub). On the HOST equals `self().selfId`; on a CONTROLLER it is the resolved host id (the `IntentFrame` target), `""` until the host channel is established. Used by `intentPlugin` to address the host. |
 | `persistSnapshot` | `(snapshot: Snapshot, sSeq: number) => void` | HOST-ONLY seam called by `sync`; payload is opaque. |
 | `recoveryPhase` | `() => RecoveryPhase` | Poll this on the reload path (see below). |
 

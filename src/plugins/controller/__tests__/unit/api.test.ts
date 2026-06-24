@@ -19,6 +19,7 @@ import { createControllerApi, requestScreenWakeLock } from "../../api";
 function makeSessionSpy(): SessionApi {
   return {
     createRoom: vi.fn(),
+    qr: vi.fn(async () => null),
     joinRoom:
       vi.fn<
         (
