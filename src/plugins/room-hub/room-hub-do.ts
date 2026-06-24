@@ -305,7 +305,7 @@ export class RoomHub extends defineDurableObject("RoomHub") {
     const sql = this.ctx.storage.sql;
     ensureSchema(sql);
     const owner = findPeerByReclaimToken(sql, env.reclaimToken);
-    if (!owner || owner.role !== "host") {
+    if (owner?.role !== "host") {
       sendEnvelope(ws, { kind: "error", code: 1008, message: "reclaim-rejected" });
       ws.close(1008, "reclaim-rejected");
       return;

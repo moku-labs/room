@@ -170,6 +170,8 @@ export function buildServerSession(
 
     // WS lifecycle: open → send join (or reclaim on host-reload re-entry), error → reject,
     // message → dispatch ServerEnvelope.
+
+    // On open: send join/reclaim.
     ws.addEventListener("open", () => {
       // A persisted reclaim token means this is a host reload re-attaching to the warm DO (§5.1, D25):
       // send {kind:"reclaim",…} so controllers keep their room; otherwise a normal {kind:"join",…}.
@@ -181,10 +183,12 @@ export function buildServerSession(
       sendFrame({ kind: "join", selfId: opts.selfId, role });
     });
 
+    // On error: reject.
     ws.addEventListener("error", () => {
       reject(new Error(`serverSignaling: WebSocket error connecting to ${wsUrl}`));
     });
 
+    // On message: dispatch the ServerEnvelope by kind.
     ws.addEventListener("message", (event: MessageEvent<string>) => {
       let envelope: ServerEnvelope;
       try {

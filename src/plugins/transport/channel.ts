@@ -157,6 +157,9 @@ function toChunks(serialized: string, maxBytes: number): ChunkEnvelope[] {
  * ```
  */
 function asWireChannel(channel: PeerConnection["channel"]): WireChannel | null {
+  // DOM-boundary bridge: the external `RTCDataChannel` and the in-process loopback pipe both satisfy the
+  // minimal `WireChannel` surface structurally, but the DOM lib type is not nominally assignable — this is
+  // the single, centralized adapter for that bridge (handlers.ts routes its channel assignment through it).
   return channel as unknown as WireChannel | null;
 }
 
@@ -175,9 +178,12 @@ function asWireChannel(channel: PeerConnection["channel"]): WireChannel | null {
  */
 function writeToPeer(peer: PeerConnection, message: string, queue: Map<PeerId, string[]>): void {
   const channel = asWireChannel(peer.channel);
+  // No channel yet: discard.
   if (!channel) return;
+  // Channel not open: discard.
   if (channel.readyState !== "open") return;
 
+  // Already paused/queued: append and wait.
   const pending = queue.get(peer.peerId);
   if (peer.paused || (pending && pending.length > 0)) {
     const buffer = pending ?? [];
@@ -186,6 +192,7 @@ function writeToPeer(peer: PeerConnection, message: string, queue: Map<PeerId, s
     return;
   }
 
+  // Backpressure threshold exceeded: pause, queue, arm resume.
   if (channel.bufferedAmount > BACKPRESSURE_THRESHOLD_BYTES) {
     peer.paused = true;
     channel.bufferedAmountLowThreshold = BACKPRESSURE_THRESHOLD_BYTES / 2;
@@ -209,6 +216,7 @@ function writeToPeer(peer: PeerConnection, message: string, queue: Map<PeerId, s
     return;
   }
 
+  // Clear path: write directly.
   channel.send(message);
 }
 
@@ -228,7 +236,7 @@ function writeToPeer(peer: PeerConnection, message: string, queue: Map<PeerId, s
 function sendFrame(
   peer: PeerConnection,
   frame: Frame,
-  cfg: TransportConfig,
+  cfg: Readonly<TransportConfig>,
   queue: Map<PeerId, string[]>
 ): void {
   const serialized = JSON.stringify(frame);
@@ -353,7 +361,7 @@ function deliver(state: TransportState, peer: PeerConnection, frame: Frame): voi
  * wire.broadcast({ t: "ping", ts: Date.now() });
  * ```
  */
-export function createWire(state: TransportState, cfg: TransportConfig): Wire {
+export function createWire(state: TransportState, cfg: Readonly<TransportConfig>): Wire {
   const queues = new Map<PeerId, string[]>();
   return {
     /** @inheritdoc */
@@ -425,7 +433,7 @@ function ensureReceiving(state: TransportState, peer: PeerConnection): void {
  */
 export function startHeartbeat(
   state: TransportState,
-  cfg: TransportConfig,
+  cfg: Readonly<TransportConfig>,
   emitWarning: (reason: "channel-closed") => void
 ): void {
   if (state.heartbeatTimer !== null) return;
@@ -446,7 +454,7 @@ export function startHeartbeat(
         continue;
       }
 
-      // Otherwise the peer is alive — send the next heartbeat ping.
+      // Alive: send the next heartbeat ping.
       sendFrame(peer, { t: "ping", ts: now }, cfg, queues);
     }
   }, cfg.heartbeatIntervalMs);

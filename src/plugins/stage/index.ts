@@ -24,6 +24,11 @@ import { createStageApi } from "./api";
  * @see README.md
  */
 export const stagePlugin = createPlugin("stage", {
+  // `transportPlugin` is kept in `depends` for dependency-graph/presence completeness (it is the engine
+  // that owns the §2 wire + `room:network-warning`); the facade resolves only session/intent/sync via
+  // `ctx.require` below. Event visibility does NOT rely on this edge — the facade's own
+  // `register.map<RoomEvents>` re-declaration already exposes all five `room:*` to a `depends:[stagePlugin]`
+  // consumer (WARN-2 is closed by THAT re-declaration, not by the transport edge).
   depends: [transportPlugin, sessionPlugin, intentPlugin, syncPlugin],
   events: register =>
     register.map<RoomEvents>({

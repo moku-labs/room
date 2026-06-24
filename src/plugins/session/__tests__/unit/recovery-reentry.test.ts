@@ -441,7 +441,7 @@ describe("recovery/reentry", () => {
         savedAt: 1_700_000_000_000
       };
 
-      const fakeHandle = { flushNow: vi.fn(), dispose: vi.fn() };
+      const fakeHandle = { flushNow: vi.fn(), dispose: vi.fn(), _update: vi.fn() };
       const readSpy = vi.spyOn(persistence, "readReentryRecord").mockReturnValue(record);
       const armSpy = vi.spyOn(persistence, "armPersistence").mockReturnValue(fakeHandle);
 
@@ -485,7 +485,8 @@ describe("recovery/reentry", () => {
       vi.spyOn(persistence, "readReentryRecord").mockReturnValue(record);
       vi.spyOn(persistence, "armPersistence").mockReturnValue({
         flushNow: vi.fn(),
-        dispose: vi.fn()
+        dispose: vi.fn(),
+        _update: vi.fn()
       });
 
       const deps = makeDeps();
@@ -509,7 +510,8 @@ describe("recovery/reentry", () => {
       vi.spyOn(persistence, "readReentryRecord").mockReturnValue(record);
       vi.spyOn(persistence, "armPersistence").mockReturnValue({
         flushNow: vi.fn(),
-        dispose: vi.fn()
+        dispose: vi.fn(),
+        _update: vi.fn()
       });
 
       const state = createSessionState();
@@ -536,7 +538,8 @@ describe("recovery/reentry", () => {
       vi.spyOn(persistence, "readReentryRecord").mockReturnValue(record);
       vi.spyOn(persistence, "armPersistence").mockReturnValue({
         flushNow: vi.fn(),
-        dispose: vi.fn()
+        dispose: vi.fn(),
+        _update: vi.fn()
       });
 
       const deps = makeDeps(createSessionState(), () => Promise.reject(new Error("net down")));

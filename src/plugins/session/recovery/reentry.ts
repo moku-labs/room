@@ -13,7 +13,7 @@ import {
   handlePeerLost,
   handleRecoveryFrame
 } from "../handlers";
-import type { JoinResult, SessionDeps } from "../types";
+import type { JoinResult, SessionDeps, SessionState } from "../types";
 import { mintHostToken } from "./hosttoken";
 import { armPersistence, readReentryRecord } from "./persistence";
 
@@ -40,8 +40,9 @@ export function registerTransportBindings(deps: SessionDeps): void {
   const transport = deps.requireTransport();
 
   transport.onPeerConnected(peerId => {
+    // Host branch: a controller connected.
     if (deps.state.role === "host") {
-      // Host side: a controller connected — build a basic RosterEntry and handle it.
+      // Build a basic RosterEntry and handle it.
       const entry = {
         id: peerId,
         reconnectToken: "",
@@ -49,19 +50,21 @@ export function registerTransportBindings(deps: SessionDeps): void {
       };
       handlePeerConnected(deps)(peerId, entry);
     } else {
-      // Controller side: the host is the single star hub. Accept a connecting peer as the host ONLY
+      // Controller branch: the host is the single star hub. Accept a connecting peer as the host ONLY
       // when we are actively (re)connecting to one — a pending joinRoom, OR a non-"stable" recovery
       // phase (host re-entry after absence). Once stable with a known host, a later connection is NOT
       // the host (e.g. a non-star / meshing signaling adapter surfacing another controller) and must
       // not clobber `_hostId` (finding #1). The pending resolver/host id live on the runtime extension.
-      const rt = deps.state as unknown as SessionStateWithRuntime;
+      const rt = deps.state;
       const expectingHost =
         rt._pendingJoinResolve !== null || deps.state.recovery.phase !== "stable";
       if (rt._hostId !== null && !expectingHost) return;
 
+      // Adopt the connecting peer as the host and mark recovery stable.
       deps.state.selfId = deps.state.selfId || peerId; // keep our own id if already set
-      // Resolve any pending joinRoom promise by updating recovery phase.
       deps.state.recovery.phase = "stable";
+
+      // Settle any pending joinRoom resolver, recording this peer as the host id either way.
       const resolver = rt._pendingJoinResolve;
       if (resolver) {
         rt._pendingJoinResolve = null;
@@ -74,12 +77,12 @@ export function registerTransportBindings(deps: SessionDeps): void {
   });
 
   transport.onPeerLost(peerId => {
+    // Host branch: a controller died — remove from roster.
     if (deps.state.role === "host") {
-      // Host side: a controller died — remove from roster.
       handlePeerLost(deps)(peerId);
     } else {
-      // Controller side: check if the lost peer is the host.
-      const rt = deps.state as unknown as SessionStateWithRuntime;
+      // Controller branch: only react when the lost peer is our current host.
+      const rt = deps.state;
       if (rt._hostId && peerId === rt._hostId) {
         handleHostChannelLost(deps)();
       }
@@ -115,7 +118,7 @@ export function detectHostReload(deps: SessionDeps): void {
   deps.state.selfId = deps.state.selfId || mintHostToken();
 
   // Store the record for re-broadcasting on controller reconnect.
-  const rt = deps.state as unknown as SessionStateWithRuntime;
+  const rt = deps.state;
   rt._reentryRecord = record;
 
   // Arm persistence driver so we keep snapshotting.
@@ -163,17 +166,13 @@ export function rejoinSameRoom(deps: SessionDeps): Promise<JoinResult> {
 }
 
 /**
- * Runtime-only fields on SessionState (never serialized). These escape the typed surface because they are
- * timer/promise handles — exactly like recovery.timer/persistHandle but stored at the state root level
- * for convenience. They are accessed only within the session plugin and never cross the wire.
+ * Legacy/test alias of {@link SessionState}, which now declares the runtime-only handles
+ * (`_pendingJoinResolve` / `_pendingJoinReject` / `_hostId` / `_joinTimeout` / `_reentryRecord`) directly
+ * as optional, never-serialized fields — peers of `recovery.timer`/`persistHandle`. Production code reads
+ * them straight off `SessionState` (no cast); this alias is retained only so existing tests that import
+ * `SessionStateWithRuntime` keep compiling.
  */
-export type SessionStateWithRuntime = {
-  _pendingJoinResolve: ((result: JoinResult) => void) | null;
-  _pendingJoinReject: ((reason: unknown) => void) | null;
-  _hostId: string | null;
-  _joinTimeout: ReturnType<typeof setTimeout> | null;
-  _reentryRecord: import("../types").HostReentryRecord | null;
-};
+export type SessionStateWithRuntime = SessionState;
 
 /**
  * Internal join-room implementation used by both `joinRoom` and `rejoinSameRoom`.
@@ -190,18 +189,18 @@ export type SessionStateWithRuntime = {
  */
 export function doJoinRoom(deps: SessionDeps, code: string): Promise<JoinResult> {
   return new Promise<JoinResult>(resolve => {
-    const stateRuntime = deps.state as unknown as SessionStateWithRuntime;
+    const stateRuntime = deps.state;
 
-    // Clear any previously pending join.
+    // Clear any prior in-flight join timeout.
     if (stateRuntime._joinTimeout) {
       clearTimeout(stateRuntime._joinTimeout);
       stateRuntime._joinTimeout = null;
     }
 
-    // Store the resolver so registerTransportBindings can call it on peer-connected.
+    // Park the resolver so onPeerConnected can settle it.
     stateRuntime._pendingJoinResolve = resolve;
 
-    // Set a timeout — if no host connects within reconnectTimeoutMs, resolve unreachable.
+    // Arm the unreachable-host timeout.
     stateRuntime._joinTimeout = setTimeout(() => {
       stateRuntime._joinTimeout = null;
       if (stateRuntime._pendingJoinResolve === resolve) {
@@ -210,10 +209,9 @@ export function doJoinRoom(deps: SessionDeps, code: string): Promise<JoinResult>
       }
     }, deps.config.reconnectTimeoutMs);
 
-    // Update state.
+    // Update state and initiate the transport connection.
     deps.state.roomCode = code;
     deps.state.role = "controller";
-
     const transport = deps.requireTransport();
     transport
       .connect({

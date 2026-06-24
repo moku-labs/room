@@ -17,7 +17,7 @@
 import type { IntentFrame, PeerId, RoomEvents, RosterEntry, Snapshot } from "../../contracts";
 import type { transportPlugin } from "../transport";
 import type { TransportApi } from "../transport/types";
-import type { PersistHandle, TimerHandle } from "./recovery/types";
+import type { PersistHandleInternal, TimerHandle } from "./recovery/types";
 
 // Re-export the contract types `index.ts` + sibling barrels reach through this plugin's surface, so they
 // import from ONE place WITHOUT re-declaring them (D16 — defined once in `../../contracts`, imported here).
@@ -131,7 +131,7 @@ export type RecoverySubState = {
   /** Runtime-only reconnect-timeout handle. `null` when idle. NOT persisted, NOT serialized. */
   timer: TimerHandle | null;
   /** Runtime-only handle to the debounced persistence driver (IndexedDB + visibilitychange wiring). `null` until armed. */
-  persistHandle: PersistHandle | null;
+  persistHandle: PersistHandleInternal | null;
 };
 
 /**
@@ -178,6 +178,21 @@ export type SessionState = {
   sSeqAtSnapshot: number;
   /** Live recovery sub-state (§5). See {@link RecoverySubState}. */
   recovery: RecoverySubState;
+  /**
+   * Runtime-only controller-join handle: resolves the in-flight `joinRoom` promise when the host channel
+   * opens. NEVER serialized (a peer of `recovery.timer`/`persistHandle`); optional/absent until a join is
+   * in flight, accessed only inside `sessionPlugin`, never across the wire. Kept at the state root for
+   * access convenience (§5.2).
+   */
+  _pendingJoinResolve?: ((result: JoinResult) => void) | null;
+  /** Runtime-only: rejects the in-flight `joinRoom` promise (paired with {@link SessionState._pendingJoinResolve}). */
+  _pendingJoinReject?: ((reason: unknown) => void) | null;
+  /** Runtime-only: the resolved host `PeerId` on a controller (the single star hub); `null`/absent until known. */
+  _hostId?: string | null;
+  /** Runtime-only: the in-flight `joinRoom` unreachable-timeout handle. */
+  _joinTimeout?: ReturnType<typeof setTimeout> | null;
+  /** Runtime-only (host): the persisted re-entry record retained for re-broadcast on controller reconnect. */
+  _reentryRecord?: HostReentryRecord | null;
 };
 
 /**

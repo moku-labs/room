@@ -374,7 +374,7 @@ describe("recovery/persistence", () => {
 
     const flushNow = vi.fn();
     const dispose = vi.fn();
-    state.recovery.persistHandle = { flushNow, dispose };
+    state.recovery.persistHandle = { flushNow, dispose, _update: vi.fn() };
 
     const timerHandle = setTimeout(() => {}, 99_999);
     state.recovery.timer = timerHandle;
