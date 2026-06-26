@@ -1,11 +1,11 @@
 /**
- * @file room-hub DO — SQLite schema + typed helpers (heavy state; written in the output-gate so a
+ * @file hub DO — SQLite schema + typed helpers (heavy state; written in the output-gate so a
  * Hibernation wake mid-handshake never drops it). The `sessions` table is the per-room roster: one row
  * per live peer carrying its role, the host's reclaim token, and the in-flight SDP/ICE. Attachments hold
- * only `{peerId, role}`; ALL heavy state lives here (`.planning/specs/07-room-hub.md` §State/§SQLite).
- * @see ./room-hub-do
+ * only `{peerId, role}`; ALL heavy state lives here (`.planning/specs/07-hub.md` §State/§SQLite).
+ * @see ./hub-do
  */
-import type { PeerId, SignalMsg } from "../../contracts";
+import type { PeerId, SignalMsg } from "../transport/protocol";
 
 /** A peer's role in the star (host hub vs passive controller). */
 export type Role = "host" | "controller";
@@ -18,7 +18,7 @@ export type SessionRow = {
   readonly role: Role;
 };
 
-/** The `sessions` table DDL (`.planning/specs/07-room-hub.md` §SQLite schema). */
+/** The `sessions` table DDL (`.planning/specs/07-hub.md` §SQLite schema). */
 export const SESSIONS_DDL = `CREATE TABLE IF NOT EXISTS sessions (
   peer_id TEXT PRIMARY KEY, role TEXT NOT NULL, sdp_offer TEXT, sdp_answer TEXT,
   candidates TEXT, snapshot TEXT, reclaim_token TEXT, joined_at INTEGER NOT NULL

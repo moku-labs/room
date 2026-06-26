@@ -1,8 +1,8 @@
 /**
  * @file Public + internal type surface for `sessionPlugin`. Shared cross-cutting types
- * (`PeerId`, `RosterEntry`, `RoomEvents`, `Frame`, the recovery frames, `IntentFrame`, `Snapshot`,
- * `MAX_CONTROLLERS`, `ROOM_CODE_LENGTH`) are DEFINED ONCE in `00-contracts.md` — physically in
- * `../../contracts` (D16) — and imported here with `import type`; they are NEVER re-declared.
+ * (`PeerId`, `RosterEntry`, `Frame`, the recovery frames, `IntentFrame`, `Snapshot`, `MAX_CONTROLLERS`,
+ * `ROOM_CODE_LENGTH`) live in transport's DOM-free `../transport/protocol`; the `RoomEvents` contract
+ * lives in `../../config`. Both are imported here with `import type` and NEVER re-declared.
  * Handle/timer types (`TimerHandle`, `PersistHandle`) are opaque internals declared in
  * `recovery/types.ts`.
  * @see README.md
@@ -14,21 +14,22 @@
  * a `ctx` value/type (mirrors `transport`'s destructured factory contract, D14).
  */
 
-import type { IntentFrame, PeerId, RoomEvents, RosterEntry, Snapshot } from "../../contracts";
+import type { RoomEvents } from "../../config";
 import type { transportPlugin } from "../transport";
+import type { IntentFrame, PeerId, RosterEntry, Snapshot } from "../transport/protocol";
 import type { TransportApi } from "../transport/types";
 import type { PersistHandleInternal, TimerHandle } from "./recovery/types";
 
 // Re-export the contract types `index.ts` + sibling barrels reach through this plugin's surface, so they
-// import from ONE place WITHOUT re-declaring them (D16 — defined once in `../../contracts`, imported here).
+// import from ONE place WITHOUT re-declaring them (the wire types live in `../transport/protocol`).
+export type { RoomEvents } from "../../config";
 export type {
   Frame,
   IntentFrame,
   PeerId,
-  RoomEvents,
   RosterEntry,
   Snapshot
-} from "../../contracts";
+} from "../transport/protocol";
 
 /**
  * Configuration for `sessionPlugin`. All fields have defaults; a consumer overrides any subset via
@@ -39,7 +40,7 @@ export type {
  * ```ts
  * // Shorten the reconnect window and disable QR for a headless test harness.
  * createApp({
- *   plugins: roomPlugins.stage,
+ *   plugins: [stagePlugin],
  *   pluginConfigs: { session: { reconnectTimeoutMs: 4000, generateQr: false } }
  * });
  * ```

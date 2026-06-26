@@ -9,7 +9,7 @@
  * @see ../../receive
  */
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { Frame, PeerId, Wire } from "../../../../contracts";
+import type { Frame, PeerId, Wire } from "../../../transport/protocol";
 import { attachIntentReceive } from "../../receive";
 import { createIntentState } from "../../state";
 import type { IntentSchema, IntentState } from "../../types";

@@ -6,7 +6,7 @@
  * @see ../README.md
  */
 
-import type { PeerId, RosterEntry } from "../../../contracts";
+import type { PeerId, RosterEntry } from "../../transport/protocol";
 import type { Role, SessionState } from "../types";
 
 /**

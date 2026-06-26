@@ -7,7 +7,7 @@
  * @see README.md
  */
 
-import type { Frame, PeerId, RosterEntry } from "../../contracts";
+import type { Frame, PeerId, RosterEntry } from "../transport/protocol";
 import { isStarViolation, removeRosterEntry, upsertRosterEntry } from "./lifecycle/roster";
 import { drainBuffer, reconcileFlush } from "./recovery/buffer";
 import { verifyHostToken } from "./recovery/hosttoken";

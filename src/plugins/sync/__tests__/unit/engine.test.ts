@@ -7,8 +7,8 @@
  * @see ../../README.md
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { Frame, PeerId, Snapshot } from "../../../../contracts";
 import type { SessionApi } from "../../../session/types";
+import type { Frame, PeerId, Snapshot } from "../../../transport/protocol";
 import { createSyncEngine } from "../../engine";
 import { createSyncState } from "../../state";
 import type { Config } from "../../types";

@@ -1,16 +1,16 @@
 /**
- * @file Lightweight in-test doubles for the RoomHub DO's Hibernation + SQLite surface (Cycle-2 W3).
+ * @file Lightweight in-test doubles for the Hub DO's Hibernation + SQLite surface (Cycle-2 W3).
  *
  * The real DO runs in `workerd` (WebSocketPair, `acceptWebSocket`, `SqlStorage`); the DO's `fetch()`
  * Hibernation accept is exercised by Wave-4's Playwright-against-`wrangler dev` run. These fakes cover the
  * dispatch surface (`webSocketMessage` / `webSocketClose` / `alarm`) that runs purely against the DO's
  * `ctx`, so the join-window guard, cap, star topology, relay opacity, reclaim, and Alarm-TTL logic are
  * unit-testable under node/bun without the workerd pool (the DO-test-infra decision for this wave).
- * @see ../room-hub-do
+ * @see ../hub-do
  * @see ../sqlite
  */
-import type { ServerEnvelope } from "../../../contracts";
-import { RoomHub } from "../room-hub-do";
+import type { ServerEnvelope } from "../../transport/protocol";
+import { Hub } from "../hub-do";
 
 /** One emulated `sessions` row. */
 type FakeRow = Record<string, unknown>;
@@ -112,10 +112,10 @@ export class FakeSocket {
   }
 }
 
-/** A fake DO harness: the `RoomHub` instance plus its emulated `ctx` table/socket-set accessors. */
+/** A fake DO harness: the `Hub` instance plus its emulated `ctx` table/socket-set accessors. */
 export type FakeRoom = {
   /** The DO under test. */
-  readonly room: RoomHub;
+  readonly room: Hub;
   /** The emulated SQLite store. */
   readonly sql: FakeSql;
   /** The live socket set the DO reads via `ctx.getWebSockets()`. */
@@ -134,7 +134,7 @@ export type FakeRoom = {
 };
 
 /**
- * Builds a {@link FakeRoom}: a `RoomHub` wired to an emulated `ctx` (SQLite + socket set + alarm/storage),
+ * Builds a {@link FakeRoom}: a `Hub` wired to an emulated `ctx` (SQLite + socket set + alarm/storage),
  * so the dispatch handlers can be driven directly without `workerd`.
  *
  * @returns The fake DO harness.
@@ -171,7 +171,7 @@ export function makeFakeRoom(): FakeRoom {
     getWebSockets: (): FakeSocket[] => sockets
   };
 
-  const room = new RoomHub(
+  const room = new Hub(
     ctx as unknown as DurableObjectState,
     {} as unknown as Record<string, unknown>
   );

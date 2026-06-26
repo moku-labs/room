@@ -16,5 +16,5 @@
     "types": ["bun"]
   },
   "include": ["src", "tests", "declarations.d.ts", "*.config.ts"],
-  "exclude": ["src/server.ts", "src/plugins/room-hub"]
+  "exclude": ["src/server.ts", "src/plugins/hub"]
 }

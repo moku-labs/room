@@ -12,8 +12,9 @@
  * through its API (not a lifecycle hook), so there is NO `onStart`/`onStop`. `@moku-labs/web` infers
  * `ctx` inline here (D1 — `PluginContext` is not imported); gameplay rides the §2 wire, never Moku `emit`.
  */
-import { createPlugin } from "@moku-labs/web/browser";
-import type { RoomEvents } from "../../contracts";
+
+import type { RoomEvents } from "../../config";
+import { createPlugin } from "../../config";
 import { intentPlugin } from "../intent";
 import { sessionPlugin } from "../session";
 import { syncPlugin } from "../sync";

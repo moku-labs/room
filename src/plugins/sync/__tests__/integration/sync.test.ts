@@ -7,12 +7,11 @@
  * @file
  * @see ../../README.md
  */
-import { createApp } from "@moku-labs/web";
+
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { Frame, PeerId } from "../../../../contracts";
-import { sessionPlugin } from "../../../session";
-import { transportPlugin } from "../../../transport";
+import { createApp } from "../../../../index";
 import { inMemory } from "../../../transport/adapters/in-memory";
+import type { Frame, PeerId } from "../../../transport/protocol";
 import { syncPlugin } from "../../index";
 
 // Stub wire.on implementation used in the throttle-coalescing test
@@ -25,9 +24,8 @@ const noopOnHandler = () => noopUnsubscribe;
 
 function makeSyncApp(bus: ReturnType<typeof inMemory>) {
   return createApp({
-    plugins: [transportPlugin, sessionPlugin, syncPlugin],
+    plugins: [],
     pluginConfigs: {
-      site: { name: "room-test", url: "https://room.test" },
       transport: { signaling: bus },
       session: {
         generateQr: false,
@@ -269,7 +267,7 @@ describe("sync integration (inMemory)", () => {
       num: 42,
       flag: true,
       nullable: null,
-      arr: [1, 2, 3] as unknown as import("../../../../contracts").JsonValue
+      arr: [1, 2, 3] as unknown as import("../../../transport/protocol").JsonValue
     });
 
     const { snapshot } = stageApp.sync.exportSnapshot();

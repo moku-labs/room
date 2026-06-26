@@ -9,9 +9,10 @@
  * `ctx`): `@moku-labs/web` infers `ctx` inline in `index.ts`, so the declared `room:network-warning`
  * event flows into the bound `emitWarning` closure.
  */
-import type { RoomEvents, SignalingJoinOpts, Wire } from "../../contracts";
+import type { RoomEvents } from "../../config";
 import { createWire, disconnectPeer, startHeartbeat, tearDownState } from "./channel";
 import { handlePeerArrival, handlePeerLeave, handleSignal } from "./handlers";
+import type { SignalingJoinOpts, Wire } from "./protocol";
 import type { ConnectOpts, TransportApi, TransportConfig, TransportState } from "./types";
 
 /**

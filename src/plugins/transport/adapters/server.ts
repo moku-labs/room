@@ -1,7 +1,7 @@
 /**
  * @file transport/adapters/server.ts — opt-in server-backed Signaling adapter (D21/D25).
  *
- * Opens ONE persistent WebSocket to the room-hub worker per `join(code)`. Speaks the
+ * Opens ONE persistent WebSocket to the hub worker per `join(code)`. Speaks the
  * contracts §1.3 `ClientEnvelope` / `ServerEnvelope` protocol. Returns a `SignalingSession`
  * with `persistent: true` so `handlers.ts` keeps the session open post-ICE as the
  * discovery-push / host-reload reclaim conduit.
@@ -16,16 +16,16 @@
  *  - `session.send(peer, msg) → {kind:"relay", to, msg}`
  *  - `{kind:"evict"} → session.onEvict cb`
  *  - `session.leave() → ws.close(1000)`
- * @see ../../../contracts
+ * @see ../protocol
  */
-import type { Signaling, SignalingJoinOpts, SignalingSession } from "../../../contracts";
+import type { Signaling, SignalingJoinOpts, SignalingSession } from "../protocol";
 
 /**
- * Builds an opt-in {@link Signaling} adapter backed by a Moku Worker room-hub. One persistent
+ * Builds an opt-in {@link Signaling} adapter backed by a Moku Worker hub. One persistent
  * WebSocket per `join(code)`; the returned session sets `persistent: true` so transport keeps it
  * open post-ICE as the discovery-push and host-reload reclaim conduit (D25).
  *
- * @param url - The `wss://…` base URL of the deployed room-hub worker.
+ * @param url - The `wss://…` base URL of the deployed hub worker.
  * @returns A {@link Signaling} interchangeable with `publicRendezvous`/`inMemory`.
  * @example
  * ```ts

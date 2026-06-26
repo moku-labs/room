@@ -16,7 +16,7 @@ never Moku `emit`; the only event this engine emits is `room:sync-ready`.
 ## Config
 
 Flat config; all fields have safe defaults (the verified couch profile), so composing
-`roomPlugins.stage` / `roomPlugins.controller` needs zero overrides.
+a stage/controller app needs zero overrides.
 
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|

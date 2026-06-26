@@ -3,7 +3,7 @@
  * game sessions driven end-to-end through the public role facades over a shared in-memory signaling bus.
  *
  * Each test stands up ONE authoritative stage (host / shared screen) plus N controllers (phones) via the
- * shared `./helpers/harness` (which composes the public `roomPlugins.stage` / `roomPlugins.controller`
+ * shared `./helpers/harness` (which composes the public `[stagePlugin]` / `[controllerPlugin]`
  * arrays through `@moku-labs/web`'s `createApp`, exactly as a consumer game would), then plays a realistic
  * round: controllers send INTENTS, the host validates + applies them by mutating authoritative SYNC slices
  * and broadcasting, and controllers READ the synced replica. The model is star-topology + host-authoritative

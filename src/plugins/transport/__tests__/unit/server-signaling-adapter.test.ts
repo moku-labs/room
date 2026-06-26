@@ -4,8 +4,8 @@
  * @see ../../adapters/server.ts
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { ClientEnvelope, ServerEnvelope, SignalMsg } from "../../../../contracts";
 import { serverSignaling } from "../../adapters/server";
+import type { ClientEnvelope, ServerEnvelope, SignalMsg } from "../../protocol";
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Mock WebSocket — uses addEventListener so the impl can use addEventListener.

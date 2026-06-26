@@ -3,7 +3,6 @@
  * @see ../../channel.ts
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { Frame, PeerId } from "../../../../contracts";
 import {
   bindPeerChannel,
   createWire,
@@ -11,6 +10,7 @@ import {
   startHeartbeat,
   tearDownState
 } from "../../channel";
+import type { Frame, PeerId } from "../../protocol";
 import { createTransportState } from "../../state";
 import type { PeerConnection, TransportConfig, TransportState } from "../../types";
 

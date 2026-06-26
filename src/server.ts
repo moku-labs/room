@@ -1,51 +1,55 @@
 /**
- * @file Room worker (Cloudflare) server-app entry — `@moku-labs/room/server` (D21/D22/D26).
- * Exports the composed `app` + default `{ fetch }` (deployable as-is) and re-exports the reusable
- * `roomHubPlugin` / `RoomHub` for consumers who compose their own app. The CONSUMING APP owns
- * deployment config (`wrangler.jsonc`: ROOM_HUB / RATE_LIMIT / ASSETS bindings + `main`).
+ * @file `@moku-labs/room/server` — the server CORE (Step 2, spec/04 §4). Calls `createCore` on the shared
+ * `coreConfig` with the opt-in `hubPlugin`, and EXPORTS the bound `createApp` + `createPlugin` plus the
+ * `Hub` Durable Object class. The framework NEVER calls `createApp` and exports NO `fetch` handler — a
+ * Layer-3 Cloudflare app composes `createApp`, exports `{ fetch }` from its own `cloudflare/worker.ts`,
+ * re-exports `Hub` for the wrangler binding, and owns its `wrangler.jsonc` (D1/D26). The `hub` reaches the
+ * DO + KV + ASSETS through the native Cloudflare `env` threaded into `app.hub.handle` — no `@moku-labs/worker`.
+ * @see ./config
+ * @see ./plugins/hub
  */
-import type { WorkerEnv } from "@moku-labs/worker";
-import { createApp, durableObjectsPlugin, kvPlugin } from "@moku-labs/worker";
-import { roomHubPlugin } from "./plugins/room-hub";
+import { coreConfig, createCore } from "./config";
+import { hubPlugin } from "./plugins/hub";
 
-export { roomHubPlugin } from "./plugins/room-hub";
-export { RoomHub } from "./plugins/room-hub/room-hub-do";
+export { hubPlugin } from "./plugins/hub";
+export { Hub } from "./plugins/hub/hub-do";
+
+const core = createCore(coreConfig, {
+  plugins: [hubPlugin]
+});
 
 /**
- * The composed Room worker app — `durableObjects` + `kv` + `roomHub` on `@moku-labs/worker`. Deployable
- * as-is via the default `{ fetch }` export below, or re-composed by a consumer around this instance
- * (spec/07 §Overview). Safe to export despite the inferred type referencing non-exported
- * `@moku-labs/core` internals: the `./server` tsdown entry is JS-only (`dts: false`), so that inferred
- * type never reaches a published `.d.ts`.
+ * Create and initialize a `@moku-labs/room` server app — the Layer-3 entry point for the Cloudflare worker.
+ * The `hub` is wired by default; `app.hub.handle(request, env, ctx)` is the request handler a consumer's
+ * `cloudflare/worker.ts` delegates its `fetch` to.
+ *
+ * @param options - `plugins` (extra/custom), `pluginConfigs` (e.g. `hub` binding-name overrides),
+ *   `config`, and lifecycle callbacks.
+ * @returns The initialized app: `start()`, `stop()`, `app.hub`, and `log`.
+ * @example
+ * ```ts
+ * // your-app/src/server.ts — the ROOT composition file: create the app once, export it.
+ * import { createApp } from "@moku-labs/room/server";
+ * export const app = createApp();
+ *
+ * // your-app/src/cloudflare/worker.ts — the Cloudflare entry: USE the composed app to wire the Worker.
+ * import { app } from "../server";
+ * export { Hub } from "@moku-labs/room/server"; // wrangler binds ROOM_HUB → Hub
+ * export default {
+ *   fetch: (req: Request, env: Record<string, unknown>, ctx: ExecutionContext) =>
+ *     app.hub.handle(req, env, ctx)
+ * } satisfies ExportedHandler;
+ * ```
+ */
+export const createApp = core.createApp;
+
+/**
+ * Create a custom plugin bound to Room's `Config`/`Events` + core APIs (server side). Types infer from the
+ * spec object — never written explicitly. Pass the result to {@link createApp} via `plugins`.
  *
  * @example
  * ```ts
- * import { app } from "@moku-labs/room/server";
- * export default { fetch: (req, env, ctx) => app.roomHub.handle(req, env, ctx) };
+ * const audit = createPlugin("audit", { api: (ctx) => ({ note: (m: string) => ctx.log.info("audit", { m }) }) });
  * ```
  */
-export const app = createApp({
-  config: { name: "room-hub", compatibilityDate: "2026-06-17" },
-  plugins: [durableObjectsPlugin, kvPlugin, roomHubPlugin],
-  pluginConfigs: {
-    durableObjects: { roomHub: { binding: "ROOM_HUB", className: "RoomHub" } },
-    kv: { rateLimit: { name: "room-rate-limit", binding: "RATE_LIMIT" } }
-  }
-});
-
-export default {
-  /**
-   * Cloudflare fetch entry — delegates every request to the room-hub plugin's `handle`.
-   *
-   * @param request - The inbound Cloudflare Request.
-   * @param env - The per-invocation Worker env.
-   * @param ctx - The Cloudflare execution context.
-   * @returns The room-hub response (DO upgrade, ASSETS, or a guard response).
-   * @example
-   * ```ts
-   * export default { fetch };
-   * ```
-   */
-  fetch: (request: Request, env: WorkerEnv, ctx: ExecutionContext): Promise<Response> =>
-    app.roomHub.handle(request, env, ctx)
-} satisfies ExportedHandler<WorkerEnv>;
+export const createPlugin = core.createPlugin;

@@ -3,8 +3,8 @@
  * @see ../../api.ts
  */
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { Signaling, SignalingSession } from "../../../../contracts";
 import { createTransportApi } from "../../api";
+import type { Signaling, SignalingSession } from "../../protocol";
 import { createTransportState } from "../../state";
 import type { PeerConnection, TransportConfig, TransportState } from "../../types";
 

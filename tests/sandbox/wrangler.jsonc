@@ -5,16 +5,16 @@
   // The library ships NO wrangler config (D26): deployment is app-side, and a CONSUMER writes their own
   // wrangler.jsonc declaring the same bindings + pointing `main` at @moku-labs/room/server. This file is the
   // reference shape of that config, and the harness the worker Playwright e2e (`bun run test:e2e:worker`)
-  // drives over real `workerd` via `wrangler dev` — the FIRST real-runtime coverage of the RoomHub DO
+  // drives over real `workerd` via `wrangler dev` — the FIRST real-runtime coverage of the Hub DO
   // fetch()/Hibernation accept (W1–W3 unit-tested the dispatch via a fake). It is excluded from the npm
   // tarball by package.json `files` (only `dist/` ships).
   //
   // `bun run sandbox:worker` builds the client (build-client.ts) then boots this on :5180. The worker entry
   // (`../../src/server.ts`) serves the built web client through the ASSETS binding and hosts the per-room DO;
-  // `run_worker_first` routes EVERY request through `app.roomHub.handle` (WS-upgrade → DO `101`, else →
+  // `run_worker_first` routes EVERY request through `app.hub.handle` (WS-upgrade → DO `101`, else →
   // `env.ASSETS` → `200`), exactly the routing api.ts implements (spec/07 §API).
   // ─────────────────────────────────────────────────────────────────────────────────────────────────────
-  "name": "room-hub-sandbox",
+  "name": "hub-sandbox",
   "main": "../../src/server.ts",
   "compatibility_date": "2026-06-17",
 
@@ -22,7 +22,7 @@
   // node-only deploy/cli graph into ONE chunk that imports `node:fs` at the top level, so when wrangler
   // re-bundles the package (it does, even though our published dist/server.mjs externalizes it) the unused
   // `node:fs` import comes along. The deploy code is NEVER executed at runtime (we only call
-  // `app.roomHub.handle`); this flag just lets that dead import resolve so workerd boots. A consumer
+  // `app.hub.handle`); this flag just lets that dead import resolve so workerd boots. A consumer
   // pointing wrangler at `@moku-labs/room/server` needs the same flag until upstream splits the chunk —
   // see the W4 build report / STATE.md "Open Items".
   "compatibility_flags": ["nodejs_compat"],
@@ -41,9 +41,9 @@
 
   // Per-room signaling hub — SQLite-backed (the DO uses `ctx.storage.sql`), so it MUST be a sqlite class.
   "durable_objects": {
-    "bindings": [{ "name": "ROOM_HUB", "class_name": "RoomHub" }]
+    "bindings": [{ "name": "ROOM_HUB", "class_name": "Hub" }]
   },
-  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["RoomHub"] }],
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["Hub"] }],
 
   // Per-IP join rate-limit counter (D24). Local `wrangler dev` simulates KV; the `id` is a dev placeholder.
   "kv_namespaces": [{ "binding": "RATE_LIMIT", "id": "room_rate_limit_sandbox" }]

@@ -1,8 +1,8 @@
 # session
 
-> **Complex tier** plugin in the `@moku-labs/room` plugin pack. Room-lifecycle + presence authority +
+> **Complex tier** plugin in the `@moku-labs/room` framework. Room-lifecycle + presence authority +
 > the full client-side host-reload recovery state machine (D11). `createPlugin` is imported from
-> `@moku-labs/web` (peer dependency). `depends: [transportPlugin]`.
+> the framework via `../../config` (Room runs on `@moku-labs/core`). `depends: [transportPlugin]`.
 
 ## Responsibilities
 

@@ -8,7 +8,7 @@
  * (spec/07 section 3). `tearDownState` is the single teardown sequence both `onStop` and the public
  * `close()` API run against the same per-app `TransportState`.
  */
-import type { Frame, HeartbeatPongFrame, PeerId, Wire } from "../../contracts";
+import type { Frame, HeartbeatPongFrame, PeerId, Wire } from "./protocol";
 import type { PeerConnection, TransportConfig, TransportState } from "./types";
 
 /**

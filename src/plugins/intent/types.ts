@@ -4,12 +4,12 @@
  * Carries the CONCRETE signatures from the spec: the role-agnostic {@link IntentApi}, the controller-side
  * buffer {@link IntentConfig}, the correctness-only {@link IntentSchema} / {@link IntentFieldRule} (D6),
  * and the per-app {@link IntentState}. Shared wire/roster types (`IntentFrame`, `PeerId`, `JsonValue`)
- * are imported from the central `../../contracts` module (D16) — never re-declared here.
+ * are imported from their owning plugins (`../transport/protocol` for the wire/signaling protocol; `RoomEvents` from `../../config`) — never re-declared here.
  *
  * @file
  * @see README.md
  */
-import type { IntentFrame, JsonValue, PeerId } from "../../contracts";
+import type { IntentFrame, JsonValue, PeerId } from "../transport/protocol";
 
 /**
  * Configuration for the intent plugin.

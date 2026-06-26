@@ -9,7 +9,7 @@
  */
 
 import { describe, expect, it, vi } from "vitest";
-import type { RosterEntry, Snapshot } from "../../../../contracts";
+import type { RosterEntry, Snapshot } from "../../../transport/protocol";
 import { createSessionApi } from "../../api";
 import * as persistence from "../../recovery/persistence";
 import { createSessionState } from "../../state";

@@ -1,7 +1,7 @@
 /**
  * @file Core composition scenarios — framework boot, public-array composition, and lifecycle.
  *
- * Exercises the pre-bundled `roomPlugins.stage` / `roomPlugins.controller` arrays through
+ * Exercises the pre-bundled `[stagePlugin]` / `[controllerPlugin]` arrays through
  * `@moku-labs/web`'s `createApp` over the deterministic `inMemory()` bus. These are the "does the
  * pack compose and boot at all" guarantees a consumer relies on, kept separate from the cross-plugin
  * and user-journey suites.
@@ -11,14 +11,14 @@ import { describe, expect, it } from "vitest";
 import { makeBus, makeController, makeStage } from "./helpers/harness";
 
 describe("core composition — boot + lifecycle (roomPlugins via createApp + inMemory)", () => {
-  it("a stage app composes from roomPlugins.stage, starts, and stops cleanly", async () => {
+  it("a stage app composes from [stagePlugin], starts, and stops cleanly", async () => {
     const { app } = makeStage(makeBus());
 
     await expect(app.start()).resolves.toBeUndefined();
     await expect(app.stop()).resolves.toBeUndefined();
   });
 
-  it("a controller app composes from roomPlugins.controller, starts, and stops cleanly", async () => {
+  it("a controller app composes from [controllerPlugin], starts, and stops cleanly", async () => {
     const { app } = makeController(makeBus(), "ctrlBoot");
 
     await expect(app.start()).resolves.toBeUndefined();

@@ -9,10 +9,11 @@
  * (a closure-scope `Map` — kept OUT of `State` so `State.snapshot` stays plain-JSON), and the single
  * `room:sync-ready` emit. Pure codec work delegates to `codec.ts`. All wire I/O rides the injected `Wire`
  * (contracts section 2) — NEVER Moku `emit` (only `room:sync-ready` rides `emit`). Shared contract types
- * are imported from `../../contracts` (D16); `SessionApi` from the owning `session` plugin.
+ * are imported from `../transport/protocol`; `SessionApi` from the owning `session` plugin.
  */
-import type { Frame, Namespace, Op, PeerId, Snapshot } from "../../contracts";
+
 import type { SessionApi } from "../session/types";
+import type { Frame, Namespace, Op, PeerId, Snapshot } from "../transport/protocol";
 import { applyOps, decodeSnapshot, encodeNamespace, encodeSnapshot } from "./codec";
 import type { Cells, Config, State, SyncEngine } from "./types";
 

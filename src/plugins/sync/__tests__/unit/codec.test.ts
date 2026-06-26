@@ -7,7 +7,7 @@
  * @see ../../README.md
  */
 import { describe, expect, it } from "vitest";
-import type { Snapshot } from "../../../../contracts";
+import type { Snapshot } from "../../../transport/protocol";
 import { applyOps, decodeSnapshot, diffToOps, encodeNamespace, encodeSnapshot } from "../../codec";
 
 // ─────────────────────────────────────────────────────────────────────────────

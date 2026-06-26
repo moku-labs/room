@@ -7,7 +7,7 @@
  * @see ../README.md
  */
 
-import type { IntentFrame, PeerId } from "../../../contracts";
+import type { IntentFrame, PeerId } from "../../transport/protocol";
 import type { BufferedIntent, SessionState } from "../types";
 
 /**

@@ -3,11 +3,11 @@
  * @see README.md
  *
  * Holds ONLY sync's internal types. Every shared contract type (`Snapshot`, `Op`, `JsonValue`,
- * `Namespace`, `PeerId`, `Frame`) is imported from the central `../../contracts` module (D16) —
+ * `Namespace`, `PeerId`, `Frame`) is imported from their owning plugins (`../transport/protocol` for the wire/signaling protocol; `RoomEvents` from `../../config`) —
  * never re-declared or re-exported here. `Config` and `Api` are `type` aliases (NOT `interface`)
  * so they satisfy `Record<string, unknown>`.
  */
-import type { Frame, JsonValue, Namespace, PeerId, Snapshot } from "../../contracts";
+import type { Frame, JsonValue, Namespace, PeerId, Snapshot } from "../transport/protocol";
 
 /**
  * One namespace's cell map — the unit `read`/`mutate`/`subscribe` operate on. Every leaf is a

@@ -3,10 +3,11 @@
  * @see ../../handlers.ts
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { IceCandidateInit, RoomEvents, SignalMsg } from "../../../../contracts";
+import type { RoomEvents } from "../../../../config";
 import { inMemory } from "../../adapters/in-memory";
 import type { WireChannel } from "../../channel";
 import { handlePeerArrival, handlePeerLeave, handleSignal } from "../../handlers";
+import type { IceCandidateInit, SignalMsg } from "../../protocol";
 import { createTransportState } from "../../state";
 import type { PeerConnection, TransportConfig, TransportState } from "../../types";
 

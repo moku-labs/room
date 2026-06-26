@@ -3,7 +3,7 @@
  * Internal plugin barrel for `@moku-labs/room`: namespace type surfaces + plugin instances.
  *
  * Namespace re-exports expose each Standard+ plugin's public `types.ts` under a stable name;
- * the instance re-exports feed the public barrel (`../index`) and the `roomPlugins` composition.
+ * the instance re-exports feed the public barrel (`../index`), which composes them into the client core.
  *
  * @see ../index
  */

@@ -5,7 +5,7 @@
  * `serverSignaling` pay zero bundle cost. Speaks the contracts §1.3
  * `ClientEnvelope`/`ServerEnvelope` protocol over a single persistent WebSocket.
  * @see ./server.ts
- * @see ../../../contracts
+ * @see ../protocol
  */
 import type {
   ClientEnvelope,
@@ -14,7 +14,7 @@ import type {
   SignalingJoinOpts,
   SignalingSession,
   SignalMsg
-} from "../../../contracts";
+} from "../protocol";
 
 /**
  * Resolves the `leave()` promise once a WebSocket reaches CLOSED state. Registers a one-shot
@@ -44,7 +44,7 @@ function waitForClose(ws: WebSocket): Promise<void> {
 }
 
 /**
- * Builds a live `SignalingSession` over a single persistent WebSocket to the room-hub worker.
+ * Builds a live `SignalingSession` over a single persistent WebSocket to the hub worker.
  *
  * Protocol:
  *  - On open: sends `{kind:"join", selfId, role}` — or `{kind:"reclaim", selfId, reclaimToken}` when
@@ -64,7 +64,7 @@ function waitForClose(ws: WebSocket): Promise<void> {
  * The returned session has `persistent: true` so `handlers.ts` skips the post-ICE
  * `leave()` / null and keeps the WS open as the discovery-push conduit (D25).
  *
- * @param url - Base `wss://…` URL of the room-hub worker.
+ * @param url - Base `wss://…` URL of the hub worker.
  * @param code - The 6-char room code identifying the WS endpoint.
  * @param opts - Self id and passive/active role.
  * @returns A `persistent: true` `SignalingSession`.

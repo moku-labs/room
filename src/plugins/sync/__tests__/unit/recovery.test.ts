@@ -6,8 +6,8 @@
  * @see ../../README.md
  */
 import { describe, expect, it, vi } from "vitest";
-import type { Frame, PeerId } from "../../../../contracts";
 import type { SessionApi } from "../../../session/types";
+import type { Frame, PeerId } from "../../../transport/protocol";
 import { createSyncEngine } from "../../engine";
 import { createSyncState } from "../../state";
 import type { Config } from "../../types";

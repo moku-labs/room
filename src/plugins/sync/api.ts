@@ -10,10 +10,11 @@
  * method (registry/dirty-flag/throttle for host writes; replica apply/subscription for controller reads;
  * codec-backed snapshot serialize for the recovery seam). No logic lives here beyond engine construction
  * + delegation — the engine owns the state, the subscription `Map`, and the codec calls. Shared contract
- * types are imported from `../../contracts` (D16); `SessionApi` from the owning `session` plugin.
+ * types are imported from `../transport/protocol`; `SessionApi` from the owning `session` plugin.
  */
-import type { Wire } from "../../contracts";
+
 import type { SessionApi } from "../session/types";
+import type { Wire } from "../transport/protocol";
 import { createSyncEngine } from "./engine";
 import type { Api, Config, State } from "./types";
 

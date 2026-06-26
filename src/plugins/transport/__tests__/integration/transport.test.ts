@@ -2,11 +2,13 @@
  * @file Integration tests — full createApp wiring over the inMemory adapter.
  * @see ../../index.ts
  */
-import { createApp, createPlugin } from "@moku-labs/web";
+
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { Frame, IntentFrame, RoomEvents, Snapshot } from "../../../../contracts";
+import type { RoomEvents } from "../../../../config";
+import { createApp, createPlugin } from "../../../../index";
 import { inMemory } from "../../adapters/in-memory";
 import { transportPlugin } from "../../index";
+import type { Frame, IntentFrame, Snapshot } from "../../protocol";
 
 // ─────────────────────────────────────────────────────────────────────────────
 // A pair of apps share ONE inMemory bus instance, so a host + a controller can
@@ -34,9 +36,8 @@ function makeApp(
   extra?: { heartbeatIntervalMs?: number; heartbeatTimeoutMs?: number }
 ) {
   return createApp({
-    plugins: [transportPlugin, warningProbePlugin],
+    plugins: [warningProbePlugin],
     pluginConfigs: {
-      site: { name: "room-test", url: "https://room.test" },
       transport: { signaling, ...extra }
     }
   });

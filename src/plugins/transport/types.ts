@@ -2,11 +2,11 @@
  * @file Transport plugin types — config, state, API, and the per-peer connection record.
  * @see README.md
  *
- * Holds ONLY transport's internal types. The shared wire/signaling contracts (`Wire`, `Frame`,
- * `PeerId`, `Signaling`, `SignalingSession`) are imported from the central `../../contracts` module
- * (D16) — never re-declared or re-exported here.
+ * Holds ONLY transport's internal (DOM/RTC) types. The shared wire/signaling contracts (`Wire`,
+ * `Frame`, `PeerId`, `Signaling`, `SignalingSession`) live in transport's own DOM-free `./protocol`
+ * module and are imported here — never re-declared.
  */
-import type { Frame, PeerId, Signaling, SignalingSession, Wire } from "../../contracts";
+import type { Frame, PeerId, Signaling, SignalingSession, Wire } from "./protocol";
 
 /**
  * `transportPlugin` configuration. Tunes the WebRTC + DataChannel transport floor. Every timing default

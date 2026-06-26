@@ -13,7 +13,7 @@
  * @see ../../types
  */
 import { describe, expect, expectTypeOf, it } from "vitest";
-import type { JsonValue } from "../../../../contracts";
+import type { JsonValue } from "../../../transport/protocol";
 import type { BufferedIntent, IntentApi, IntentFieldRule, IntentSchema } from "../../types";
 
 describe("intent type surface", () => {

@@ -10,7 +10,7 @@
  * @see ../../api
  */
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { Frame, PeerId, Wire } from "../../../../contracts";
+import type { Frame, PeerId, Wire } from "../../../transport/protocol";
 import { createIntentApi } from "../../api";
 import { attachIntentReceive } from "../../receive";
 import { createIntentState } from "../../state";

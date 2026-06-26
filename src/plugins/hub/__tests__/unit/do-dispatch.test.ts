@@ -1,21 +1,21 @@
 /**
- * @file Unit tests for the RoomHub DO message dispatch (Cycle-2 W3): join / reclaim / relay handling,
+ * @file Unit tests for the Hub DO message dispatch (Cycle-2 W3): join / reclaim / relay handling,
  * the join-window guard (1008), the controller cap (`full`), star topology (passive↔passive never
  * announced), relay opacity (no gameplay path), and the safe-guarded Alarm TTL. Drives the DO against the
  * lightweight Hibernation/SQLite fakes (the DO's `fetch()` Hibernation accept is covered by Wave-4's
  * Playwright/wrangler run).
- * @see ../../room-hub-do
+ * @see ../../hub-do
  * @see ../fakes
  */
 import { describe, expect, it } from "vitest";
-import type { ClientEnvelope } from "../../../../contracts";
-import { MAX_CONTROLLERS } from "../../../../contracts";
-import type { RoomHub } from "../../room-hub-do";
+import type { ClientEnvelope } from "../../../transport/protocol";
+import { MAX_CONTROLLERS } from "../../../transport/protocol";
+import type { Hub } from "../../hub-do";
 import { asWs, type FakeSocket, makeFakeRoom } from "../fakes";
 
 /** Sends a `join` envelope from `ws` and awaits dispatch. */
 async function join(
-  room: RoomHub,
+  room: Hub,
   ws: FakeSocket,
   selfId: string,
   role: "host" | "controller"
@@ -23,7 +23,7 @@ async function join(
   await room.webSocketMessage(asWs(ws), JSON.stringify({ kind: "join", selfId, role }));
 }
 
-describe("RoomHub DO — join", () => {
+describe("Hub DO — join", () => {
   it("acks a host join with empty peers + a reclaim token and persists the row", async () => {
     const fake = makeFakeRoom();
     const host = fake.addSocket();
@@ -116,7 +116,7 @@ describe("RoomHub DO — join", () => {
   });
 });
 
-describe("RoomHub DO — relay (opaque, no gameplay path)", () => {
+describe("Hub DO — relay (opaque, no gameplay path)", () => {
   it("delivers a relay to the target and persists the in-flight SDP", async () => {
     const fake = makeFakeRoom();
     const host = fake.addSocket();
@@ -148,7 +148,7 @@ describe("RoomHub DO — relay (opaque, no gameplay path)", () => {
   });
 });
 
-describe("RoomHub DO — reclaim (host reload)", () => {
+describe("Hub DO — reclaim (host reload)", () => {
   it("re-binds the host on a valid token and re-announces it to controllers", async () => {
     const fake = makeFakeRoom();
     const host = fake.addSocket();
@@ -193,7 +193,7 @@ describe("RoomHub DO — reclaim (host reload)", () => {
   });
 });
 
-describe("RoomHub DO — no gameplay path (D2/D21)", () => {
+describe("Hub DO — no gameplay path (D2/D21)", () => {
   it("rejects a §2 gameplay Frame on a relay envelope at the type level", () => {
     // The relay variant's `msg` is a §1 SignalMsg; a §2 gameplay Frame (here a heartbeat ping) is
     // structurally rejected — the DO has no gameplay-relay case and cannot carry gameplay (D2/D21).
@@ -203,7 +203,7 @@ describe("RoomHub DO — no gameplay path (D2/D21)", () => {
   });
 });
 
-describe("RoomHub DO — unknown frames", () => {
+describe("Hub DO — unknown frames", () => {
   it("replies error 1003 for an unknown kind", async () => {
     const fake = makeFakeRoom();
     const ws = fake.addSocket();
@@ -246,7 +246,7 @@ describe("RoomHub DO — unknown frames", () => {
   });
 });
 
-describe("RoomHub DO — webSocketClose", () => {
+describe("Hub DO — webSocketClose", () => {
   it("deletes a controller row and announces peer-left to the star subset", async () => {
     const fake = makeFakeRoom();
     const host = fake.addSocket();
@@ -292,7 +292,7 @@ describe("RoomHub DO — webSocketClose", () => {
   });
 });
 
-describe("RoomHub DO — alarm (safe-guarded TTL)", () => {
+describe("Hub DO — alarm (safe-guarded TTL)", () => {
   it("reschedules while sockets are live", async () => {
     const fake = makeFakeRoom();
     fake.addSocket();

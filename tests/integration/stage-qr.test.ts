@@ -1,6 +1,6 @@
 /**
  * @file Framework-level integration coverage for the public async QR accessor (`stage.qr()` /
- * `session.qr()`), composed through `@moku-labs/web`'s `createApp` over the public `roomPlugins.stage`
+ * `session.qr()`), composed through `@moku-labs/web`'s `createApp` over the public `[stagePlugin]`
  * array exactly as a TV/host consumer would. This is the regression guard for the "show QR on the TV →
  * phone scans to join" flow: the rest of the integration suite runs with `generateQr: false`, so this is
  * the only place the real `qrcode` encoder runs end-to-end through the published surface.
