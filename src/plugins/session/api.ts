@@ -153,7 +153,7 @@ export function createSessionApi(deps: SessionDeps): SessionApi {
     },
 
     /** @inheritdoc */
-    roster(): readonly import("../../contracts").RosterEntry[] {
+    roster(): readonly import("../transport/protocol").RosterEntry[] {
       return readRoster(deps.state);
     },
 
@@ -167,14 +167,14 @@ export function createSessionApi(deps: SessionDeps): SessionApi {
     },
 
     /** @inheritdoc */
-    hostId(): import("../../contracts").PeerId {
+    hostId(): import("../transport/protocol").PeerId {
       if (deps.state.role === "host") return deps.state.selfId;
       // Controller: return the stored host peer id.
       return deps.state._hostId ?? "";
     },
 
     /** @inheritdoc */
-    persistSnapshot(snapshot: import("../../contracts").Snapshot, sSeq: number): void {
+    persistSnapshot(snapshot: import("../transport/protocol").Snapshot, sSeq: number): void {
       if (deps.state.role !== "host") return; // No-op on controller.
       // Capture the DO reclaim token (serverSignaling only; null otherwise) so a host reload can
       // re-attach to the warm room (§5.1, D25). exact-optional: omit the key when there is none.

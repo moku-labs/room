@@ -8,10 +8,9 @@
  * untouched).
  */
 
-import { createApp, createPlugin } from "@moku-labs/web";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { RoomEvents } from "../../../../contracts";
-import { transportPlugin } from "../../../transport";
+import type { RoomEvents } from "../../../../config";
+import { createApp, createPlugin } from "../../../../index";
 import { inMemory } from "../../../transport/adapters/in-memory";
 import { sessionPlugin } from "../../index";
 
@@ -40,9 +39,8 @@ function makeSessionApp(
   });
 
   const app = createApp({
-    plugins: [transportPlugin, sessionPlugin, eventProbePlugin],
+    plugins: [eventProbePlugin],
     pluginConfigs: {
-      site: { name: "room-test", url: "https://room.test" },
       transport: { signaling: bus },
       session: {
         generateQr: false,

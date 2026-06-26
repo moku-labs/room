@@ -1,5 +1,5 @@
 /**
- * @file RoomHub Durable Object — Hibernation signaling hub (NOT a plugin; D21/I3).
+ * @file Hub Durable Object — Hibernation signaling hub (NOT a plugin; D21/I3).
  *
  * Per-room signaling hub reached via `env.ROOM_HUB.getByName(code)`. Speaks the `00-contracts.md` §1.3
  * `ClientEnvelope`/`ServerEnvelope` protocol over a Hibernatable WebSocket: a discriminated `kind` switch
@@ -9,14 +9,13 @@
  * adapter (`../transport/adapters/server-impl.ts`) are the two ends of that one protocol; the
  * `inMemory({ server: true })` simulator speaks it too, so every path is testable before deploy.
  *
- * The base from `defineDurableObject` supplies only `ctx`/`env`; the runtime invokes the handlers below by
- * name, so they are declared without `override` (they are not on the base interface).
- * @see ../../contracts
+ * A plain DO class (no base-class import) so it loads under node for the fake-driven unit tests; the
+ * workerd runtime instantiates it with `(ctx, env)` and invokes the handlers below by name.
+ * @see ../transport/protocol
  * @see ./sqlite
  */
-import { defineDurableObject } from "@moku-labs/worker";
-import type { ClientEnvelope, PeerId, ServerEnvelope } from "../../contracts";
-import { MAX_CONTROLLERS } from "../../contracts";
+import type { ClientEnvelope, PeerId, ServerEnvelope } from "../transport/protocol";
+import { MAX_CONTROLLERS } from "../transport/protocol";
 import { defaultConfig } from "./config";
 import {
   deleteSession,
@@ -145,11 +144,27 @@ function readAttachment(ws: WebSocket): Attachment | null {
 }
 
 /**
- * Per-room signaling hub. Hibernation-based: the constructor (from `defineDurableObject`) hydrates only
- * `ctx`/`env`; heavy state lives in SQLite and is re-read on each message, so a wake mid-handshake never
- * drops it.
+ * Per-room signaling hub — a plain Cloudflare Durable Object class (no base-class import, so it loads under
+ * node for the fake-driven unit tests; the workerd runtime instantiates it with `(ctx, env)`).
+ * Hibernation-based: heavy state lives in SQLite and is re-read on each message, so a wake mid-handshake
+ * never drops it.
  */
-export class RoomHub extends defineDurableObject("RoomHub") {
+export class Hub {
+  /**
+   * Stores the Durable Object state for the handlers below; the workerd runtime instantiates the DO with
+   * `(ctx, env)`. `env` is unused — the hub reads its heavy state from SQLite via `ctx.storage`.
+   *
+   * @param ctx - The Durable Object state (SQLite storage, hibernatable sockets, alarms) the runtime supplies.
+   * @param _env - The per-DO env (unused).
+   * @example
+   * ```ts
+   * const hub = new Hub(ctx, env); // workerd-instantiated; unit tests pass a fake ctx
+   * ```
+   */
+  constructor(
+    private readonly ctx: DurableObjectState,
+    _env: unknown
+  ) {}
   /**
    * Accepts the WebSocket upgrade (Hibernation), seeds the socket attachment as `{peerId:null,
    * role:null, openedAt}`, ensures the SQLite schema, and arms the idle-TTL Alarm if unset.

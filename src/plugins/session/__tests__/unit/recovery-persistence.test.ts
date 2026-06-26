@@ -6,7 +6,7 @@
  */
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { Snapshot } from "../../../../contracts";
+import type { Snapshot } from "../../../transport/protocol";
 import {
   armPersistence,
   readReentryRecord,

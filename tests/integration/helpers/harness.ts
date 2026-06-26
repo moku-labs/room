@@ -3,7 +3,7 @@
  *
  * Distinct from the colocated per-plugin integration tests (`src/plugins/*\/__tests__/integration/`):
  * those import individual plugin instances; THIS harness composes the **public** pre-bundled arrays
- * (`roomPlugins.stage` / `roomPlugins.controller`) through `@moku-labs/web`'s `createApp`, exactly as a
+ * (`[stagePlugin]` / `[controllerPlugin]`) through `@moku-labs/web`'s `createApp`, exactly as a
  * consumer app would. The transport `signaling` is the deterministic `inMemory()` bus (DOM-free, no
  * `RTCPeerConnection`, contracts §1.3 / D13) so a stage device + N controller devices rendezvous
  * in-process and carry real `Frame`s end-to-end.
@@ -15,9 +15,14 @@
  * `vi.waitFor(...)` rather than arbitrary sleeps.
  */
 
-import { createApp, createPlugin } from "@moku-labs/web";
-import type { RoomEvents } from "../../../src/contracts";
-import { controllerPlugin, inMemory, roomPlugins, stagePlugin } from "../../../src/index";
+import type { RoomEvents } from "../../../src/config";
+import {
+  controllerPlugin,
+  createApp,
+  createPlugin,
+  inMemory,
+  stagePlugin
+} from "../../../src/index";
 
 /** A live in-process signaling bus (the `inMemory()` adapter return type). */
 export type Bus = ReturnType<typeof inMemory>;
@@ -59,7 +64,6 @@ export function makeServerBus(): Bus {
  */
 export function siteCfg(bus: Bus, generateQr = false) {
   return {
-    site: { name: "room-test", url: "https://room.test" },
     transport: { signaling: bus },
     session: { generateQr }
   };
@@ -90,7 +94,7 @@ function captureHooks(captured: CapturedEvent[]) {
 }
 
 /**
- * Builds a STAGE (host / shared-screen) app from the public `roomPlugins.stage` plus a throwaway game
+ * Builds a STAGE (host / shared-screen) app from the public `[stagePlugin]` plus a throwaway game
  * probe that `depends:[stagePlugin]` and records every `room:*` event it sees (the WARN-2 visibility
  * proof). The returned app exposes `app.stage`, `app.sync`, `app.session`, `app.intent`, `app.transport`.
  * Pass `generateQr: true` to exercise the host's public `stage.qr()` accessor.
@@ -111,7 +115,7 @@ export function makeStage(bus: Bus, probeName = "stageGameProbe", generateQr = f
   });
 
   const app = createApp({
-    plugins: [...roomPlugins.stage, probe],
+    plugins: [stagePlugin, probe],
     pluginConfigs: siteCfg(bus, generateQr)
   });
 
@@ -119,7 +123,7 @@ export function makeStage(bus: Bus, probeName = "stageGameProbe", generateQr = f
 }
 
 /**
- * Builds a CONTROLLER (phone) app from the public `roomPlugins.controller` plus a throwaway game probe
+ * Builds a CONTROLLER (phone) app from the public `[controllerPlugin]` plus a throwaway game probe
  * that `depends:[controllerPlugin]` and records every `room:*` event it sees. The returned app exposes
  * `app.controller`, `app.sync`, `app.session`, `app.intent`, `app.transport`. Give each controller a
  * unique `probeName` so multi-controller composition does not collide on plugin names.
@@ -135,7 +139,7 @@ export function makeController(bus: Bus, probeName: string) {
   });
 
   const app = createApp({
-    plugins: [...roomPlugins.controller, probe],
+    plugins: [controllerPlugin, probe],
     pluginConfigs: siteCfg(bus)
   });
 

@@ -3,9 +3,9 @@
  * @see ../../adapters/in-memory.ts
  */
 import { describe, expect, it, vi } from "vitest";
-import type { SignalMsg } from "../../../../contracts";
 import { inMemory } from "../../adapters/in-memory";
 import type { LoopbackSignaling, WireChannel } from "../../channel";
+import type { SignalMsg } from "../../protocol";
 
 describe("inMemory adapter", () => {
   it("two sessions on the same code mutually fire onPeer", async () => {

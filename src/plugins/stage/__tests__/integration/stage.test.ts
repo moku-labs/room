@@ -1,13 +1,13 @@
 /**
  * @file stage — integration tests (full wiring via createApp + inMemory signaling, D13/contracts §1.3).
  *
- * Composes roomPlugins.stage + a throwaway game plugin (depends:[stagePlugin]) as the host.
+ * Composes [stagePlugin] + a throwaway game plugin (depends:[stagePlugin]) as the host.
  * No real RTCPeerConnection — purely in-memory signaling bus. Exercises the lifecycle,
  * room creation, forwarding proof, and mutate/broadcast with a registered sync slice.
  *
  * Simplification note: the full intent→mutate→controller-read round-trip requires the
  * controllerPlugin composition + a second app on the same bus. This is exercised in the
- * roomPlugins.controller integration test. Here we cover:
+ * [controllerPlugin] integration test. Here we cover:
  * 1. createRoom() returns a RoomDescriptor synchronously (6-char code)
  * 2. lifecycle: start → stage methods → stop resolves cleanly
  * 3. room:sync-ready forwarding reaches a depends:[stagePlugin] game plugin (the WARN-2 proof)
@@ -15,13 +15,9 @@
  * 5. stopping twice / stopping an un-started app surfaces engine behavior, not a facade error
  */
 
-import { createApp, createPlugin } from "@moku-labs/web";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { RoomEvents } from "../../../../contracts";
-import { intentPlugin } from "../../../intent";
-import { sessionPlugin } from "../../../session";
-import { syncPlugin } from "../../../sync";
-import { transportPlugin } from "../../../transport";
+import type { RoomEvents } from "../../../../config";
+import { createApp, createPlugin } from "../../../../index";
 import { inMemory } from "../../../transport/adapters/in-memory";
 import { stagePlugin } from "../../index";
 
@@ -62,9 +58,8 @@ function makeStageApp(bus: Bus) {
   });
 
   const app = createApp({
-    plugins: [transportPlugin, sessionPlugin, intentPlugin, syncPlugin, stagePlugin, gameProbe],
+    plugins: [stagePlugin, gameProbe],
     pluginConfigs: {
-      site: { name: "room-test", url: "https://room.test" },
       transport: { signaling: bus },
       session: { generateQr: false }
     }

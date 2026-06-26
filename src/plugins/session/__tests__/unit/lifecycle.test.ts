@@ -6,8 +6,8 @@
  */
 
 import { describe, expect, it } from "vitest";
-import type { RosterEntry } from "../../../../contracts";
-import { ROOM_CODE_LENGTH } from "../../../../contracts";
+import type { RosterEntry } from "../../../transport/protocol";
+import { ROOM_CODE_LENGTH } from "../../../transport/protocol";
 import { generateRoomCode } from "../../lifecycle/code";
 import { buildJoinUrl } from "../../lifecycle/qr";
 import {

@@ -6,16 +6,16 @@
  */
 
 import { describe, expectTypeOf, it } from "vitest";
+import type { RoomEvents } from "../../../../config";
 import type {
   Frame,
   PeerId,
   RecoveryFlushFrame,
   RecoveryHelloFrame,
   RecoveryWelcomeFrame,
-  RoomEvents,
   RosterEntry,
   Snapshot
-} from "../../../../contracts";
+} from "../../../transport/protocol";
 import type {
   JoinResult,
   QrMatrix,

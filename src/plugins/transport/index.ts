@@ -1,5 +1,5 @@
-import { createPlugin } from "@moku-labs/web/browser";
-import type { RoomEvents } from "../../contracts";
+import type { RoomEvents } from "../../config";
+import { createPlugin } from "../../config";
 import { createTransportApi } from "./api";
 import { tearDownState } from "./channel";
 import { DEFAULT_TRANSPORT_CONFIG } from "./config";

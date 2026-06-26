@@ -1,5 +1,5 @@
 /**
- * @file Sandbox STAGE entry (the TV / shared screen). Composes the public `roomPlugins.stage` app, opens a
+ * @file Sandbox STAGE entry (the TV / shared screen). Composes the public `[stagePlugin]` app, opens a
  * room, renders the join code + QR, and runs the demo "Tap Party" game: every controller→host `tap` intent
  * bumps that peer's cell in the authoritative `scores` slice, which is broadcast to all phones and rendered
  * as a live leaderboard. This is the reference host composition AND the Playwright e2e target — it drives

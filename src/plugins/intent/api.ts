@@ -12,7 +12,7 @@
  * @file
  * @see README.md
  */
-import type { IntentFrame, PeerId, Wire } from "../../contracts";
+import type { IntentFrame, PeerId, Wire } from "../transport/protocol";
 import type { IntentApi, IntentConfig, IntentHandler, IntentState } from "./types";
 
 /**

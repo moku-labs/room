@@ -1,6 +1,6 @@
 /**
  * @file Cross-plugin integration scenarios for the Room pack composed through the public pre-bundled
- * arrays (`roomPlugins.stage` / `roomPlugins.controller`) over the deterministic `inMemory()` signaling
+ * arrays (`[stagePlugin]` / `[controllerPlugin]`) over the deterministic `inMemory()` signaling
  * bus (DOM-free, no `RTCPeerConnection`). Each test stands up ONE stage (host) app plus N controller
  * (phone) apps on a single shared bus and drives them only through the public facades (`app.stage.*` /
  * `app.controller.*`) and the shared engines (`app.sync.*` / `app.intent.*` / `app.session.*`) — never

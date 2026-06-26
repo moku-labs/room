@@ -7,7 +7,7 @@
  * @see ../README.md
  */
 
-import { ROOM_CODE_LENGTH } from "../../../contracts";
+import { ROOM_CODE_LENGTH } from "../../transport/protocol";
 
 /**
  * The confusable-free alphanumeric alphabet for room codes (§6.2). Excludes visually ambiguous glyphs:

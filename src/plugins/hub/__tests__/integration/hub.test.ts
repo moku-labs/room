@@ -1,13 +1,13 @@
 /**
- * @file Integration test for the RoomHub DO (Cycle-2 W3): the end-to-end signaling flow a real
+ * @file Integration test for the Hub DO (Cycle-2 W3): the end-to-end signaling flow a real
  * two-client session produces — host + controller join, the host↔controller handshake relays through the
  * DO, then a host reload reclaims the warm room and the controller is re-announced. Drives the DO against
  * the lightweight Hibernation/SQLite fakes; Wave-4's Playwright/wrangler run covers the same flow over
  * real `workerd` + WebRTC.
- * @see ../../room-hub-do
+ * @see ../../hub-do
  */
 import { describe, expect, it } from "vitest";
-import type { ServerEnvelope } from "../../../../contracts";
+import type { ServerEnvelope } from "../../../transport/protocol";
 import { asWs, makeFakeRoom } from "../fakes";
 
 /** Collects every `relay` envelope a socket received. */
@@ -15,7 +15,7 @@ function relaysTo(sent: ServerEnvelope[]): ServerEnvelope[] {
   return sent.filter(e => e.kind === "relay");
 }
 
-describe("RoomHub DO — full handshake + reclaim flow", () => {
+describe("Hub DO — full handshake + reclaim flow", () => {
   it("brokers join → SDP relay → host reload reclaim end-to-end", async () => {
     const fake = makeFakeRoom();
     const room = fake.room;

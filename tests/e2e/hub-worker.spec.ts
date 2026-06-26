@@ -1,5 +1,5 @@
 /**
- * @file Worker-backed e2e — the FIRST real-`workerd` coverage of the RoomHub Durable Object. W1–W3
+ * @file Worker-backed e2e — the FIRST real-`workerd` coverage of the Hub Durable Object. W1–W3
  * unit-tested the DO dispatch (`webSocketMessage` join/reclaim/relay, star topology, guards) through a
  * lightweight Hibernation/SQLite fake; this drives the SAME protocol for real: the sandbox runs in
  * `?signaling=server` mode against `wrangler dev` (the dev-only `tests/sandbox/wrangler.jsonc`), so the
@@ -7,8 +7,8 @@
  *
  * It is gated to its own config (`playwright.worker.config.ts`, port 5180) so the default CI run stays
  * workerd-free; run it with `bun run test:e2e:worker`. Asserts the three reachable real-runtime behaviours
- * from `.planning/specs/07-room-hub.md` §Sandbox:
- *   1. `101` (WS upgrade → DO) vs `200` (plain GET → ASSETS) routing through `app.roomHub.handle`.
+ * from `.planning/specs/07-hub.md` §Sandbox:
+ *   1. `101` (WS upgrade → DO) vs `200` (plain GET → ASSETS) routing through `app.hub.handle`.
  *   2. a two-controller star handshake over the DO → real P2P RTCDataChannel handoff (host↔controller).
  *   3. host-reload RECLAIM recovery against the warm DO.
  *
@@ -34,7 +34,7 @@ async function readRoomCode(stagePage: import("@playwright/test").Page): Promise
   return text;
 }
 
-test.describe("room-hub worker (real workerd, ?signaling=server)", () => {
+test.describe("hub worker (real workerd, ?signaling=server)", () => {
   test.describe.configure({ mode: "serial" });
 
   test("routes WS upgrades to the DO (101) and plain GETs to ASSETS (200)", async ({ page }) => {

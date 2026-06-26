@@ -1,11 +1,11 @@
 /**
- * Cross-cutting contract types for `@moku-labs/room` — the single physical home (D16) for every
- * shared signaling, wire, event, sync, and roster type. Pure types plus two consts, DOM-free by
- * construction so the signaling seam stays portable to `inMemory` (no `RTCPeerConnection`) and to
- * a future server-side adapter (Workers/Node build). Every plugin imports these from
- * `../../contracts`; they are never re-declared. Materializes specs/00-contracts.md §1–§6.
- *
- * @see ./index
+ * @file `transport/protocol` — the DOM-free cross-plugin wire + signaling contract OWNED by the
+ * transport plugin (it owns the `Wire`). Pure types plus two consts, DOM-free by construction so it is
+ * safe to import from BOTH the `@moku-labs/web` engines AND the `@moku-labs/worker` `hub` (no DOM, no
+ * `RTCPeerConnection`). Every engine + the hub import the protocol types they need from here; the
+ * `room:*` Moku-`emit` event contract lives separately in `../../config` (`RoomEvents`). Materializes
+ * specs/00-contracts.md §1–§6.
+ * @see ../../config
  */
 
 /* eslint-disable sonarjs/redundant-type-aliases -- PeerId/Namespace are spec-mandated domain aliases (00-contracts §4/§6); the named alias documents intent at every call site across the pack and is part of the public type surface. */
@@ -244,7 +244,7 @@ export type Signaling = {
 // §1.3 — Server protocol envelopes (sibling unions to `SignalMsg`, DOM-free).
 // The persistent client↔Durable-Object WebSocket protocol for `serverSignaling`
 // (D21/D23). NOT merged into `SignalMsg` (preserves its handshake-only invariant);
-// the `relay` variant CARRIES a `SignalMsg`. Single home in this file (D16) so the
+// the `relay` variant CARRIES a `SignalMsg`. Defined here in transport's DOM-free protocol so the
 // `inMemory` adapter can simulate the full server path before a real DO exists.
 // ---------------------------------------------------------------------------
 
@@ -418,28 +418,4 @@ export type Wire = {
    * @returns An unsubscribe function.
    */
   on(handler: (peerId: PeerId, frame: Frame) => void): () => void;
-};
-
-// ---------------------------------------------------------------------------
-// §3 — The `room:*` event payloads (Moku `emit` — coarse lifecycle ONLY).
-// ---------------------------------------------------------------------------
-
-/**
- * Room's coarse lifecycle events on the Moku `emit` plane. Declared via the register-callback pattern
- * (spec/14 §2) by the engine that owns each. Facades re-declare (but never forward/re-emit) them (§3.3). These are the
- * ONLY events Room emits — all device↔host traffic is the §2 wire, never these.
- */
-export type RoomEvents = {
-  /** A controller's DataChannel reached `connected` and was added to the roster (§6). */
-  "room:peer-joined": { peerId: PeerId };
-  /** A controller left or was declared dead by the heartbeat (§2.4) and removed from the roster. */
-  "room:peer-left": { peerId: PeerId };
-  /** The host tab reloaded; recovery is in flight. Controllers should show "reconnecting" UX (§5). */
-  "room:host-reconnecting": Record<string, never>;
-  /** The first authoritative frame (snapshot, or gap-free delta) has been applied; replica readable (§4). */
-  "room:sync-ready": Record<string, never>;
-  /** A network condition surfaced to the consumer for failure UX (D2 accepted hard-failure). */
-  "room:network-warning": {
-    reason: "ice-failed" | "rendezvous-unreachable" | "channel-closed" | "room-evicted";
-  };
 };

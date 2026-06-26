@@ -5,9 +5,10 @@
  * intent payload constraint, and that NO explicit generic is used on `createPlugin` (R1). Validated
  * by `bunx tsc --noEmit` — this file is EXCLUDED from vitest `include` (`.test-d.ts` convention).
  */
-import { createPlugin } from "@moku-labs/web";
+
 import { expectTypeOf } from "vitest";
-import type { JsonValue } from "../../../../contracts";
+import { createPlugin } from "../../../../index";
+import type { JsonValue } from "../../../transport/protocol";
 import { controllerPlugin } from "../../index";
 import type { ControllerApi } from "../../types";
 

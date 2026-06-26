@@ -3,15 +3,16 @@
  * @see README.md
  *
  * Holds ONLY the facade's host-role public surface. Every shared contract type (`Namespace`,
- * `PeerId`, `RosterEntry`) is imported from the central `../../contracts` module (D16) —
+ * `PeerId`, `RosterEntry`) is imported from their owning plugins (`../transport/protocol` for the wire/signaling protocol; `RoomEvents` from `../../config`) —
  * never re-declared. `RoomDescriptor` is session-owned (the room-code/QR/hostToken descriptor) and is
  * imported from `../session/types`. `Cells` is imported from `../sync/types` (the per-namespace
  * cell map type). The facade defines no state, no config, and no `ctx` alias — its
  * methods delegate straight to the four engines (transport, session, intent, sync).
  */
-import type { Namespace, PeerId, RosterEntry } from "../../contracts";
+
 import type { QrMatrix, RoomDescriptor } from "../session/types";
 import type { Cells } from "../sync/types";
+import type { Namespace, PeerId, RosterEntry } from "../transport/protocol";
 
 /**
  * A mutation recipe applied to one namespaced sync slice on the host. Receives the current cells

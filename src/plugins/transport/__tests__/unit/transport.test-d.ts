@@ -3,9 +3,9 @@
  * @see ../../types.ts
  */
 import { describe, expectTypeOf, it } from "vitest";
-import type { Frame, IceCandidateInit, Signaling, SignalMsg, Wire } from "../../../../contracts";
 import { inMemory } from "../../adapters/in-memory";
 import { publicRendezvous } from "../../adapters/public-rendezvous";
+import type { Frame, IceCandidateInit, Signaling, SignalMsg, Wire } from "../../protocol";
 import type { ConnectOpts, TransportApi } from "../../types";
 
 describe("transport types", () => {

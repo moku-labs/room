@@ -8,15 +8,13 @@
  * @file
  * @see ../../index
  */
-import { createApp } from "@moku-labs/web";
+
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { Frame } from "../../../../contracts";
-import { sessionPlugin } from "../../../session";
-import { transportPlugin } from "../../../transport";
+import { createApp } from "../../../../index";
 import { inMemory } from "../../../transport/adapters/in-memory";
+import type { Frame } from "../../../transport/protocol";
 import { createIntentApi } from "../../api";
 import { DEFAULT_INTENT_CONFIG } from "../../config";
-import { intentPlugin } from "../../index";
 import { attachIntentReceive } from "../../receive";
 import { createIntentState } from "../../state";
 import type { IntentSchema } from "../../types";
@@ -41,9 +39,8 @@ function noopUnsub(): void {
 /** Builds a minimal intent-capable app on the given in-memory bus. */
 function makeIntentApp(bus: ReturnType<typeof inMemory>) {
   return createApp({
-    plugins: [transportPlugin, sessionPlugin, intentPlugin],
+    plugins: [],
     pluginConfigs: {
-      site: { name: "room-test", url: "https://room.test" },
       transport: { signaling: bus },
       session: { generateQr: false, reconnectTimeoutMs: 10_000 }
     }

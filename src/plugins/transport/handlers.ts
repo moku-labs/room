@@ -12,15 +12,10 @@
  * directly to its in-process channel and marked `connected` with no `RTCPeerConnection`. Real adapters
  * lack it and the full WebRTC handshake runs.
  */
-import type {
-  IceCandidateInit,
-  PeerId,
-  RoomEvents,
-  SignalingSession,
-  SignalMsg
-} from "../../contracts";
+import type { RoomEvents } from "../../config";
 import type { LoopbackSignaling, WireChannel } from "./channel";
 import { bindPeerChannel } from "./channel";
+import type { IceCandidateInit, PeerId, SignalingSession, SignalMsg } from "./protocol";
 import type { PeerConnection, TransportConfig, TransportState } from "./types";
 
 /** The narrowed `room:network-warning` reason emitter the wiring harness binds (api.ts). */

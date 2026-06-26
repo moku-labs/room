@@ -3,8 +3,8 @@
  * @see ../../adapters/public-rendezvous.ts
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { SignalMsg } from "../../../../contracts";
 import { publicRendezvous } from "../../adapters/public-rendezvous";
+import type { SignalMsg } from "../../protocol";
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Mock the Trystero Nostr backbone. `joinRoom` returns a Room-like object whose

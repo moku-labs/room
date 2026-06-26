@@ -9,11 +9,13 @@
  * vitest include globs (only .test-d.ts files matching vitest's typecheck pattern are included),
  * so it is validated by `bunx tsc --noEmit` — NOT by `bunx vitest run`.
  */
-import { createPlugin } from "@moku-labs/web";
+
 import { expectTypeOf } from "vitest";
-import type { Namespace, PeerId, RoomEvents, RosterEntry } from "../../../../contracts";
+import type { RoomEvents } from "../../../../config";
+import { createPlugin } from "../../../../index";
 import type { QrMatrix, RoomDescriptor } from "../../../session/types";
 import type { Cells } from "../../../sync/types";
+import type { Namespace, PeerId, RosterEntry } from "../../../transport/protocol";
 import { createStageApi } from "../../api";
 import { stagePlugin } from "../../index";
 import type { IntentHandler, MutateRecipe, StageApi } from "../../types";

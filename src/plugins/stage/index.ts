@@ -1,5 +1,5 @@
-import { createPlugin } from "@moku-labs/web/browser";
-import type { RoomEvents } from "../../contracts";
+import type { RoomEvents } from "../../config";
+import { createPlugin } from "../../config";
 import { intentPlugin } from "../intent";
 import { sessionPlugin } from "../session";
 import { syncPlugin } from "../sync";
@@ -18,8 +18,8 @@ import { createStageApi } from "./api";
  * global (every hook for an event name fires on any `emit` of that name, regardless of `depends`), so the
  * engines' own emits already reach a `depends: [stagePlugin]` consumer directly — a forwarding hook that
  * re-emitted the same name would re-trigger itself and recurse infinitely (D19). No `onStart`/`onStop`:
- * the facade manages no resource; the engines own all lifecycle (spec/06). Shipped pre-composed as
- * `roomPlugins.stage = [transport, session, intent, sync, stage]`.
+ * the facade manages no resource; the engines own all lifecycle (spec/06). A stage app adds it via
+ * `createApp({ plugins: [stagePlugin] })` — the four engines are wired as core defaults.
  *
  * @see README.md
  */

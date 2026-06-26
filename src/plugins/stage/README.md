@@ -9,8 +9,8 @@ method delegates via `ctx.require(...)` to one of the four engines it depends on
 with `depends: [stagePlugin]` gets the complete, typed hook surface in one edge (WARN-2 — event
 visibility is not transitive at the type level: spec/07 §5, spec/14 §7). It installs no forwarding
 hooks: Moku's event bus is global, so the engines' own emits already reach a `depends: [stagePlugin]`
-consumer's hooks directly (re-emitting would self-recurse). Shipped pre-composed as
-`roomPlugins.stage = [transport, session, intent, sync, stage]`.
+consumer's hooks directly (re-emitting would self-recurse). The four engines are core defaults; add the host facade via
+`createApp({ plugins: [stagePlugin] })`.
 
 ## API
 
@@ -97,14 +97,11 @@ Coarse lifecycle only — no gameplay payload ever flows through `emit` (spec/07
 
 ## Usage
 
-A game plugin composes the pre-bundled `roomPlugins.stage`, drives the stage through `app.stage.*`, and
-hooks the `room:*` lifecycle by declaring `depends: [stagePlugin]` (which is how all five events become
-visible — WARN-2):
+A game plugin adds `stagePlugin`, drives the stage through `app.stage.*`, and hooks the `room:*` lifecycle
+by declaring `depends: [stagePlugin]` (which is how all five events become visible — WARN-2):
 
 ```typescript
-import { createApp } from "@moku-labs/web/browser";
-import { createPlugin } from "@moku-labs/web/browser";
-import { roomPlugins, stagePlugin } from "@moku-labs/room";
+import { createApp, createPlugin, stagePlugin } from "@moku-labs/room";
 
 // A couch-multiplayer game plugin that drives the host stage.
 const scoreboardGame = createPlugin("scoreboardGame", {
@@ -119,10 +116,9 @@ const scoreboardGame = createPlugin("scoreboardGame", {
   })
 });
 
-// roomPlugins.stage = [transport, session, intent, sync, stage] — facade LAST so its
-// depends array is satisfied by array order; the game plugin composes after it.
+// The four engines are core defaults; add the host facade, then the game plugin.
 const app = createApp({
-  plugins: [...roomPlugins.stage, scoreboardGame]
+  plugins: [stagePlugin, scoreboardGame]
 });
 
 await app.start();

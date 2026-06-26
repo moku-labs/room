@@ -1,14 +1,14 @@
 /**
  * @file Public type surface for the controller facade — the CONTROLLER-role API (`ControllerApi`) a
  * phone-side couch-multiplayer game plugin composes against. Every shared shape (`Namespace`,
- * `JsonValue`, `RoomEvents`) is imported from the central `../../contracts` module (D16) — never
+ * `JsonValue`, `RoomEvents`) is imported from their owning plugins (`../transport/protocol` for the wire/signaling protocol; `RoomEvents` from `../../config`) — never
  * re-declared here. The facade owns no state and no config, so there is no internal state/config type;
  * this file holds ONLY the public `ControllerApi` (the four engine delegations + the two iOS Screen Wake
  * Lock controls). `@moku-labs/web` infers `ctx` inline in `index.ts`, so no `PluginContext`/`PluginCtx`
  * type is imported (web does not export it, D1) and the api factory takes the four resolved engine APIs.
  * @see README.md
  */
-import type { JsonValue, Namespace } from "../../contracts";
+import type { JsonValue, Namespace } from "../transport/protocol";
 
 /**
  * The CONTROLLER-role public surface (phone side). A thin, typed facade over the four Room engines

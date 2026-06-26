@@ -5,7 +5,7 @@
  */
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { PeerId } from "../../../../contracts";
+import type { PeerId } from "../../../transport/protocol";
 import type { SessionStateWithRuntime } from "../../recovery/reentry";
 import { registerTransportBindings } from "../../recovery/reentry";
 import { armReconnectTimeout, degradeOrRejoin } from "../../recovery/timeout";

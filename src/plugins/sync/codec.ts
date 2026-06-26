@@ -8,9 +8,9 @@
  * (the inverse of diff + broadcast). The codec is the highest-value unit target:
  * `applyOps(prev, diffToOps(prev, next))` must deep-equal `next` for any plain-JSON input, and it must
  * never produce or accept non-JSON (no `Map`, `Set`, function, or `undefined`-hole, spec/11 section 1.7).
- * Shared contract types are imported from `../../contracts` (D16); `Cells` is sync's internal alias.
+ * Shared contract types are imported from `../transport/protocol`; `Cells` is sync's internal alias.
  */
-import type { JsonValue, Namespace, Op, Snapshot } from "../../contracts";
+import type { JsonValue, Namespace, Op, Snapshot } from "../transport/protocol";
 import type { Cells } from "./types";
 
 /**

@@ -16,8 +16,9 @@
  * sessions, so persistent-reconnect + host-reload recovery are testable without a live Durable Object.
  * The default (no-arg / `{ server: false }`) path is byte-for-byte unchanged (D23).
  */
-import type { Signaling, SignalingJoinOpts, SignalMsg } from "../../../contracts";
+
 import type { LoopbackEndpoint, LoopbackSignaling } from "../channel";
+import type { Signaling, SignalingJoinOpts, SignalMsg } from "../protocol";
 
 /** A live participant on the in-process bus — one per `join` call. */
 type Member = {

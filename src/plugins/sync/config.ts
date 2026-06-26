@@ -17,7 +17,7 @@ const DEFAULT_MAX_OPS_PER_DELTA = 512;
 
 /**
  * The typed default `syncPlugin` config. All fields have safe defaults (the verified couch profile), so
- * composing `roomPlugins.stage` / `roomPlugins.controller` needs zero overrides.
+ * composing `[stagePlugin]` / `[controllerPlugin]` needs zero overrides.
  *
  * @example
  * ```ts

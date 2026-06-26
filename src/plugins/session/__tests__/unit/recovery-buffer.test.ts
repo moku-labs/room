@@ -6,7 +6,7 @@
  */
 
 import { describe, expect, it } from "vitest";
-import type { IntentFrame } from "../../../../contracts";
+import type { IntentFrame } from "../../../transport/protocol";
 import { bufferIntent, drainBuffer, reconcileFlush } from "../../recovery/buffer";
 import { createSessionState } from "../../state";
 import type { BufferedIntent } from "../../types";

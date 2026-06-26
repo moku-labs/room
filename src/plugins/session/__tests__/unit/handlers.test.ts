@@ -5,7 +5,7 @@
  */
 
 import { describe, expect, it, vi } from "vitest";
-import type { Frame, RosterEntry } from "../../../../contracts";
+import type { Frame, RosterEntry } from "../../../transport/protocol";
 import {
   handleHostChannelLost,
   handlePeerConnected,

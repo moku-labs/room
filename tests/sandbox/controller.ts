@@ -1,5 +1,5 @@
 /**
- * @file Sandbox CONTROLLER entry (the phone). Composes the public `roomPlugins.controller` app, joins a
+ * @file Sandbox CONTROLLER entry (the phone). Composes the public `[controllerPlugin]` app, joins a
  * room by code (auto-filled from the scanned `?room=` URL or typed in), then plays the demo "Tap Party":
  * the big button fires a `tap` intent at the host on every press, and the controller renders its own live
  * score from the read-only synced `scores` replica. Reference phone composition AND Playwright e2e target;

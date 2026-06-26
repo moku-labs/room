@@ -5,7 +5,7 @@
  * the ~60 KiB Web budget if static). Does peerRegistry upsert-by-peerId (Trystero #77 unclean leave/join).
  * @see ../README.md
  */
-import type { Signaling, SignalingJoinOpts, SignalingSession, SignalMsg } from "../../../contracts";
+import type { Signaling, SignalingJoinOpts, SignalingSession, SignalMsg } from "../protocol";
 
 /** Moku Room's stable Trystero app namespace (scopes all Room rooms under one app id). */
 const APP_ID = "moku-room";

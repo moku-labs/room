@@ -7,7 +7,7 @@
  * @see ../../README.md
  */
 import { describe, expectTypeOf, it } from "vitest";
-import type { JsonValue } from "../../../../contracts";
+import type { JsonValue } from "../../../transport/protocol";
 import type { Api } from "../../types";
 
 describe("sync types", () => {

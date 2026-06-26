@@ -12,7 +12,7 @@
  * @file
  * @see README.md
  */
-import type { JsonValue, Wire } from "../../contracts";
+import type { JsonValue, Wire } from "../transport/protocol";
 import type { IntentState } from "./types";
 import { validateIntent } from "./validate";
 

@@ -29,24 +29,24 @@ Then:
 | *(none)* | **Default** — real WebRTC over `publicRendezvous` (Trystero, Nostr backbone). Works across devices and across browser tabs. |
 | `?backbone=torrent` | Real WebRTC over the BitTorrent fallback backbone. |
 | `?signaling=memory` | The in-process `inMemory()` bus. **Single JS context only** — handy for a deterministic boot smoke test on one page; it cannot bridge two tabs/devices. |
-| `?signaling=server` | The opt-in **worker-backed** `serverSignaling` adapter (D21/D25): SDP/ICE is relayed by the same-origin RoomHub Durable Object instead of `publicRendezvous`. Requires the worker harness (below); gameplay still flows P2P over the negotiated DataChannel. |
+| `?signaling=server` | The opt-in **worker-backed** `serverSignaling` adapter (D21/D25): SDP/ICE is relayed by the same-origin Hub Durable Object instead of `publicRendezvous`. Requires the worker harness (below); gameplay still flows P2P over the negotiated DataChannel. |
 
 ## Worker harness (`?signaling=server` — real `workerd`)
 
-`?signaling=server` needs the room-hub **worker** running, not the Bun static server. Boot it with:
+`?signaling=server` needs the hub **worker** running, not the Bun static server. Boot it with:
 
 ```bash
 bun run sandbox:worker     # builds the client, then `wrangler dev` on http://localhost:5180
 ```
 
 That serves the built web client through the worker's `ASSETS` binding AND hosts the per-room
-[`RoomHub`](../../src/plugins/room-hub/room-hub-do.ts) Durable Object — the web+worker composition a real
+[`Hub`](../../src/plugins/hub/hub-do.ts) Durable Object — the web+worker composition a real
 deploy uses (the consuming app owns the published `wrangler.jsonc`; this
 [`wrangler.jsonc`](./wrangler.jsonc) is dev-only test infra, D26). Then open
 **http://localhost:5180/stage?signaling=server** and **…/controller?signaling=server&room=CODE**.
 
 The automated coverage is the first real-`workerd` exercise of the DO (W1–W3 unit-tested its dispatch via a
-fake): [`../e2e/room-hub-worker.spec.ts`](../e2e/room-hub-worker.spec.ts), run via its own config so the
+fake): [`../e2e/hub-worker.spec.ts`](../e2e/hub-worker.spec.ts), run via its own config so the
 default CI run stays workerd-free:
 
 ```bash

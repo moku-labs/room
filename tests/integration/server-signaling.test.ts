@@ -9,16 +9,15 @@
  * scenarios assert what is observable through the public surface without a real WebRTC channel — adapter
  * selection + boot/stop, the host-reload `reclaimToken` conduit (`app.transport.reclaimToken()`), and the
  * server-deployment `codeLength` widening (D24). Full channel-carrying behaviour lives in the colocated
- * transport/session/room-hub suites and the manual real-`workerd` Playwright run.
+ * transport/session/hub suites and the manual real-`workerd` Playwright run.
  */
 
-import { createApp, createPlugin } from "@moku-labs/web";
 import { describe, expect, it } from "vitest";
-import { inMemory, roomPlugins, stagePlugin } from "../../src/index";
+import { createApp, createPlugin, inMemory, stagePlugin } from "../../src/index";
 import { makeServerBus, makeStage } from "./helpers/harness";
 
 describe("server-tier signaling — opt-in via the public roomPlugins arrays (inMemory server mode)", () => {
-  it("a stage app composes from roomPlugins.stage over the server-mode bus, starts, and stops cleanly", async () => {
+  it("a stage app composes from [stagePlugin] over the server-mode bus, starts, and stops cleanly", async () => {
     const { app } = makeStage(makeServerBus());
 
     await expect(app.start()).resolves.toBeUndefined();
@@ -53,9 +52,8 @@ describe("server-tier signaling — opt-in via the public roomPlugins arrays (in
     });
 
     const app = createApp({
-      plugins: [...roomPlugins.stage, probe],
+      plugins: [stagePlugin, probe],
       pluginConfigs: {
-        site: { name: "room-test", url: "https://room.test" },
         transport: { signaling: inMemory({ server: true }) },
         session: { generateQr: false, codeLength: 8 }
       }

@@ -8,7 +8,7 @@
  * @see ../../handlers.ts
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { RoomEvents } from "../../../../contracts";
+import type { RoomEvents } from "../../../../config";
 import { inMemory } from "../../adapters/in-memory";
 import { handlePeerArrival } from "../../handlers";
 import { createTransportState } from "../../state";

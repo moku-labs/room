@@ -11,8 +11,8 @@ surface in one edge (WARN-2 — event visibility is not transitive at the type l
 spec/14 §7); it adds no forwarding hooks, since Moku's global event bus already delivers the engines'
 emits to a `depends: [controllerPlugin]` consumer directly (D19). The one
 browser resource it touches directly is the iOS Screen Wake Lock (Safari 16.4+), exposed as an API method
-(not a lifecycle hook) so the consuming game owns the UX policy (D11). Shipped pre-composed as
-`roomPlugins.controller = [transport, session, intent, sync, controller]`.
+(not a lifecycle hook) so the consuming game owns the UX policy (D11). The four engines are core defaults; add the controller facade via
+`createApp({ plugins: [controllerPlugin] })`.
 
 ## Config
 
@@ -98,14 +98,12 @@ emit to the consumer (D19). Coarse lifecycle only — no gameplay payload ever f
 
 ## Usage
 
-A game plugin composes the pre-bundled `roomPlugins.controller`, drives the controller through
-`app.controller.*`, and hooks the `room:*` lifecycle by declaring `depends: [controllerPlugin]` (which
-is how all five events become visible — WARN-2):
+A game plugin adds `controllerPlugin`, drives the controller through `app.controller.*`, and hooks the
+`room:*` lifecycle by declaring `depends: [controllerPlugin]` (which is how all five events become
+visible — WARN-2):
 
 ```typescript
-import { createApp } from "@moku-labs/web/browser";
-import { createPlugin } from "@moku-labs/web/browser";
-import { roomPlugins, controllerPlugin } from "@moku-labs/room";
+import { createApp, createPlugin, controllerPlugin } from "@moku-labs/room";
 
 // A couch-multiplayer game plugin that drives the phone-side controller.
 const padGame = createPlugin("padGame", {
@@ -120,10 +118,9 @@ const padGame = createPlugin("padGame", {
   })
 });
 
-// roomPlugins.controller = [transport, session, intent, sync, controller] — facade LAST so its
-// depends array is satisfied by array order; the game plugin composes after it.
+// The four engines are core defaults; add the controller facade, then the game plugin.
 const app = createApp({
-  plugins: [...roomPlugins.controller, padGame]
+  plugins: [controllerPlugin, padGame]
 });
 
 await app.start();

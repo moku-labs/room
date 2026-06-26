@@ -19,9 +19,16 @@
  * @see ./controller.ts
  * @see ./README.md
  */
-import { createApp } from "@moku-labs/web/browser";
+
 import type { Signaling } from "../../src/index";
-import { inMemory, publicRendezvous, roomPlugins, serverSignaling } from "../../src/index";
+import {
+  controllerPlugin,
+  createApp,
+  inMemory,
+  publicRendezvous,
+  serverSignaling,
+  stagePlugin
+} from "../../src/index";
 
 /** The single authoritative sync slice the demo game keeps — a per-peer tap scoreboard (`peerId → count`). */
 export const SCORES = "scores";
@@ -41,7 +48,7 @@ export const ROOM_PARAM = "room";
  * WebSocket protocol — `wrangler dev` serves the client AND the DO from one origin (`bun run sandbox:worker`
  * on :5180), and a real deploy is `wss://` behind TLS.
  *
- * @returns The `ws://`/`wss://` origin of the room-hub worker.
+ * @returns The `ws://`/`wss://` origin of the hub worker.
  * @example
  * ```ts
  * workerWsOrigin(); // on http://localhost:5180 → "ws://localhost:5180"
@@ -58,7 +65,7 @@ function workerWsOrigin(): string {
  * Selects the signaling backbone from the page URL so the sandbox can run three ways without a rebuild:
  * `?signaling=memory` uses the in-process `inMemory()` bus (single JS context only — handy for a
  * deterministic same-page smoke test); `?signaling=server` uses the worker-backed `serverSignaling` adapter
- * over the same-origin room-hub DO (the `wrangler dev` worker harness, D21/D25); anything else (the default)
+ * over the same-origin hub DO (the `wrangler dev` worker harness, D21/D25); anything else (the default)
  * uses the real serverless `publicRendezvous` WebRTC path (the two-device v1 GATE). A `?backbone=torrent`
  * switches the BitTorrent fallback for the `publicRendezvous` path.
  *
@@ -96,27 +103,27 @@ function roomConfigs(label: string, generateQr: boolean) {
 }
 
 /**
- * Builds the STAGE (host / shared-screen) app: the public `roomPlugins.stage` array composed through
+ * Builds the STAGE (host / shared-screen) app: the public `[stagePlugin]` array composed through
  * `@moku-labs/web`'s `createApp`, with QR generation ON (the TV renders the join QR).
  *
  * @returns The composed host `App` exposing `app.stage`, `app.sync`, `app.intent`, `app.session`.
  */
 export function makeStageApp() {
   return createApp({
-    plugins: [...roomPlugins.stage],
+    plugins: [stagePlugin],
     pluginConfigs: roomConfigs("Stage", true)
   });
 }
 
 /**
- * Builds the CONTROLLER (phone) app: the public `roomPlugins.controller` array composed through
+ * Builds the CONTROLLER (phone) app: the public `[controllerPlugin]` array composed through
  * `createApp`, with QR generation OFF (the phone scans, it does not display).
  *
  * @returns The composed controller `App` exposing `app.controller`, `app.sync`, `app.session`.
  */
 export function makeControllerApp() {
   return createApp({
-    plugins: [...roomPlugins.controller],
+    plugins: [controllerPlugin],
     pluginConfigs: roomConfigs("Controller", false)
   });
 }

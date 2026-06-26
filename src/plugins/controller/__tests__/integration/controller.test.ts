@@ -9,15 +9,13 @@
  * Simplification note: full cross-app round-trip delivery requires event-loop turns.
  * Tests use `vi.waitFor` for async assertions instead of arbitrary sleeps.
  */
-import { createApp, createPlugin } from "@moku-labs/web";
+
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { JsonValue, RoomEvents } from "../../../../contracts";
-import { intentPlugin } from "../../../intent";
-import { sessionPlugin } from "../../../session";
+import type { RoomEvents } from "../../../../config";
+import { createApp, createPlugin } from "../../../../index";
 import { stagePlugin } from "../../../stage";
-import { syncPlugin } from "../../../sync";
-import { transportPlugin } from "../../../transport";
 import { inMemory } from "../../../transport/adapters/in-memory";
+import type { JsonValue } from "../../../transport/protocol";
 import { controllerPlugin } from "../../index";
 
 // ---------------------------------------------------------------------------
@@ -27,7 +25,6 @@ import { controllerPlugin } from "../../index";
 /** Common pluginConfigs for both stage and controller apps. */
 function siteCfg(bus: ReturnType<typeof inMemory>) {
   return {
-    site: { name: "room-test", url: "https://room.test" },
     transport: { signaling: bus },
     session: { generateQr: false }
   };
@@ -39,7 +36,7 @@ function siteCfg(bus: ReturnType<typeof inMemory>) {
  */
 function makeStageApp(bus: ReturnType<typeof inMemory>) {
   return createApp({
-    plugins: [transportPlugin, sessionPlugin, intentPlugin, syncPlugin, stagePlugin],
+    plugins: [stagePlugin],
     pluginConfigs: siteCfg(bus)
   });
 }
@@ -90,7 +87,7 @@ function makeControllerApp(
   });
 
   const app = createApp({
-    plugins: [transportPlugin, sessionPlugin, intentPlugin, syncPlugin, controllerPlugin, padGame],
+    plugins: [controllerPlugin, padGame],
     pluginConfigs: siteCfg(bus)
   });
 

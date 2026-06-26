@@ -1,5 +1,5 @@
-import { createPlugin } from "@moku-labs/web/browser";
-import type { RoomEvents } from "../../contracts";
+import type { RoomEvents } from "../../config";
+import { createPlugin } from "../../config";
 import { sessionPlugin } from "../session";
 import { transportPlugin } from "../transport";
 import { createSyncApi } from "./api";
