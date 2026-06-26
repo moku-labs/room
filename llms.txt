@@ -1,19 +1,21 @@
 # @moku-labs/room
 
 > Couch-multiplayer foundation for Moku: shared screen (stage) + phones (controllers), WebRTC peer-to-peer,
-> multi-device state sync. A Moku PLUGIN PACK — NOT a standalone framework or app.
+> multi-device state sync. A standalone Moku FRAMEWORK on `@moku-labs/core` — you `createApp` from it.
 
-Room has NO Layer-2 shell, NO `src/config.ts`, and never calls `createCore`/`createApp` itself. It is built on
-`@moku-labs/web` (peer dependency `^1.12.4`), which supplies `createApp`/`createPlugin` + `ctx.log`/`ctx.env`. Room
-never imports `@moku-labs/core` directly. Consumers build their own `@moku-labs/web` app and spread a pre-composed
-Room plugin array (`roomPlugins.stage` or `roomPlugins.controller`) into `createApp`. The browser/WebRTC build
-target is `@moku-labs/room/browser`.
+Room is its OWN `@moku-labs/core` framework — a sibling to `@moku-labs/web`/`@moku-labs/worker`, NOT built on them.
+It defines one `createCoreConfig` (in `src/config.ts`), wires the four engines as core defaults, and EXPORTS the
+bound `createApp` + `createPlugin`; the framework never calls `createApp` — Layer-3 apps do. `@moku-labs/core` and
+`@moku-labs/common` (which supplies `ctx.log`/`ctx.env`) are BUNDLED dependencies, not peers — there is nothing extra
+to install. A consumer adds a role facade (`stagePlugin` host / `controllerPlugin` phone) + its game plugin; there
+are no role arrays.
 
-- Package: `@moku-labs/room` (peer dep `@moku-labs/web ^1.12.4`; OPTIONAL peer dep `@moku-labs/worker ^0.10.0` for
-  the server tier only; bundled deps `trystero ~0.25.2`, `qrcode ^1.5.4`)
-- Install: `bun add @moku-labs/room` + `bun add @moku-labs/web` (+ `bun add @moku-labs/worker` ONLY for the server tier)
-- Entries: `@moku-labs/room` (main) · `@moku-labs/room/browser` (DOM/WebRTC; identical surface) ·
-  `@moku-labs/room/server` (OPT-IN Cloudflare Worker signaling tier: `roomHubPlugin` + `RoomHub` DO + deployable `app`)
+- Package: `@moku-labs/room` (bundled deps `@moku-labs/core 1.5.0`, `@moku-labs/common 0.2.1`, `trystero ~0.25.2`,
+  `qrcode ^1.5.4`). **No peer dependencies.** Engines: node ≥24, bun ≥1.3.14.
+- Install: `bun add @moku-labs/room` (that's all — `createApp`/`createPlugin` come from Room itself).
+- Entries: `@moku-labs/room` (`.`, the CLIENT core — `createApp` for the browser game; also runs node tests, so there
+  is no separate browser entry) · `@moku-labs/room/server` (`./server`, the OPT-IN server core — `createApp` for a
+  Cloudflare Worker signaling tier: `hubPlugin` + the `Hub` Durable Object).
 
 ## Core concepts
 
@@ -26,22 +28,23 @@ target is `@moku-labs/room/browser`.
   AP-isolated / symmetric-NAT / iOS-Private-Relay networks (~15–30%) the connection hard-fails with no recovery;
   surfaces `room:network-warning`. Design target: the home LAN.
 - **Wire vs events (two planes, strictly separate).** The typed `Wire` (`Frame` DataChannel) carries ALL gameplay
-  (intents, snapshots, deltas, heartbeats, recovery). Moku `emit` (`room:*`) carries ONLY coarse lifecycle (5
-  events). No gameplay ever rides `emit`; no `room:*` event ever carries gameplay.
+  (intents, snapshots, deltas, heartbeats, recovery, roster). Moku `emit` (`room:*`) carries ONLY coarse lifecycle
+  (5 events). No gameplay ever rides `emit`; no `room:*` event ever carries gameplay.
 - **Star topology, 8-cap.** Stage is the sole hub; NO controller↔controller channels. `MAX_CONTROLLERS = 8`,
   `ROOM_CODE_LENGTH = 6`.
 - **Signaling adapter seam (D12).** Transport talks to discovery only through the DOM-free `Signaling` contract.
   Adapters swap with zero transport changes: `publicRendezvous()` (default, Trystero), `inMemory()` (tests; pass
   `{ server: true }` to simulate the server protocol), and `serverSignaling(url)` (opt-in, worker-backed; lazy-loaded).
-- **Optional operated signaling tier (D21/D25, `@moku-labs/room/server`).** An opt-in Cloudflare Worker with ONE
-  Durable Object per room (`RoomHub`, WebSocket Hibernation). Reached via `serverSignaling(url)`. Brokers SIGNALING
-  ONLY — handshake + in-band discovery + host-reload reclaim; NO gameplay relay, so **D2 still holds** (gameplay stays
-  strict P2P, no TURN). A `serverSignaling` session is `persistent: true` — transport keeps the WS open past ICE as
-  the discovery-push + reclaim conduit (vs. `publicRendezvous`/`inMemory` which discard the session once connected).
-  The DO mints a `reclaimToken` on join → `session` persists it → replays it on host reload so the warm room survives.
-  An idle room's DO Alarm sends `{kind:"evict"}` → browser maps it to `room:network-warning {reason:"room-evicted"}`.
-  Deployment is APP-side (D26): Room ships no `wrangler.jsonc`; the app declares `ROOM_HUB`/`RATE_LIMIT`/`ASSETS`
-  bindings and points `main` at the sub-path. `@moku-labs/worker@0.10.0` currently needs `nodejs_compat`.
+- **Optional operated signaling tier (D21/D25, `@moku-labs/room/server`).** An opt-in server core: a Cloudflare Worker
+  with ONE Durable Object per room (`Hub`, WebSocket Hibernation). Reached via `serverSignaling(url)`. Brokers
+  SIGNALING ONLY — handshake + in-band discovery + host-reload reclaim; NO gameplay relay, so **D2 still holds**
+  (gameplay stays strict P2P, no TURN). The `hub` reaches the DO + KV + ASSETS through the per-request native
+  Cloudflare `env` — there is no `@moku-labs/worker` dependency. A `serverSignaling` session is `persistent: true` —
+  transport keeps the WS open past ICE as the discovery-push + reclaim conduit (vs. `publicRendezvous`/`inMemory`
+  which discard the session once connected). The DO mints a `reclaimToken` on join → `session` persists it → replays
+  it on host reload so the warm room survives. An idle room's DO Alarm sends `{kind:"evict"}` → browser maps it to
+  `room:network-warning {reason:"room-evicted"}`. Deployment is APP-side (D26): Room ships no `wrangler.jsonc`; the
+  app declares `ROOM_HUB`/`RATE_LIMIT`/`ASSETS` bindings and points `main` at its own `cloudflare/worker.ts`.
 - **Host-reload recovery.** Host tab RELOAD is recoverable (host CRASH is an unmitigated v1 hard-failure). Host
   mints a `hostToken`, persists snapshots (debounced IndexedDB + sync localStorage on `visibilitychange`), resumes
   the same room code, verifies the token peer-side (no server, D6). Controllers buffer intents during absence and
@@ -51,30 +54,30 @@ target is `@moku-labs/room/browser`.
 
 ## Facades (D19)
 
-The two role facades (`stagePlugin`, `controllerPlugin`) sit LAST in their arrays and RE-DECLARE all five `room:*`
-events so a game plugin with `depends: [stagePlugin]` / `[controllerPlugin]` sees the full typed hook surface in
-one edge (event-type visibility is not transitive). They install NO forwarding hooks — Moku's event bus is GLOBAL,
-so engines' `emit("room:*")` already reach every hook regardless of `depends`. Facades delegate API methods only;
-they do not re-emit/proxy events.
+The two role facades (`stagePlugin`, `controllerPlugin`) are added to a client app via `createApp({ plugins: [...] })`
+and RE-DECLARE all five `room:*` events so a game plugin with `depends: [stagePlugin]` / `[controllerPlugin]` sees the
+full typed hook surface in one edge (event-type visibility is not transitive). They install NO forwarding hooks —
+Moku's event bus is GLOBAL, so engines' `emit("room:*")` already reach every hook regardless of `depends`. Facades
+delegate API methods only; they do not re-emit/proxy events, and own no config.
 
-## Quick reference — compose
+## Quick reference — compose (client core)
+
+The four engines (`transport`, `session`, `intent`, `sync`) are core DEFAULTS — already wired. An app adds one role
+facade + its game plugin; there are no role arrays.
 
 ```typescript
-import { createApp, createPlugin } from "@moku-labs/web/browser";
-import { roomPlugins, stagePlugin } from "@moku-labs/room/browser";
-
-// roomPlugins.stage      = [transportPlugin, sessionPlugin, intentPlugin, syncPlugin, stagePlugin]
-// roomPlugins.controller = [transportPlugin, sessionPlugin, intentPlugin, syncPlugin, controllerPlugin]
+import { createApp, createPlugin, stagePlugin } from "@moku-labs/room";
 
 const game = createPlugin("game", {
   depends: [stagePlugin], // makes the five room:* events visible
   hooks: ctx => ({ "room:peer-joined": ({ peerId }) => ctx.log.info(peerId) })
 });
 
-const app = createApp({ plugins: [...roomPlugins.stage, game] }); // facade LAST
+const app = createApp({ plugins: [stagePlugin, game] }); // engines are defaults; add facade + game
 await app.start();
 
-const { code, joinUrl, qr } = app.stage.createRoom(); // SYNCHRONOUS — no await
+const { code, joinUrl } = app.stage.createRoom(); // SYNCHRONOUS — no await
+const qr = await app.stage.qr();                  // QR is async (descriptor.qr is always null)
 ```
 
 ## Quick reference — role APIs
@@ -83,7 +86,9 @@ Reach the facade API by plugin name: `app.stage` (StageApi) / `app.controller` (
 plugin: `ctx.require(stagePlugin)` / `ctx.require(controllerPlugin)`.
 
 **StageApi (`app.stage`, host):**
-- `createRoom(): RoomDescriptor` — SYNCHRONOUS; `{ code, joinUrl, qr, hostToken }`.
+- `createRoom(): RoomDescriptor` — SYNCHRONOUS; `{ code, joinUrl, qr, hostToken }` (`qr` is always `null` — fetch it
+  via `qr()`).
+- `qr(): Promise<QrMatrix | null>` — async QR matrix for the join URL (null when `generateQr: false`).
 - `mutate(ns, recipe): void` — mutate one authoritative slice; recipe `(draft) => next`; schedules a throttled delta.
 - `broadcast(): void` — force an immediate snapshot broadcast.
 - `onIntent(name, handler): () => void` — handler `(payload, peerId)`; validated + de-duped before it runs.
@@ -106,62 +111,88 @@ plugin: `ctx.require(stagePlugin)` / `ctx.require(controllerPlugin)`.
   Enables in-band discovery + host-reload reclaim. Lazy-loaded — bundles that never call it pay nothing.
 
 ```typescript
-createApp({ plugins: roomPlugins.stage,
+createApp({ plugins: [stagePlugin],
   pluginConfigs: { transport: { signaling: inMemory(), iceServers: [] } } });
 
 // Server tier (browser side): widen the code space for the public endpoint.
-createApp({ plugins: roomPlugins.stage,
+createApp({ plugins: [stagePlugin],
   pluginConfigs: { transport: { signaling: serverSignaling("wss://room.example.com") }, session: { codeLength: 8 } } });
+```
+
+## Server core (`@moku-labs/room/server`)
+
+The opt-in server core is its OWN `createCore` on the shared `coreConfig` with the `hubPlugin` default. Like every
+Moku framework it EXPORTS `createApp` (never calls it) and exports NO `fetch` handler — a Layer-3 Cloudflare app
+composes the app and wires the Worker itself (two files: a root `src/server.ts` that creates the app once, and a
+`src/cloudflare/worker.ts` that delegates `fetch` to `app.hub.handle` and re-exports `Hub` for the binding).
+
+```typescript
+// your-app/src/server.ts — ROOT composition: create the app once, export it.
+import { createApp } from "@moku-labs/room/server";
+export const app = createApp(); // the `hub` is wired by default
+
+// your-app/src/cloudflare/worker.ts — Cloudflare entry: USE the app to wire the Worker.
+import { app } from "../server";
+export { Hub } from "@moku-labs/room/server"; // re-export the DO class → wrangler binds ROOM_HUB
+export default {
+  fetch: (req: Request, env: Record<string, unknown>, ctx: ExecutionContext) => app.hub.handle(req, env, ctx)
+} satisfies ExportedHandler;
 ```
 
 ## File structure
 
-- `src/index.ts` — public barrel: plugin instances, `roomPlugins`, adapters, contract types.
-- `src/browser.ts` — browser entry (`@moku-labs/room/browser`); re-exports the barrel.
-- `src/server.ts` — server entry (`@moku-labs/room/server`): exports `app` + default `{ fetch }` (deployable as-is)
-  and re-exports `roomHubPlugin` / `RoomHub`. JS-only tsdown entry (`dts: false`). Imports `@moku-labs/worker`.
-- `src/contracts.ts` — single physical home (D16) for all shared types + `room:*` event catalog + the two consts +
-  the §1.3 `ClientEnvelope`/`ServerEnvelope` server-protocol unions.
+- `src/config.ts` — Step 1: `createCoreConfig("room", …)` (registers the `log`/`env` core plugins from
+  `@moku-labs/common`) + the `RoomEvents` contract; exports the bound `createPlugin` (engines import it) + `createCore`.
+- `src/index.ts` — the CLIENT core (`.`): `createCore` with the four engines as defaults + `browserEnv`; exports the
+  bound `createApp` + `createPlugin`, the plugin instances, the signaling-adapter factories, and the protocol types.
+- `src/server.ts` — the SERVER core (`./server`): `createCore` with `hubPlugin`; exports the bound `createApp` +
+  `createPlugin`, the `hubPlugin` instance, and the `Hub` Durable Object class. No `@moku-labs/worker`; no `fetch`.
 - `src/plugins/<name>/` — one dir per plugin: `index.ts` (wiring), `types.ts`, `config.ts`, `api.ts`, plus engine
-  internals (`state.ts`, `lifecycle/`, `recovery/`, `codec.ts`, …) and colocated `__tests__/`.
-- `src/plugins/room-hub/` — the opt-in server plugin: `api.ts` (`handle`/`deployManifest`), `room-hub-do.ts` (the
-  `RoomHub` Durable Object, co-located — `defineDurableObject`, NOT a plugin), `sqlite.ts` (roster + reclaim tokens).
+  internals (`state.ts`, `lifecycle/`, `recovery/`, `codec.ts`, the transport `adapters/` + `protocol.ts`, …) and
+  colocated `__tests__/`.
+- `src/plugins/transport/protocol.ts` — the single physical home for the wire/signaling protocol: all shared types,
+  the two consts, the `Frame` union, and the §1.3 `ClientEnvelope`/`ServerEnvelope` server-protocol unions.
+- `src/plugins/hub/` — the opt-in server plugin: `api.ts` (`handle`), `hub-do.ts` (the `Hub` Durable Object,
+  co-located — `defineDurableObject`, NOT a plugin), `sqlite.ts` (roster + reclaim tokens), `config.ts`, `state.ts`.
 
 ## Public export surface (from src/index.ts)
 
+- Factories: `createApp` (the Layer-3 entry — wires the four engines by default), `createPlugin` (author a custom
+  plugin bound to Room's `Config`/`Events`).
 - Plugin instances: `transportPlugin`, `sessionPlugin`, `intentPlugin`, `syncPlugin`, `stagePlugin`,
   `controllerPlugin`.
-- Pre-composed arrays: `roomPlugins.stage`, `roomPlugins.controller`.
 - Signaling adapter factories: `publicRendezvous` (default), `inMemory` (tests), `serverSignaling` (opt-in, worker).
-- Contract types: `Signaling`, `SignalingSession`, `SignalingJoinOpts`, `SignalMsg`, `IceCandidateInit`, `Wire`,
-  `Frame`, `IntentFrame`, `SyncSnapshotFrame`, `SyncDeltaFrame`, `HeartbeatPingFrame`, `HeartbeatPongFrame`,
-  `RecoveryHelloFrame`, `RecoveryWelcomeFrame`, `RecoveryFlushFrame`, `PeerId`, `RosterEntry`, `Snapshot`, `Op`,
-  `JsonValue`, `Namespace`, `RoomEvents`.
+- Contract types (from `transport/protocol`): `Signaling`, `SignalingSession`, `SignalingJoinOpts`, `SignalMsg`,
+  `IceCandidateInit`, `Wire`, `Frame`, `IntentFrame`, `SyncSnapshotFrame`, `SyncDeltaFrame`, `HeartbeatPingFrame`,
+  `HeartbeatPongFrame`, `RecoveryHelloFrame`, `RecoveryWelcomeFrame`, `RecoveryFlushFrame`, `PeerId`, `RosterEntry`,
+  `Snapshot`, `Op`, `JsonValue`, `Namespace`.
 - Contract consts: `MAX_CONTROLLERS` (8), `ROOM_CODE_LENGTH` (6).
+- Event contract: `RoomEvents` (from `src/config.ts`).
 - Plugin-owned public types: `RoomDescriptor`, `JoinResult`, `QrMatrix` (session); `StageApi` (stage); `ControllerApi`
   (controller).
-- NOTE: `ClientEnvelope`/`ServerEnvelope` (§1.3) are internal protocol types — defined in `contracts.ts`, shared by
-  `serverSignaling` + `inMemory({server:true})` + the DO, but NOT re-exported from the web barrel.
+- NOTE: `ClientEnvelope`/`ServerEnvelope` (§1.3) are internal protocol types — defined in `transport/protocol.ts`,
+  shared by `serverSignaling` + `inMemory({server:true})` + the DO, but NOT re-exported from the client barrel.
 
-## Server sub-path export surface (from src/server.ts — `@moku-labs/room/server`)
+## Server core export surface (from src/server.ts — `@moku-labs/room/server`)
 
-- `app` — a composed `@moku-labs/worker` app (`roomHubPlugin` + `durableObjectsPlugin` + `kvPlugin`); reach the plugin
-  API at `app.roomHub`.
-- `default` — a Cloudflare `ExportedHandler` (`{ fetch }`) delegating to `app.roomHub.handle`; point `wrangler` `main` at it.
-- `roomHubPlugin` — the `roomHub` worker plugin instance (re-compose into your own app).
-- `RoomHub` — the Durable Object class (re-export from your Worker entry so `wrangler` can bind it).
+- `createApp` — the server core's Layer-3 entry; wires `hubPlugin` by default. `app.hub.handle(req, env, ctx)` is the
+  request handler a consumer's `cloudflare/worker.ts` delegates its `fetch` to. (The framework exports it; it never
+  calls it, and exports no `fetch`.)
+- `createPlugin` — author a custom server plugin bound to Room's core.
+- `hubPlugin` — the `hub` plugin instance (already a server-core default; exported for custom composition).
+- `Hub` — the Durable Object class (re-export from your Worker entry so `wrangler` can bind `ROOM_HUB` to it).
 
 ## Plugins (one line each)
 
-| Plugin | Tier | Depends | Purpose | Key API | Events |
-|---|---|---|---|---|---|
-| `transportPlugin` | Complex | — | WebRTC floor: handshake, chunking/backpressure, heartbeat, capped ICE recovery; owns `Wire`. | `connect`, `wire`, `disconnect`, `peers`, `close` | emits `room:network-warning` |
-| `sessionPlugin` | Complex | transport | Room code + QR + roster; star topology (`hostId()`); host-reload recovery. | `createRoom`, `joinRoom`, `leave`, `rejoin`, `roster`, `self`, `hostId`, `persistSnapshot`, `recoveryPhase` | emits `room:peer-joined`, `room:peer-left`, `room:host-reconnecting` |
-| `intentPlugin` | Standard | transport, session | Controller→host typed inputs; per-controller `cSeq` idempotent de-dup; reconnect buffer. | `register`, `onIntent`, `intent`, `setBuffering`, `drainBuffer`, `bufferedCount` | none |
-| `syncPlugin` | Complex | transport, session | Host→controller authoritative state: snapshot + throttled op-list deltas (custom codec). | `registerSlice`, `mutate`, `broadcast`, `read`, `subscribe`, `applyFrame`, `exportSnapshot`, `importSnapshot` | emits `room:sync-ready` |
-| `stagePlugin` | Standard (facade) | all four | Host-role facade → `StageApi` (`app.stage`). | `createRoom`, `mutate`, `broadcast`, `onIntent`, `roster` | re-declares all five |
-| `controllerPlugin` | Standard (facade) | all four | Controller-role facade → `ControllerApi` (`app.controller`). | `joinRoom`, `read`, `on`, `intent`, `requestWakeLock`, `releaseWakeLock` | re-declares all five |
-| `roomHubPlugin` | Standard (server) | `@moku-labs/worker` (DO+KV) | OPT-IN operated signaling tier (`@moku-labs/room/server`); NOT in `roomPlugins`. WS-Hibernation DO-per-room: handshake + in-band discovery + host-reload reclaim; NO gameplay relay (D2). | `handle`, `deployManifest` | none (server has no Room bus) |
+| Plugin | Tier | Wiring | Depends | Purpose | Key API | Events |
+|---|---|---|---|---|---|---|
+| `transportPlugin` | Complex | client default | — | WebRTC floor: handshake, chunking/backpressure, heartbeat, capped ICE recovery; owns `Wire`. | `connect`, `wire`, `disconnect`, `peers`, `close` | emits `room:network-warning` |
+| `sessionPlugin` | Complex | client default | transport | Room code + QR + roster; star topology (`hostId()`); host-reload recovery. | `createRoom`, `qr`, `joinRoom`, `leave`, `rejoin`, `roster`, `self`, `hostId`, `hostToken`, `persistSnapshot`, `recoveryPhase` | emits `room:peer-joined`, `room:peer-left`, `room:host-reconnecting` |
+| `intentPlugin` | Standard | client default | transport, session | Controller→host typed inputs; per-controller `cSeq` idempotent de-dup; reconnect buffer. | `register`, `onIntent`, `intent`, `setBuffering`, `drainBuffer`, `bufferedCount` | none |
+| `syncPlugin` | Complex | client default | transport, session | Host→controller authoritative state: snapshot + throttled op-list deltas (custom codec). | `registerSlice`, `mutate`, `broadcast`, `read`, `subscribe`, `applyFrame`, `exportSnapshot`, `importSnapshot` | emits `room:sync-ready` |
+| `stagePlugin` | Standard (facade) | app-added (host) | all four engines | Host-role facade → `StageApi` (`app.stage`). | `createRoom`, `qr`, `mutate`, `broadcast`, `onIntent`, `roster` | re-declares all five |
+| `controllerPlugin` | Standard (facade) | app-added (controller) | all four engines | Controller-role facade → `ControllerApi` (`app.controller`). | `joinRoom`, `read`, `on`, `intent`, `requestWakeLock`, `releaseWakeLock` | re-declares all five |
+| `hubPlugin` | Standard | server-core default | native Cloudflare `env` (DO + KV) | OPT-IN operated signaling tier (`@moku-labs/room/server`); the only server-core plugin. WS-Hibernation `Hub` DO-per-room: handshake + in-band discovery + host-reload reclaim; NO gameplay relay (D2). | `handle(request, env, ctx)` | none |
 
 ## Events — `room:*` (Moku `emit`, coarse lifecycle ONLY)
 
@@ -190,12 +221,13 @@ controller, `send`/`broadcast` collapse to "send to host".
 - `RecoveryHelloFrame` (`t: "recovery-hello"`) — controller→host re-entry claim; `{ hostToken, peerId }`.
 - `RecoveryWelcomeFrame` (`t: "recovery-welcome"`) — host→controller ack; `{ hostToken, sSeq }`.
 - `RecoveryFlushFrame` (`t: "recovery-flush"`) — controller→host buffered-intent flush; `{ buffered }`.
+- `RosterFrame` (`t: "roster"`) — host→controller authoritative roster; `{ roster: { [peerId]: RosterEntry } }`.
 
 ## Server protocol envelopes — `ClientEnvelope`/`ServerEnvelope` (§1.3, server tier only)
 
-Internal types (contracts.ts; NOT web-barrel exports). The client↔DO WebSocket protocol for `serverSignaling` +
-`inMemory({server:true})` + the `RoomHub` DO. Plain-JSON/DOM-free. The `relay` variants CARRY a `SignalMsg` (the DO
-never inspects it — no gameplay relay, D2). Discriminated on `kind`.
+Internal types (`transport/protocol.ts`; NOT client-barrel exports). The client↔DO WebSocket protocol for
+`serverSignaling` + `inMemory({server:true})` + the `Hub` DO. Plain-JSON/DOM-free. The `relay` variants CARRY a
+`SignalMsg` (the DO never inspects it — no gameplay relay, D2). Discriminated on `kind`.
 
 - ClientEnvelope (client→DO): `join {selfId, role:"host"|"controller"}` · `reclaim {selfId, reclaimToken}` ·
   `relay {to, msg: SignalMsg}`.
@@ -209,15 +241,16 @@ never inspects it — no gameplay relay, D2). Discriminated on `kind`.
 - session: `joinUrlBase=""`, `generateQr=true`, `maxControllers=8`, `snapshotDebounceMs=500`,
   `reconnectTimeoutMs=10000`, `intentBufferMax=256`, `intentBufferMaxAgeMs=8000`, `storageKeyPrefix="moku.room"`,
   `codeLength=6` (set `8` for `serverSignaling` deployments — D24 room-code-enumeration resistance).
-- roomHub (server, `pluginConfigs.roomHub`): `doBinding="ROOM_HUB"`, `doClassName="RoomHub"`, `assetsBinding="ASSETS"`,
-  `rateLimit={joins:30,windowSec:60,kvBinding:"RATE_LIMIT"}`, `joinWindowMs=10000`, `roomTtlMs=1800000`.
 - intent: `bufferCap=256`, `bufferMaxAgeMs=10000`.
 - sync: `broadcastHz=30` (clamped [5,60]), `skipEmptyDeltas=true`, `maxOpsPerDelta=512`, `resyncOnGap=true`.
+- hub (server core, `pluginConfigs.hub`): `doBinding="ROOM_HUB"`, `doClassName="Hub"`, `assetsBinding="ASSETS"`,
+  `rateLimit={joins:30,windowSec:60,kvBinding:"RATE_LIMIT"}`, `joinWindowMs=10000`, `roomTtlMs=1800000`.
 - stage / controller: no config (facades own no tunables).
 
 ## End-to-end flow
 
-1. Stage `app.stage.createRoom()` → `{ code, joinUrl, qr }`; render the QR. Register slices + intent handlers.
+1. Stage `app.stage.createRoom()` → `{ code, joinUrl, hostToken }` + `await app.stage.qr()`; render the QR. Register
+   slices + intent handlers.
 2. Controller scans QR, `await app.controller.joinRoom(code)`; `requestWakeLock()`.
 3. Controller `app.controller.intent("move", {...})` → `IntentFrame` over the Wire → host.
 4. Host `onIntent` validates + de-dups by `cSeq`, then `app.stage.mutate(ns, recipe)`.
@@ -229,8 +262,9 @@ never inspects it — no gameplay relay, D2). Discriminated on `kind`.
 
 ## Development
 
-- Scripts (bun): `bun run build` (tsdown), `bun run lint` (Biome + ESLint), `bun run test` /
-  `bun run test:unit` / `bun run test:integration` / `bun run test:coverage` (vitest, 90% threshold),
-  `bun run validate` (publint + attw).
+- Scripts (bun): `bun run build` (tsdown — client `.` + server `./server`), `bun run typecheck` (tsc ×2: client +
+  worker tsconfig), `bun run lint` (Biome + ESLint), `bun run test` / `bun run test:unit` / `bun run test:integration`
+  / `bun run test:coverage` (vitest, 90% threshold), `bun run test:e2e` / `bun run test:e2e:worker` (Playwright —
+  manual gates), `bun run validate` (publint + attw), `bun run sandbox` / `bun run sandbox:worker` (manual tryout).
 - Tests: framework-level in root `tests/unit/` + `tests/integration/`; plugin-specific colocated in
-  `src/plugins/<name>/__tests__/`. Integration uses the `inMemory()` adapter.
+  `src/plugins/<name>/__tests__/`. Integration uses the `inMemory()` adapter; the worker e2e drives real `workerd`.
