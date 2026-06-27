@@ -38,10 +38,11 @@ bun add @moku-labs/room
 
 > [!NOTE]
 > **Status: `0.x` — early.** Room is a standalone Moku framework on `@moku-labs/core` (bundled, with `@moku-labs/common`
-> supplying `ctx.log` / `ctx.env`); `trystero` (signaling) and `qrcode` (join QR) come bundled too. There is **no peer
-> dependency** to install — `createApp` / `createPlugin` come from Room itself. The opt-in
-> [server core](#server-core-moku-labsroomserver) runs on Cloudflare Workers (you supply `wrangler` + an account); it
-> needs no extra package.
+> supplying `ctx.log` / `ctx.env`); `trystero` (signaling) and `qrcode` (join QR) come bundled too. The **client core**
+> needs **no peer dependency** — `createApp` / `createPlugin` come from Room itself. The opt-in
+> [server core](#server-core-moku-labsroomserver) exports `hubPlugin` to compose into your own
+> [`@moku-labs/worker`](https://github.com/moku-labs/worker) app on Cloudflare Workers — an **optional peer dependency**
+> you provide.
 
 | Entry | For |
 |---|---|
@@ -226,35 +227,43 @@ backbone dependency), **host-reload reclaim** (the DO mints a `reclaimToken` on 
 it on a host reload, so the **warm room survives** instead of opening fresh), and **room-teardown UX** (an idle room's
 DO Alarm emits `{kind:"evict"}`, surfaced as `room:network-warning { reason: "room-evicted" }`).
 
-Like every Moku framework, the server core **exports `createApp` — it never calls it**. The shape is **two files**: a
-**root composition file** (`src/server.ts`) that creates the app once, and a **`cloudflare/` entry**
-(`src/cloudflare/worker.ts`) that *uses* that app to wire the Worker — the `{ fetch }` default export + the `Hub`
-binding. The app owns its `wrangler.jsonc` (D26).
+Unlike the client core, the server tier is **not its own framework** — it exports **`hubPlugin`** (a
+[`@moku-labs/worker`](https://github.com/moku-labs/worker) plugin) + the **`Hub`** Durable Object class. You compose
+`hubPlugin` into your **own** `@moku-labs/worker` app — alongside `durableObjectsPlugin` (the `Hub` DO) and
+`deployPlugin`/`cliPlugin` (which generate `wrangler.jsonc` + run `wrangler dev`/`deploy`) — so the app keeps **full
+control** of its worker composition + config, exactly like any other `@moku-labs/worker` app. `@moku-labs/worker` is an
+**optional peer dependency** you provide. The shape is **two files**: a **root composition** (`src/server.ts`) and a
+**`cloudflare/` entry** (`src/cloudflare/worker.ts`) — the `{ fetch }` default export + the `Hub` binding.
 
 ```ts
-// your-app/src/server.ts — the ROOT composition file: create the app once, export it.
-import { createApp } from "@moku-labs/room/server";
+// your-app/src/server.ts — ONE @moku-labs/worker app, composing room's hubPlugin.
+import { cliPlugin, createApp, deployPlugin, durableObjectsPlugin, kvPlugin } from "@moku-labs/worker";
+import { hubPlugin } from "@moku-labs/room/server";
 
-export const app = createApp(); // the `hub` is wired by default
+export const server = createApp({
+  plugins: [kvPlugin, durableObjectsPlugin, hubPlugin, deployPlugin, cliPlugin],
+  pluginConfigs: {
+    durableObjects: { hub: { binding: "ROOM_HUB", className: "Hub" } },
+    kv: { rateLimit: { name: "ratelimit", binding: "RATE_LIMIT" } }
+  }
+});
 ```
 
 ```ts
 // your-app/src/cloudflare/worker.ts — the Cloudflare entry: USE the composed app to wire the Worker.
-import { app } from "../server";
+import { server } from "../server";
 
 export { Hub } from "@moku-labs/room/server"; // re-export the DO class so wrangler can bind ROOM_HUB to it
 
 export default {
-  fetch: (req: Request, env: Record<string, unknown>, ctx: ExecutionContext) => app.hub.handle(req, env, ctx)
+  fetch: (req: Request, env: Record<string, unknown>, ctx: ExecutionContext) => server.hub.handle(req, env, ctx)
 } satisfies ExportedHandler;
 ```
 
 | Server export | What it is |
 |---|---|
-| `createApp` | The server core factory — wires the `hub` by default; `app.hub.handle(req, env, ctx)` is the request handler your `fetch` delegates to. |
+| `hubPlugin` | The `hub` plugin (a `@moku-labs/worker` plugin) — compose it into your worker app; `server.hub.handle(req, env, ctx)` is the request handler your `fetch` delegates to. |
 | `Hub` | The `Hub` Durable Object class — re-export it from your worker entry so `wrangler` can bind `ROOM_HUB` to it. |
-| `hubPlugin` | The `hub` plugin instance (already a server-core default; exported for custom composition). |
-| `createPlugin` | Author a custom server plugin bound to Room's core. |
 
 **Deploy — the consuming app owns deployment (D26).** Room ships **no `wrangler.jsonc`**. Point `main` at your
 `cloudflare/worker.ts` and declare three bindings: `ROOM_HUB` (the DO + its SQLite migration), `RATE_LIMIT` (a KV

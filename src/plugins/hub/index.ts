@@ -5,7 +5,7 @@
  *
  * @see README.md
  */
-import { createPlugin } from "../../config";
+import { createPlugin } from "@moku-labs/worker";
 import { createApi } from "./api";
 import { defaultConfig } from "./config";
 import { createState } from "./state";
