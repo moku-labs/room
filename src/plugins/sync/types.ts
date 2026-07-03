@@ -49,9 +49,11 @@ export type Config = {
   readonly maxOpsPerDelta: number;
   /**
    * When a controller detects a sequence gap (`incoming.sSeq > local.sSeq + 1`, contracts section 4.3), it
-   * marks itself stale and requests a fresh snapshot. If `true`, the engine surfaces a host-side hook
-   * (`onResyncRequest`) so the host can `send` a snapshot to that peer; if `false`, the controller waits
-   * for the next host snapshot. Default `true`.
+   * marks itself stale. If `true`, it also reports the gap to the host over the wire (`sync-resync`,
+   * re-sent on a slow cadence while the gap persists) — the host answers by re-baselining that ONE peer
+   * with a snapshot at its CURRENT `sSeq` (no shared sequence is consumed) and fires the host-side
+   * `onResyncRequest` hook with the reporting peer. If `false`, the controller waits for the next host
+   * snapshot. Default `true`.
    */
   readonly resyncOnGap: boolean;
 };
@@ -175,30 +177,34 @@ export type Api = {
 
   /**
    * Forces an immediate authoritative broadcast (host only), bypassing the next throttle tick. With
-   * `peerId`, sends a full `SyncSnapshotFrame` to that single peer (late-join/reconcile, contracts
-   * section 5.3); without it, broadcasts a `SyncDeltaFrame` of all dirty namespaces to every controller.
-   * No-op when nothing is dirty and `skipEmptyDeltas` is `true`.
+   * `peerId`, sends a full `SyncSnapshotFrame` stamped at the CURRENT `sSeq` to that single peer
+   * (late-join/reconcile, contracts section 5.3) — a unicast re-baseline consumes NO shared sequence,
+   * so every other replica's delta contiguity is untouched; no-op until a slice is registered. Without
+   * `peerId`, broadcasts a `SyncDeltaFrame` of all dirty namespaces to every controller (no-op when
+   * nothing is dirty and `skipEmptyDeltas` is `true`).
    *
    * @param peerId - Optional single recipient for a full snapshot (contracts section 6); omit to broadcast
    *   a delta to every controller.
    * @example
    * ```ts
    * sync.broadcast();           // flush dirty deltas to everyone now
-   * sync.broadcast(newPeerId);  // send a full baseline snapshot to one late-joiner
+   * sync.broadcast(newPeerId);  // re-baseline one peer at the current sSeq — nobody else is disturbed
    * ```
    */
   broadcast(peerId?: PeerId): void;
 
   /**
-   * Registers the host-side resync handler fired when a controller reports a sequence gap (only when
-   * `config.resyncOnGap` is `true`). The handler typically calls `broadcast(peerId)` to re-baseline that
-   * one peer (contracts section 4.3, section 5.3).
+   * Registers a host-side hook fired when a controller reports a sequence gap over the wire
+   * (`sync-resync`; sent only when the controller's `resyncOnGap` is `true`). The engine ALREADY
+   * answers the reporting peer with a fresh baseline snapshot automatically — this hook is for
+   * observability and custom policy (log a chronically-lagging peer, surface a UI warning), not for
+   * wiring the re-baseline (contracts section 4.3, section 5.3).
    *
    * @param handler - Invoked with the lagging controller's `peerId`.
    * @returns An unsubscribe function.
    * @example
    * ```ts
-   * const off = sync.onResyncRequest((peerId) => sync.broadcast(peerId));
+   * const off = sync.onResyncRequest((peerId) => metrics.count("resync", peerId));
    * ```
    */
   onResyncRequest(handler: (peerId: PeerId) => void): () => void;
@@ -238,8 +244,9 @@ export type Api = {
    * Applies one inbound host frame to the replica (controller). Called by `transport`'s frame dispatch for
    * `t === "sync-snap"` / `t === "sync-delta"` (contracts section 2.1, section 2.2). A `sync-snap`
    * re-baselines (clears `stale`, sets `sSeq`); a `sync-delta` applies in order, or — on a gap — sets
-   * `stale` and (if `resyncOnGap`) signals the host to re-snapshot. The first applied snapshot emits
-   * `room:sync-ready`. Non-sync frames are ignored (defensive — transport routes by `t`).
+   * `stale` and (if `resyncOnGap`) reports the gap to the host over the wire (`sync-resync`), which
+   * answers by re-baselining this replica. The first applied snapshot emits `room:sync-ready`.
+   * Non-sync frames are ignored (defensive — transport routes by `t`).
    *
    * @param frame - The inbound `Frame` (contracts section 2.2); only `sync-snap`/`sync-delta` act.
    * @example
@@ -335,8 +342,9 @@ export type Api = {
 export type SyncEngine = {
   /**
    * Validates config (clamps `broadcastHz` to `[5, 60]`, asserts `maxOpsPerDelta >= 0`) and attaches the
-   * inbound `wire.on` receive handler routing `sync-snap`/`sync-delta` to `applyFrame`. Called by `onInit`
-   * over the SHARED per-app engine. Synchronous — no timers started here.
+   * inbound `wire.on` receive handler routing `sync-snap`/`sync-delta` to `applyFrame` and `sync-resync`
+   * to the host-side gap answer (re-baseline the reporting peer). Called by `onInit` over the SHARED
+   * per-app engine. Synchronous — no timers started here.
    *
    * @throws {Error} If `broadcastHz` is wildly out of range or `maxOpsPerDelta < 0`.
    * @example
@@ -373,7 +381,8 @@ export type SyncEngine = {
   mutate(ns: Namespace, recipe: (draft: Cells) => Cells): void;
 
   /**
-   * Forces an immediate delta broadcast (no `peerId`) or a single-peer baseline snapshot (with `peerId`).
+   * Forces an immediate delta broadcast (no `peerId`) or a single-peer baseline snapshot at the CURRENT
+   * `sSeq` (with `peerId` — a unicast never consumes the shared sequence).
    *
    * @param peerId - Optional single recipient for a full snapshot; omit to broadcast a delta.
    * @example
@@ -396,13 +405,14 @@ export type SyncEngine = {
   sendBaselineSnapshot(peerId: PeerId): void;
 
   /**
-   * Registers the host-side resync handler (delegated from `Api.onResyncRequest`).
+   * Registers the host-side resync observability hook (delegated from `Api.onResyncRequest`). The
+   * engine already re-baselines the reporting peer automatically on an inbound `sync-resync`.
    *
    * @param handler - Invoked with the lagging controller's `peerId`.
    * @returns An unsubscribe function.
    * @example
    * ```ts
-   * const off = engine.onResyncRequest((peerId) => engine.broadcast(peerId));
+   * const off = engine.onResyncRequest((peerId) => metrics.count("resync", peerId));
    * ```
    */
   onResyncRequest(handler: (peerId: PeerId) => void): () => void;

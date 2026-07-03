@@ -305,13 +305,28 @@ export type SyncSnapshotFrame = {
 
 /**
  * Host → controller incremental op-list patch broadcast while live (throttled 20–30 Hz, §4).
- * Idempotent/ordered by `sSeq`; a controller that detects a gap requests a fresh snapshot.
+ * Idempotent/ordered by `sSeq`; a controller that detects a gap requests a fresh snapshot via a
+ * {@link SyncResyncFrame} rather than applying out of order.
  */
 export type SyncDeltaFrame = {
   readonly t: "sync-delta";
   /** The changed cells since the previous `sSeq` (see §4.2 {@link Op}). */
   readonly ops: readonly Op[];
   /** Host sequence number AFTER applying these ops (§4.3). */
+  readonly sSeq: number;
+};
+
+/**
+ * Controller → host sequence-gap report (§4.3). Sent once when a replica detects a delta gap
+ * (`incoming.sSeq > local.sSeq + 1`) and re-sent on a slow cadence while the gap persists; the host
+ * answers by re-baselining that ONE peer with a whole-state {@link SyncSnapshotFrame} stamped at its
+ * CURRENT `sSeq` — a re-baseline consumes NO shared sequence, so the other replicas' delta contiguity
+ * is untouched. Carries the replica's last-applied `sSeq` for observability only — the host always
+ * answers with a full snapshot regardless of how far behind the replica is.
+ */
+export type SyncResyncFrame = {
+  readonly t: "sync-resync";
+  /** The replica's last-applied host sequence at the moment the gap was detected (§4.3). */
   readonly sSeq: number;
 };
 
@@ -378,6 +393,7 @@ export type Frame =
   | IntentFrame
   | SyncSnapshotFrame
   | SyncDeltaFrame
+  | SyncResyncFrame
   | HeartbeatPingFrame
   | HeartbeatPongFrame
   | RecoveryHelloFrame

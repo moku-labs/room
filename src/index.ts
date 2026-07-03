@@ -41,6 +41,7 @@ export type {
   IntentFrame,
   SyncSnapshotFrame,
   SyncDeltaFrame,
+  SyncResyncFrame,
   HeartbeatPingFrame,
   HeartbeatPongFrame,
   RecoveryHelloFrame,

@@ -5,11 +5,13 @@
  * Built EXACTLY ONCE per app in `index.ts`'s `api` over THIS app's `ctx.state`/`ctx.config`/`Wire`/
  * `SessionApi`/`emit`, then shared via `ctx.state.engine`. Owns the slice registry, the per-namespace
  * dirty-flag, the 20-30 Hz throttle broadcast loop (timer id stored in `state.throttleHandle`), the
- * read-only replica apply path with `sSeq` gap detection, the per-namespace `subscribe` callback `Map`
- * (a closure-scope `Map` — kept OUT of `State` so `State.snapshot` stays plain-JSON), and the single
- * `room:sync-ready` emit. Pure codec work delegates to `codec.ts`. All wire I/O rides the injected `Wire`
- * (contracts section 2) — NEVER Moku `emit` (only `room:sync-ready` rides `emit`). Shared contract types
- * are imported from `../transport/protocol`; `SessionApi` from the owning `session` plugin.
+ * read-only replica apply path with `sSeq` gap detection + the `sync-resync` gap-heal loop (replica
+ * reports the gap, host answers with a baseline snapshot at its CURRENT `sSeq`), the per-namespace
+ * `subscribe` callback `Map` (a closure-scope `Map` — kept OUT of `State` so `State.snapshot` stays
+ * plain-JSON), and the single `room:sync-ready` emit. Pure codec work delegates to `codec.ts`. All wire
+ * I/O rides the injected `Wire` (contracts section 2) — NEVER Moku `emit` (only `room:sync-ready` rides
+ * `emit`). Shared contract types are imported from `../transport/protocol`; `SessionApi` from the owning
+ * `session` plugin.
  */
 
 import type { SessionApi } from "../session/types";
@@ -27,6 +29,13 @@ type SyncReadyEmit = () => void;
 
 /** Error message prefix for [room] formatted errors (spec/11 Part 3; matches the `room:` event namespace). */
 const ERROR_PREFIX = "[room]";
+
+/**
+ * While a replica is stale (gap detected, awaiting the host's re-baseline), every this-many dropped
+ * deltas it re-sends the `sync-resync` report — belt-and-braces for a report (or its answering
+ * snapshot) lost on a half-open channel. 30 dropped frames ≈ 1 s at the default 30 Hz broadcast rate.
+ */
+const RESYNC_RETRY_EVERY_DROPS = 30;
 
 /**
  * Builds the ONE per-app `SyncEngine` over this app's mutable state, config, transport `Wire`, session
@@ -72,6 +81,10 @@ export function createSyncEngine(
   // Per-namespace onResyncRequest handlers (host-side gap notification).
   const resyncHandlers: Array<(peerId: PeerId) => void> = [];
 
+  // Deltas dropped since this replica went stale — paces the sync-resync re-report
+  // (see RESYNC_RETRY_EVERY_DROPS). Reset on each fresh gap detection.
+  let staleDeltasDropped = 0;
+
   /**
    * Notify a namespace's subscribers with its current cells (frozen copy, never a live reference).
    *
@@ -108,6 +121,72 @@ export function createSyncEngine(
       state.ready = true;
       emit();
     }
+  }
+
+  /**
+   * Sends this app's whole-state baseline to ONE peer, stamped with the CURRENT `sSeq`. A re-baseline
+   * consumes NO shared sequence — bumping here would make every OTHER replica (which never sees this
+   * unicast frame) read the next broadcast delta as a gap and wedge stale (contracts section 4.3).
+   * No-op until a slice exists (there is no baseline to send). The single unicast-snapshot path behind
+   * the late-join hook, the public `broadcast(peerId)` reconcile, and the `sync-resync` answer.
+   *
+   * @param peerId - The peer to re-baseline.
+   * @example
+   * ```ts
+   * sendBaselineSnapshotTo(peerId); // sync-snap at the current sSeq — nobody else is disturbed
+   * ```
+   */
+  function sendBaselineSnapshotTo(peerId: PeerId): void {
+    if (registered.size === 0) {
+      return;
+    }
+    wire.send(peerId, {
+      t: "sync-snap",
+      snapshot: encodeSnapshot(state.snapshot),
+      sSeq: state.sSeq
+    });
+  }
+
+  /**
+   * Reports this replica's detected sequence gap to the host over the wire (`sync-resync`, contracts
+   * section 4.3) so the host re-baselines this ONE peer with a fresh snapshot. Carries the last-applied
+   * `sSeq` for observability. No-op while the host's `PeerId` is unknown (pre-join there is no one to
+   * ask — the join baseline snapshot covers that window).
+   *
+   * @example
+   * ```ts
+   * requestResync(); // replica → host: "I gapped — re-baseline me"
+   * ```
+   */
+  function requestResync(): void {
+    const hostId = session.hostId();
+    if (!hostId) {
+      return;
+    }
+    wire.send(hostId, { t: "sync-resync", sSeq: state.sSeq });
+  }
+
+  /**
+   * Answers a replica's `sync-resync` gap report (host receive path; contracts section 4.3). Ignored
+   * unless this app holds authoritative slices (replicas never register any — a stray report cannot
+   * make a replica answer as if it were the host). Fires the `onResyncRequest` observability hooks with
+   * the reporting peer, then re-baselines that ONE peer at the CURRENT `sSeq` — no shared sequence is
+   * consumed, so every other replica keeps applying deltas contiguously.
+   *
+   * @param peerId - The gapped replica that sent the report.
+   * @example
+   * ```ts
+   * handleResyncRequest("p_ab12"); // hooks fire, then p_ab12 gets a fresh sync-snap
+   * ```
+   */
+  function handleResyncRequest(peerId: PeerId): void {
+    if (registered.size === 0) {
+      return;
+    }
+    for (const handler of resyncHandlers) {
+      handler(peerId);
+    }
+    sendBaselineSnapshotTo(peerId);
   }
 
   /**
@@ -188,9 +267,11 @@ export function createSyncEngine(
 
   /**
    * Applies an ordered `sync-delta` frame to the replica (controller apply path; contracts §4.3). Drops
-   * the frame while `stale` (awaiting a re-baseline). Detects a sequence gap (`sSeq > local sSeq + 1`):
-   * marks `stale`, fires the `onResyncRequest` hooks when `resyncOnGap` is on (with an empty `peerId` — the
-   * controller has no peer context here), and skips the apply. Ignores an already-seen `sSeq`. On a
+   * the frame while `stale` (awaiting a re-baseline), re-sending the `sync-resync` report every
+   * {@link RESYNC_RETRY_EVERY_DROPS} dropped deltas so a lost report cannot wedge the replica forever.
+   * Detects a sequence gap (`sSeq > local sSeq + 1`): marks `stale`, reports the gap to the host over
+   * the wire (`sync-resync`) when `resyncOnGap` is on, and skips the apply — the host answers by
+   * re-baselining THIS peer with a snapshot at its current `sSeq`. Ignores an already-seen `sSeq`. On a
    * contiguous frame it applies the ops, adopts `sSeq`, flips `ready` on the first such frame (a controller
    * that joined before any slice existed bootstraps off this delta), and notifies the subscribers of every
    * touched namespace.
@@ -204,15 +285,20 @@ export function createSyncEngine(
    */
   function applyDeltaFrame(ops: readonly Op[], sSeq: number): void {
     if (state.stale) {
-      return; // ignore deltas until a fresh snapshot clears the gap
+      // Still awaiting the re-baseline: drop the delta, and every ~1 s worth of dropped frames re-send
+      // the gap report in case the first sync-resync (or its answering snapshot) was itself lost.
+      staleDeltasDropped += 1;
+      if (config.resyncOnGap && staleDeltasDropped % RESYNC_RETRY_EVERY_DROPS === 0) {
+        requestResync();
+      }
+      return;
     }
-    // Sequence gap — cannot apply out of order; mark stale and request a fresh snapshot.
+    // Sequence gap — cannot apply out of order; mark stale and ask the host for a fresh snapshot.
     if (sSeq > state.sSeq + 1) {
       state.stale = true;
+      staleDeltasDropped = 0;
       if (config.resyncOnGap) {
-        for (const handler of resyncHandlers) {
-          handler("");
-        }
+        requestResync();
       }
       return;
     }
@@ -251,10 +337,13 @@ export function createSyncEngine(
         );
       }
 
-      // Wire the inbound frame route — routes sync-snap/sync-delta only → applyFrame
-      wire.on((_peerId, frame) => {
+      // Wire the inbound frame route — sync-snap/sync-delta → applyFrame (replica apply path);
+      // sync-resync → handleResyncRequest (host answers a gapped replica with a fresh baseline).
+      wire.on((peerId, frame) => {
         if (frame.t === "sync-snap" || frame.t === "sync-delta") {
           engine.applyFrame(frame);
+        } else if (frame.t === "sync-resync") {
+          handleResyncRequest(peerId);
         }
       });
     },
@@ -309,28 +398,14 @@ export function createSyncEngine(
         // Delta broadcast to everyone
         broadcastDirty();
       } else {
-        // Single-peer full snapshot (late-join / reconcile)
-        state.sSeq += 1;
-        wire.send(peerId, {
-          t: "sync-snap",
-          snapshot: encodeSnapshot(state.snapshot),
-          sSeq: state.sSeq
-        });
-        session.persistSnapshot(encodeSnapshot(state.snapshot), state.sSeq);
+        // Single-peer full snapshot (late-join / reconcile) at the CURRENT sSeq — a unicast must
+        // never consume the shared sequence (see sendBaselineSnapshotTo).
+        sendBaselineSnapshotTo(peerId);
       }
     },
 
     sendBaselineSnapshot(peerId: PeerId): void {
-      // No-op if no slices registered
-      if (registered.size === 0) {
-        return;
-      }
-      // Send full snapshot without bumping sSeq (baseline for late-joiner)
-      wire.send(peerId, {
-        t: "sync-snap",
-        snapshot: encodeSnapshot(state.snapshot),
-        sSeq: state.sSeq
-      });
+      sendBaselineSnapshotTo(peerId);
     },
 
     onResyncRequest(handler: (peerId: PeerId) => void): () => void {
@@ -387,8 +462,9 @@ export function createSyncEngine(
     /**
      * Applies one inbound host frame to the replica. Routes to the snapshot or delta apply path based
      * on `frame.t`; non-sync frames are silently ignored (transport routes by `t`, defensive guard).
-     * A `sync-snap` re-baselines the entire replica; a `sync-delta` applies ops in order or sets
-     * `stale` on a detected sequence gap. The first applied snapshot triggers `room:sync-ready`.
+     * A `sync-snap` re-baselines the entire replica; a `sync-delta` applies ops in order or — on a
+     * detected sequence gap — sets `stale` and reports the gap to the host (`sync-resync`) so the host
+     * re-baselines this replica. The first applied snapshot triggers `room:sync-ready`.
      *
      * @param frame - The inbound `Frame` (contracts section 2.2); only `sync-snap`/`sync-delta` act.
      * @example
