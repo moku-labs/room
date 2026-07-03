@@ -70,9 +70,9 @@ bun add @moku-labs/room   # client core: that's all — createApp/createPlugin c
 
 ### Two planes (strictly separate)
 
-- **The typed `Wire`** (`Frame` DataChannel) carries **ALL gameplay** — intents, state snapshots, deltas,
-  heartbeats, recovery frames.
-- **Moku `emit`** (`room:*` events) carries **ONLY coarse lifecycle** — the five `room:*` events. No gameplay
+- **The typed `Wire`** (`Frame` DataChannel) carries **ALL gameplay** — intents + their receipt acks, state
+  snapshots, deltas, resync requests, heartbeats, recovery frames.
+- **Moku `emit`** (`room:*` events) carries **ONLY coarse lifecycle** — the six `room:*` events. No gameplay
   payload ever flows through `emit`, and no `room:*` event ever carries gameplay.
 
 ### No game server — D2 accepted hard-failure
@@ -109,9 +109,9 @@ Everything below is the COMPLETE public surface. Nothing else is public.
 - **Signaling adapter factories:** `publicRendezvous` (DEFAULT — Trystero v0.25.x), `inMemory` (tests/simulation;
   `inMemory({ server: true })` simulates the server protocol), `serverSignaling` (OPT-IN, worker-backed; lazy-loaded).
 - **Contract types** (from `./plugins/transport/protocol`): `Signaling`, `SignalingSession`, `SignalingJoinOpts`,
-  `SignalMsg`, `IceCandidateInit`, `Wire`, `Frame`, `IntentFrame`, `SyncSnapshotFrame`, `SyncDeltaFrame`,
-  `HeartbeatPingFrame`, `HeartbeatPongFrame`, `RecoveryHelloFrame`, `RecoveryWelcomeFrame`, `RecoveryFlushFrame`,
-  `PeerId`, `RosterEntry`, `Snapshot`, `Op`, `JsonValue`, `Namespace`.
+  `SignalMsg`, `IceCandidateInit`, `Wire`, `Frame`, `IntentFrame`, `IntentAckFrame`, `SyncSnapshotFrame`,
+  `SyncDeltaFrame`, `SyncResyncFrame`, `HeartbeatPingFrame`, `HeartbeatPongFrame`, `RecoveryHelloFrame`,
+  `RecoveryWelcomeFrame`, `RecoveryFlushFrame`, `PeerId`, `RosterEntry`, `Snapshot`, `Op`, `JsonValue`, `Namespace`.
 - **Event contract:** `RoomEvents` (from `src/config.ts`).
 - **Contract consts:** `MAX_CONTROLLERS` (= 8), `ROOM_CODE_LENGTH` (= 6).
 - **Plugin-owned public types:** `RoomDescriptor`, `JoinResult`, `QrMatrix` (from session); `StageApi` (from stage);
@@ -281,7 +281,10 @@ type ServerEnvelope =
 
 ```typescript
 /** Controller -> host typed input. `cSeq` is a monotonic per-controller sequence number for idempotent de-dup;
- *  the host drops any cSeq <= lastApplied[peerId]. Shape-checked only (D6 — no anti-cheat/HMAC). */
+ *  the host drops any cSeq <= lastApplied[peerId]. Shape-checked only (D6 — no anti-cheat/HMAC). Delivery is
+ *  at-least-once: the host receipt-acks every received frame (IntentAckFrame) and the controller retransmits the
+ *  SAME frame (same cSeq — safe under the de-dup) until acked or the bounded budget exhausts
+ *  (room:intent-undeliverable). */
 type IntentFrame = {
   readonly t: "intent";
   /** Registered intent name (the intent contract key). */
@@ -289,6 +292,17 @@ type IntentFrame = {
   /** Plain-JSON intent payload; validated by a correctness-only typed shape-check (D6). */
   readonly payload: unknown;
   /** Monotonic per-controller sequence number. */
+  readonly cSeq: number;
+};
+
+/** Host -> controller wire-level receipt for a received intent frame — sent for fresh AND duplicate frames,
+ *  BEFORE the registration/shape/de-dup pipeline (a retransmit whose original ack was lost is re-acked, not
+ *  retransmitted to exhaustion). Acknowledges RECEIPT by the intent engine, not application: an unregistered or
+ *  shape-rejected intent is still acked (its silent drop is the D6 host-authority contract, not a wire failure).
+ *  Releases the controller's bounded retransmit loop for `cSeq`. */
+type IntentAckFrame = {
+  readonly t: "intent-ack";
+  /** The received frame's per-controller sequence number being acknowledged. */
   readonly cSeq: number;
 };
 
@@ -305,6 +319,15 @@ type SyncDeltaFrame = {
   readonly t: "sync-delta";
   readonly ops: readonly Op[];
   /** Host sequence number AFTER applying these ops. */
+  readonly sSeq: number;
+};
+
+/** Controller -> host gap-heal / baseline request: "my replica last applied `sSeq` — send a snapshot". Sent on a
+ *  detected delta gap (`resyncOnGap`) and on the `baselineRetryMs` cadence while no baseline has applied yet; the
+ *  host answers with a full snapshot at its current sSeq. */
+type SyncResyncFrame = {
+  readonly t: "sync-resync";
+  /** The replica's last-applied host sequence at the moment the gap was detected. */
   readonly sSeq: number;
 };
 
@@ -346,8 +369,10 @@ type RosterFrame = {
  *  flows through Moku emit. */
 type Frame =
   | IntentFrame
+  | IntentAckFrame
   | SyncSnapshotFrame
   | SyncDeltaFrame
+  | SyncResyncFrame
   | HeartbeatPingFrame
   | HeartbeatPongFrame
   | RecoveryHelloFrame
@@ -383,6 +408,11 @@ type RoomEvents = {
   "room:host-reconnecting": Record<string, never>;
   /** The first full snapshot has been applied; the synced replica is now readable. */
   "room:sync-ready": Record<string, never>;
+  /** A live controller intent exhausted its bounded retransmit budget with no wire-level receipt — the wire is
+   *  dead for this controller's intent stream, and every intent queued behind the dead one drops with its own
+   *  event. Fires only for LIVE sends: intents buffered during a known host absence follow the recovery
+   *  contract instead. */
+  "room:intent-undeliverable": { name: string; cSeq: number };
   /** A network condition surfaced to the consumer for failure UX (D2 accepted hard-failure). `room-evicted` is
    *  server-tier only — the serverSignaling DO's idle Alarm tore the room down. */
   "room:network-warning": { reason: "ice-failed" | "rendezvous-unreachable" | "channel-closed" | "room-evicted" };
@@ -402,10 +432,12 @@ these events.
 | `room:peer-left` | `{ peerId: PeerId }` | session | Controller left or heartbeat-declared dead; removed from roster. |
 | `room:host-reconnecting` | `Record<string, never>` (`{}`) | session | Host tab reloaded; client-side recovery in flight. |
 | `room:sync-ready` | `Record<string, never>` (`{}`) | sync | First full snapshot applied; replica readable. |
+| `room:intent-undeliverable` | `{ name: string; cSeq: number }` | intent | A LIVE intent exhausted its bounded retransmit budget with no wire receipt (the at-least-once terminal verdict); every intent queued behind it drops with its own event. Buffered intents (host absence) follow the recovery contract instead. A verdict, not a latch — a later `intent()` starts a fresh tracked cycle. |
 | `room:network-warning` | `{ reason: "ice-failed" \| "rendezvous-unreachable" \| "channel-closed" \| "room-evicted" }` | transport | Connectivity hard-failure UX hook (D2). `room-evicted` is server-tier only (`serverSignaling` received `{kind:"evict"}` from the DO Alarm). |
 
-**Ownership:** `session` declares + emits the first three; `sync` owns `room:sync-ready`; `transport` owns
-`room:network-warning`. The `stage`/`controller` facades **re-declare all five** for compile-time visibility. The
+**Ownership:** `session` declares + emits the first three; `sync` owns `room:sync-ready`; `intent` owns
+`room:intent-undeliverable`; `transport` owns `room:network-warning`. The `stage`/`controller` facades
+**re-declare all six** for compile-time visibility. The
 `hub` server-tier plugin emits NOTHING (the server has no Room event bus); `room-evicted` is produced browser-side by
 the `serverSignaling` adapter.
 
@@ -550,7 +582,17 @@ migration deferred to v2).
 
 Controller→host typed-input contract — the narrow slice extracted out of sync so the sync engine stays Complex.
 Role-agnostic: a single instance serves both roles. The host calls `register`/`onIntent`; the controller calls
-`intent`; both share the recovery seam. Declares NO events; manages no resource (no `onStart`/`onStop`).
+`intent`; both share the recovery seam. Declares + emits exactly `room:intent-undeliverable` (the at-least-once
+terminal verdict); owns the retransmit timer as its single resource (`onStart`/`onStop`).
+
+**At-least-once live delivery:** the raw wire is at-most-once (`Wire.send` silently discards on a closed/half-open
+channel), so the host receipt-acks every received intent frame (`IntentAckFrame` — fresh AND duplicate, before the
+registration/shape/de-dup pipeline) and the controller retransmits the SAME frame (same `cSeq` — safe under the
+de-dup) on a doubling backoff until acked. Past `maxRetransmits` the frame — and every intent queued behind it —
+drops with `room:intent-undeliverable` each. Deliberately stop-and-wait: ONE unacked frame in flight, later intents
+queue in `cSeq` order (the host's high-water-mark de-dup would otherwise silently eat a retransmitted older frame
+forever if a newer `cSeq` ever applied first). Cost: one wire RTT between consecutive live intents — imperceptible
+at couch-LAN RTTs against human input rates.
 
 ```typescript
 type IntentApi = {
@@ -559,8 +601,10 @@ type IntentApi = {
   /** Host: subscribes the single handler for a registered kind. Runs only for inbound frames that name a
    *  registered kind, pass the schema, and are not a duplicate (cSeq > lastApplied[peerId]). Returns unsubscribe. */
   onIntent(name: string, handler: IntentHandler): () => void;
-  /** Controller: stamps the next cSeq, builds an IntentFrame, and EITHER sends it over Wire.send OR (while
-   *  buffering during a host absence) enqueues it timestamped. NEVER routes through emit. */
+  /** Controller: stamps the next cSeq, builds an IntentFrame, and EITHER hands it to the at-least-once live
+   *  delivery tracker (retransmitted until the host's intent-ack receipt, or dropped with
+   *  room:intent-undeliverable past the bounded budget) OR (while buffering during a host absence) enqueues it
+   *  timestamped. NEVER routes through emit. */
   intent(name: string, payload: JsonValue): void;
   /** Recovery seam (called by session): toggle controller buffering. */
   setBuffering(on: boolean): void;
@@ -665,7 +709,7 @@ the controller reaches `read`/`subscribe` through `ControllerApi`. `Snapshot`/`O
 ### 6.5 stage (Standard facade, depends: all four engines)
 
 The HOST-role facade a couch-multiplayer game plugin composes against. Owns no state, runs no resource, contains no
-business logic — every method delegates via `ctx.require(...)` to one of the four engines. Re-declares all five
+business logic — every method delegates via `ctx.require(...)` to one of the four engines. Re-declares all six
 `room:*` events for a `depends: [stagePlugin]` game plugin. Reached as `app.stage` (plugin name `"stage"`).
 
 ```typescript
@@ -705,7 +749,7 @@ type StageApi = {
 
 The CONTROLLER-role facade (phone side). Owns no state, no business logic — every method delegates to one resolved
 engine. The one browser resource it touches directly is the iOS Screen Wake Lock, exposed as an API method (not a
-lifecycle hook) so the game owns the UX policy. Re-declares all five `room:*` events. Reached as `app.controller`
+lifecycle hook) so the game owns the UX policy. Re-declares all six `room:*` events. Reached as `app.controller`
 (plugin name `"controller"`).
 
 ```typescript
@@ -722,7 +766,8 @@ type ControllerApi = {
    *  Returns unsubscribe. */
   on(ns: Namespace, cb: (value: Readonly<Record<string, JsonValue>>) => void): () => void;
   /** Sends one typed input to the host as an IntentFrame over the WIRE (never emit). Delegates to intent.intent,
-   *  which stamps cSeq and (while the host is absent) buffers for the recovery flush. Fire-and-forget. */
+   *  which stamps cSeq and (while the host is absent) buffers for the recovery flush. Fire-and-forget surface
+   *  (returns void — the host acks via synced state, not a reply); at-least-once delivery underneath (§6.3). */
   intent(name: string, payload: JsonValue): void;
   /** Requests a Screen Wake Lock (Safari 16.4+) so iOS doesn't dim/lock + suspend the DataChannel. Idempotent.
    *  Feature-detected — resolves false (never throws) on a platform without navigator.wakeLock or on denial. */
@@ -806,8 +851,10 @@ verified "couch" profile.
 
 | Field | Type | Default | Description |
 |---|---|---|---|
-| `bufferCap` | `number` | `256` | Max controller-side intents buffered during host absence (FIFO drop). |
+| `bufferCap` | `number` | `256` | Max controller-side intents buffered during host absence (FIFO drop). Doubles as the live send-queue cap — past it the oldest QUEUED intent drops with its own `room:intent-undeliverable`. |
 | `bufferMaxAgeMs` | `number` | `10000` | Max age of a buffered intent before prune; should be `>=` session's reconnect timeout. |
+| `ackTimeoutMs` | `number` | `1000` | Ms an unacked LIVE intent waits before its first retransmit; the wait doubles per attempt (1×, 2×, 4×, …). |
+| `maxRetransmits` | `number` | `3` | Bounded re-sends of the SAME frame before the terminal `room:intent-undeliverable` (`0` = track + signal, never re-send). Total silence budget ≈ 15 s at the defaults — spans the ~10 s heartbeat dead-peer window. |
 
 ### sync (`SyncConfig`)
 
@@ -847,7 +894,7 @@ A two-player scoreboard game. Stage app (the TV) and controller app (each phone)
 import { createApp, createPlugin, stagePlugin } from "@moku-labs/room";
 
 const scoreboard = createPlugin("scoreboard", {
-  depends: [stagePlugin], // makes the five room:* events visible (WARN-2)
+  depends: [stagePlugin], // makes the six room:* events visible (WARN-2)
   hooks: ctx => ({
     "room:peer-joined": ({ peerId }) => ctx.log.info(`controller joined: ${peerId}`),
     "room:peer-left": ({ peerId }) => ctx.log.info(`controller left: ${peerId}`),
@@ -904,7 +951,7 @@ const pad = createPlugin("pad", {
 
     // Send an input on a button press.
     document.querySelector("#buzz")?.addEventListener("click", () => {
-      controller.intent("score", {}); // fire-and-forget over the Wire
+      controller.intent("score", {}); // fire-and-forget surface; at-least-once on the wire
     });
   }
 });
@@ -918,8 +965,8 @@ await app.start();
 1. Controller's `intent("score", {})` → `intentPlugin` stamps `cSeq` → `IntentFrame {t:"intent", name:"score",
    payload:{}, cSeq:n}` → `Wire.send(host, frame)`.
 2. Transport delivers the frame to the host; transport fans it to all `Wire.on` consumers; `intentPlugin`
-   self-filters `t:"intent"`, validates the schema, drops duplicates (`cSeq <= lastApplied[peerId]`), and invokes
-   the host `onIntent` handler.
+   self-filters `t:"intent"`, receipt-acks it (`intent-ack` — releases the controller's retransmit loop), then
+   validates the schema, drops duplicates (`cSeq <= lastApplied[peerId]`), and invokes the host `onIntent` handler.
 3. The handler calls `stage.mutate("scores", ...)` → `syncPlugin` diffs into `Op[]`, marks `scores` dirty.
 4. The next `broadcastHz` tick coalesces dirty namespaces into a `SyncDeltaFrame {t:"sync-delta", ops, sSeq}` and
    `Wire.broadcast`s it to every controller.
@@ -965,7 +1012,7 @@ transport ──> session ──> intent ─┐
 
 ### On the facades (D19) — re-declare, do NOT re-emit
 
-The facades re-DECLARE the five `room:*` events for **compile-time visibility** to a game plugin that
+The facades re-DECLARE the six `room:*` events for **compile-time visibility** to a game plugin that
 `depends: [stagePlugin]` / `[controllerPlugin]` (event-type visibility is NOT transitive at the type level). They
 install **NO forwarding hooks**: Moku's event bus is **GLOBAL** — every hook registered for an event name fires on
 any `emit` of that name regardless of `depends` — so the engines' own emits already reach a `depends`-ing consumer
