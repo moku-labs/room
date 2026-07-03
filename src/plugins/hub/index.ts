@@ -1,7 +1,7 @@
 /**
- * Standard tier — hub: DO-per-room signaling/discovery/recovery hub wiring (D21/D25). A room-core plugin
- * (`createPlugin` from `../../config`); it reaches the Durable Object + rate-limit KV + static assets
- * through the native Cloudflare `env` threaded into `handle` (no `@moku-labs/worker` plugin dependencies).
+ * Standard tier — hub: DO-per-room signaling/discovery/recovery hub wiring (D21/D25). A `@moku-labs/worker`
+ * plugin (`createPlugin` from `@moku-labs/worker`) with no plugin `depends`; it reaches the Durable Object +
+ * rate-limit KV + static assets through the native Cloudflare `env` threaded into `handle`.
  *
  * @see README.md
  */
@@ -14,8 +14,9 @@ import { createState } from "./state";
 /**
  * `hubPlugin` — Room's opt-in operated signaling tier (Standard tier). Owns the per-room `Hub` Durable
  * Object + rate-limit KV config and a thin `handle` that routes `Upgrade: websocket` → the per-room `Hub`
- * DO and everything else → the static-assets binding. Composed into the `./server` core's `createApp`; the
- * `Hub` DO class is co-located (NOT a plugin — D6/I3) and re-exported from `src/server.ts`.
+ * DO and everything else → the static-assets binding. A `@moku-labs/worker` plugin (exported from
+ * `@moku-labs/room/server`) you compose into your own `@moku-labs/worker` `createApp`; the `Hub` DO class is
+ * co-located (NOT a plugin — D6/I3) and re-exported from `src/server.ts`.
  *
  * @see README.md
  */

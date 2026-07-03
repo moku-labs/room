@@ -56,6 +56,7 @@ function makeApi(configOverrides?: Partial<Config>) {
     skipEmptyDeltas: true,
     maxOpsPerDelta: 512,
     resyncOnGap: true,
+    baselineRetryMs: 1000,
     ...configOverrides
   };
   const wire = makeWire();

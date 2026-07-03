@@ -62,6 +62,7 @@ function makeConfig(overrides?: Partial<Config>): Config {
     skipEmptyDeltas: true,
     maxOpsPerDelta: 512,
     resyncOnGap: true,
+    baselineRetryMs: 1000,
     ...overrides
   };
 }
@@ -942,6 +943,152 @@ describe("engine", () => {
     expect(hook).not.toHaveBeenCalled();
     expect(wire.send).not.toHaveBeenCalled();
   });
+
+  // ─────────────────────────────────────────────────────────────────────────────
+  // Not-ready baseline retry loop: a replica whose join sync-snap was lost on a
+  // half-open channel re-requests it on a timer cadence — the receive-direction
+  // at-least-once guard (no deltas flow in a pre-game lobby, so the delta-paced
+  // gap heal can never fire).
+  // ─────────────────────────────────────────────────────────────────────────────
+
+  it("while un-ready, the baseline retry loop re-sends sync-resync every baselineRetryMs", () => {
+    const { engine, wire } = makeEngine({ baselineRetryMs: 1000 });
+
+    engine.startBaselineRetry();
+
+    // Nothing before the first cadence elapses.
+    vi.advanceTimersByTime(999);
+    expect(wire.send).not.toHaveBeenCalled();
+
+    // One re-request per elapsed cadence, addressed to the host — the loop never gives up while un-ready
+    // (the host ignores reports until a slice exists, so the ask must keep coming).
+    vi.advanceTimersByTime(1);
+    expect(wire.send).toHaveBeenCalledTimes(1);
+    expect(wire.send).toHaveBeenCalledWith("host", { t: "sync-resync", sSeq: 0 });
+
+    vi.advanceTimersByTime(3000);
+    expect(wire.send).toHaveBeenCalledTimes(4);
+
+    engine.stopBaselineRetry();
+  });
+
+  it("the baseline retry loop stops on markReady — an applied snapshot ends the re-requests", () => {
+    const { engine, wire, state } = makeEngine({ baselineRetryMs: 1000 });
+
+    engine.startBaselineRetry();
+    vi.advanceTimersByTime(2000);
+    expect(wire.send).toHaveBeenCalledTimes(2);
+
+    // The (retried) baseline finally lands — ready flips, the loop's goal is met.
+    engine.applyFrame({ t: "sync-snap", snapshot: { scores: { p1: 0 } }, sSeq: 3 });
+    expect(state.ready).toBe(true);
+
+    // No further re-requests, ever.
+    vi.advanceTimersByTime(10_000);
+    expect(wire.send).toHaveBeenCalledTimes(2);
+  });
+
+  it("baseline retry ticks are silent while the host PeerId is unknown, then ask once it is known", () => {
+    const state = createSyncState();
+    const wire = makeWire();
+    const session = makeSession();
+    // Pre-join: no host id yet — requestResync has no one to ask.
+    vi.mocked(session.hostId).mockReturnValue("");
+    const engine = createSyncEngine(state, makeConfig(), wire, session, vi.fn());
+    engine.init();
+
+    engine.startBaselineRetry();
+    vi.advanceTimersByTime(3000);
+    expect(wire.send).not.toHaveBeenCalled();
+
+    // The join completes (host id resolves) — the very next tick asks.
+    vi.mocked(session.hostId).mockReturnValue("host");
+    vi.advanceTimersByTime(1000);
+    expect(wire.send).toHaveBeenCalledTimes(1);
+    expect(wire.send).toHaveBeenCalledWith("host", { t: "sync-resync", sSeq: 0 });
+
+    engine.stopBaselineRetry();
+  });
+
+  it("startBaselineRetry is idempotent — a second call does not double the cadence", () => {
+    const { engine, wire } = makeEngine({ baselineRetryMs: 1000 });
+
+    engine.startBaselineRetry();
+    engine.startBaselineRetry(); // must NOT arm a second interval
+
+    vi.advanceTimersByTime(1000);
+    expect(wire.send).toHaveBeenCalledTimes(1);
+
+    engine.stopBaselineRetry();
+  });
+
+  it("startBaselineRetry is a no-op when already ready, when resyncOnGap is off, or when disabled by 0", () => {
+    // Already ready (host path): registerSlice flipped ready before onStart arms the loop.
+    const ready = makeEngine();
+    ready.engine.registerSlice("scores", { p1: 0 });
+    ready.engine.startBaselineRetry();
+    vi.advanceTimersByTime(5000);
+    expect(ready.wire.send).not.toHaveBeenCalled();
+
+    // resyncOnGap off: the controller never asks the host for anything (config contract).
+    const noResync = makeEngine({ resyncOnGap: false });
+    noResync.engine.startBaselineRetry();
+    vi.advanceTimersByTime(5000);
+    expect(noResync.wire.send).not.toHaveBeenCalled();
+
+    // baselineRetryMs 0: the loop is explicitly disabled.
+    const disabled = makeEngine({ baselineRetryMs: 0 });
+    disabled.engine.startBaselineRetry();
+    vi.advanceTimersByTime(5000);
+    expect(disabled.wire.send).not.toHaveBeenCalled();
+  });
+
+  it("stopBaselineRetry ends the loop and is a safe no-op when never armed / called twice", () => {
+    const { engine, wire } = makeEngine({ baselineRetryMs: 1000 });
+
+    // Never armed: must not throw.
+    expect(() => engine.stopBaselineRetry()).not.toThrow();
+
+    engine.startBaselineRetry();
+    vi.advanceTimersByTime(1000);
+    expect(wire.send).toHaveBeenCalledTimes(1);
+
+    engine.stopBaselineRetry();
+    vi.advanceTimersByTime(5000);
+    expect(wire.send).toHaveBeenCalledTimes(1); // no further asks after teardown
+
+    // Second stop is idempotent.
+    expect(() => engine.stopBaselineRetry()).not.toThrow();
+  });
+
+  it("a retry tick that finds ready already true self-clears the loop (defensive guard)", () => {
+    const { engine, state, wire } = makeEngine({ baselineRetryMs: 1000 });
+
+    engine.startBaselineRetry();
+
+    // Inconsistent state: ready flipped WITHOUT the markReady path (which would have cleared the timer).
+    state.ready = true;
+
+    // The next tick must send nothing and dispose of the timer itself.
+    vi.advanceTimersByTime(1000);
+    expect(wire.send).not.toHaveBeenCalled();
+    vi.advanceTimersByTime(5000);
+    expect(wire.send).not.toHaveBeenCalled();
+  });
+
+  it("init throws on a negative or non-finite baselineRetryMs", () => {
+    for (const bad of [-1, Number.NaN]) {
+      const state = createSyncState();
+      const engine = createSyncEngine(
+        state,
+        makeConfig({ baselineRetryMs: bad }),
+        makeWire(),
+        makeSession(),
+        vi.fn()
+      );
+      expect(() => engine.init()).toThrow(/baselineRetryMs must be >= 0/);
+    }
+  });
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -1014,6 +1161,14 @@ function makeLinkedRoom(replicaIds: readonly PeerId[]) {
 }
 
 describe("engine linked-room loop (gap heal end-to-end)", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
   it("a unicast reconcile to one replica leaves every OTHER replica applying deltas contiguously", () => {
     const { host, replicas } = makeLinkedRoom(["A", "B"]);
     const [a, b] = replicas;
@@ -1081,5 +1236,60 @@ describe("engine linked-room loop (gap heal end-to-end)", () => {
     expect(b.state.sSeq).toBe(4);
     expect(b.engine.read("scores")).toEqual({ p1: 4 });
     expect(a.engine.read("scores")).toEqual({ p1: 4 });
+  });
+
+  it("a join baseline lost on a half-open channel heals via the retry loop with ZERO deltas flowing (pre-game wedge)", () => {
+    const { host, replicas, dropTo } = makeLinkedRoom(["A", "B"]);
+    const [a, b] = replicas;
+    if (!a || !b) throw new Error("expected two replicas");
+
+    // Lobby state exists; A's join baseline lands, B's vanishes on its half-open channel.
+    host.registerSlice("lobby", { phase: "waiting" });
+    dropTo.add("B");
+    host.sendBaselineSnapshot("A");
+    host.sendBaselineSnapshot("B"); // dropped — the exact frame behind the pre-game join wedge
+    expect(a.state.ready).toBe(true);
+    expect(b.state.ready).toBe(false);
+
+    // The retry loop arms (onStart in the real harness). No mutations follow — an idle lobby — so the
+    // delta-triggered gap heal can never fire; only the timer cadence can save B.
+    b.engine.startBaselineRetry();
+
+    // While the channel stays half-open even the answering snapshot vanishes: B keeps asking (the loop
+    // must survive lost answers too, not just the lost join baseline).
+    vi.advanceTimersByTime(2000);
+    expect(b.state.ready).toBe(false);
+
+    // The channel recovers: the next timed re-request is answered and B becomes readable — no reload.
+    dropTo.delete("B");
+    vi.advanceTimersByTime(1000);
+    expect(b.state.ready).toBe(true);
+    expect(b.engine.read("lobby")).toEqual({ phase: "waiting" });
+
+    // The loop stopped itself on ready: no further resync traffic from B.
+    b.wire.send.mockClear();
+    vi.advanceTimersByTime(5000);
+    expect(b.wire.send).not.toHaveBeenCalled();
+  });
+
+  it("a replica that joined BEFORE any slice existed keeps asking until the host registers one", () => {
+    const { host, hostState, replicas } = makeLinkedRoom(["A"]);
+    const [a] = replicas;
+    if (!a) throw new Error("expected one replica");
+
+    // A joins a slice-less host: the room:peer-joined baseline was a no-op (nothing to send), and with
+    // no mutations there is no bootstrap delta either. A's asks are ignored (registered.size === 0).
+    a.engine.startBaselineRetry();
+    vi.advanceTimersByTime(3000);
+    expect(a.state.ready).toBe(false);
+
+    // The host finally registers its first slice (no mutate, no broadcast — a silent lobby).
+    host.registerSlice("lobby", { phase: "waiting" });
+    expect(hostState.ready).toBe(true);
+
+    // A's next timed ask is answered with the fresh baseline.
+    vi.advanceTimersByTime(1000);
+    expect(a.state.ready).toBe(true);
+    expect(a.engine.read("lobby")).toEqual({ phase: "waiting" });
   });
 });

@@ -10,7 +10,10 @@ throttle** (decoupled from the 60 Hz game loop). Controllers apply `sync-snap` /
 `sSeq` order and re-render via per-namespace `subscribe` callbacks; a detected sequence gap reports
 itself to the host over the wire (`sync-resync`) and the host answers by re-baselining that ONE peer
 with a snapshot at its CURRENT `sSeq` — a re-baseline never consumes the shared sequence, so the other
-replicas' delta contiguity is untouched. Encoding/decoding lives in a **pure `codec.ts`**. The
+replicas' delta contiguity is untouched. A replica that has applied NO authoritative frame yet re-requests
+its join baseline on the `baselineRetryMs` cadence (the same `sync-resync` → baseline-answer loop) — the
+receive-direction at-least-once guard for a join `sync-snap` lost on a half-open channel with zero deltas
+following (a pre-game lobby). Encoding/decoding lives in a **pure `codec.ts`**. The
 same plugin runs on the stage and on every controller — the *role* is determined by which API methods a
 facade calls, not by a branch in this plugin. All frame I/O rides `transport` (contracts section 2) —
 never Moku `emit`; the only event this engine emits is `room:sync-ready`.
@@ -25,7 +28,8 @@ a stage/controller app needs zero overrides.
 | `broadcastHz` | `number` | `30` | Authoritative broadcast rate in Hz — the throttle loop coalesces all mutates within a tick into one `SyncDeltaFrame` at this cadence, independent of the 60 Hz game loop. Verified safe band is 20-30 Hz; clamped to `[5, 60]` in `onInit` (contracts section 4.3). |
 | `skipEmptyDeltas` | `boolean` | `true` | When `true`, a no-change tick sends NO broadcast (no `SyncDeltaFrame` when zero namespaces are dirty), saving the O(N) fan-out on idle frames. Set `false` only for a heartbeat-style diagnostic. |
 | `maxOpsPerDelta` | `number` | `512` | Maximum `Op` cells batched into a single `SyncDeltaFrame` before an extra frame is forced in the same tick — bounds per-frame JSON size under the ~14 KiB transport chunk threshold (contracts section 2.3). `0` disables the cap (rely on transport chunking). |
-| `resyncOnGap` | `boolean` | `true` | When a controller detects a sequence gap (`incoming.sSeq > local.sSeq + 1`, contracts section 4.3) and `true`, it reports the gap to the host over the wire (`sync-resync`, re-sent on a slow cadence while the gap persists); the host answers by re-baselining that one peer at its current `sSeq` and fires the host-side `onResyncRequest` hook. When `false`, the controller waits for the next host snapshot. |
+| `resyncOnGap` | `boolean` | `true` | When a controller detects a sequence gap (`incoming.sSeq > local.sSeq + 1`, contracts section 4.3) and `true`, it reports the gap to the host over the wire (`sync-resync`, re-sent on a slow cadence while the gap persists); the host answers by re-baselining that one peer at its current `sSeq` and fires the host-side `onResyncRequest` hook. When `false`, the controller waits for the next host snapshot (this also disables the `baselineRetryMs` loop). |
+| `baselineRetryMs` | `number` | `1000` | While a replica has applied NO authoritative frame yet (`ready === false`), it re-requests its join baseline from the host every this-many ms (`sync-resync` → whole-state snapshot answer at the host's current `sSeq`). Heals a join/late-join `sync-snap` lost on a half-open channel when zero deltas follow (a pre-game lobby) — the delta-triggered gap heal never fires on a replica with no inbound traffic. No-ops while the host `PeerId` is unknown, keeps asking while the host has no slice registered yet, and stops on the `ready` transition. `0` disables; gated by `resyncOnGap`. |
 
 Framework-level overrides live in Web's `pluginConfigs.sync`; consumer apps override per-app via
 `createApp({ pluginConfigs: { sync: { broadcastHz: 20 } } })`.
