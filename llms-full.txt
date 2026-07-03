@@ -15,23 +15,25 @@ It is its OWN framework — a sibling to `@moku-labs/web` / `@moku-labs/worker`,
 rendering/game engine or a game server.
 
 - It HAS a config shell: `src/config.ts` calls `createCoreConfig("room", …)` (registering the `log`/`env` core
-  plugins from `@moku-labs/common`), and each core entry calls `createCore` and EXPORTS the bound `createApp` +
-  `createPlugin`. The framework never calls `createApp` itself — Layer-3 apps do (both the client core and the
-  opt-in server core, §3.1/§6.7, follow this).
+  plugins from `@moku-labs/common`); the CLIENT core (`src/index.ts`) calls `createCore` and EXPORTS the bound
+  `createApp` + `createPlugin`. The framework never calls `createApp` itself — Layer-3 apps do. (The opt-in server
+  tier, §3.1/§6.7, is NOT a core — it exports just `{ hubPlugin, Hub }`.)
 - It depends on **`@moku-labs/core`** + **`@moku-labs/common`** as **bundled** dependencies (NOT peers); `common`
-  supplies `ctx.log` + `ctx.env`. Room does NOT depend on `@moku-labs/web` or `@moku-labs/worker`.
+  supplies `ctx.log` + `ctx.env`. Room does NOT depend on `@moku-labs/web`. The opt-in server tier composes into a
+  `@moku-labs/worker` app, so `@moku-labs/worker` is an OPTIONAL peer dependency (only the server tier needs it).
 - Integration model: a consumer `createApp`s from `@moku-labs/room` and adds a role facade (`stagePlugin` host /
   `controllerPlugin` phone) + its game plugin. The four engines are core DEFAULTS — there are no role arrays.
-- Two cores / two entries: **`@moku-labs/room`** (`.`, the CLIENT core — the browser game; also runs node tests, so
-  there is NO separate `/browser` entry) and **`@moku-labs/room/server`** (`./server`, the OPT-IN server core — a
-  Cloudflare Worker signaling tier: the `hubPlugin` + the `Hub` Durable Object, §6.7). Browser bundles never import
-  the server entry.
+- Two entries: **`@moku-labs/room`** (`.`, the CLIENT core — the browser game; also runs node tests, so there is NO
+  separate `/browser` entry) and **`@moku-labs/room/server`** (`./server`, the OPT-IN server tier — exports the
+  `hubPlugin` (a `@moku-labs/worker` plugin) + the `Hub` Durable Object, §6.7; NOT its own core). Browser bundles
+  never import the server entry.
 
 Package facts (`package.json`):
 
 - `name`: `@moku-labs/room`, `type`: `module`, `version`: `0.2.0`.
 - `dependencies` (bundled): `@moku-labs/core` `1.5.0`, `@moku-labs/common` `0.2.1`, `trystero` `~0.25.2` (default
-  public-rendezvous signaling), `qrcode` `^1.5.4` (join QR). **No `peerDependencies`** — nothing extra to install.
+  public-rendezvous signaling), `qrcode` `^1.5.4` (join QR). `peerDependencies`: `@moku-labs/worker` (OPTIONAL — only
+  the opt-in server tier needs it; the client core installs nothing extra).
 - `engines`: Node `>=24.0.0`, bun `>=1.3.14`.
 - `exports`: `.` (the client core, `import`/`require` → `dist/index.*`), `./server` (`import` → `dist/server.mjs`;
   JS-only, no `.d.ts`).
@@ -43,7 +45,8 @@ Package facts (`package.json`):
 Install (bun only):
 
 ```bash
-bun add @moku-labs/room   # that's all — createApp/createPlugin come from Room itself; no peers to install
+bun add @moku-labs/room   # client core: that's all — createApp/createPlugin come from Room itself
+# the opt-in server tier additionally needs `bun add @moku-labs/worker` (an optional peer dependency)
 ```
 
 ---
@@ -117,17 +120,17 @@ Everything below is the COMPLETE public surface. Nothing else is public.
   `plugins/transport/protocol.ts` (shared by `serverSignaling`, `inMemory({server:true})`, and the DO) but are
   internal — not re-exported.
 
-### 3.1 Server core export surface (from `src/server.ts` — `@moku-labs/room/server`)
+### 3.1 Server tier export surface (from `src/server.ts` — `@moku-labs/room/server`)
 
-A separate, OPT-IN core: its own `createCore` on the shared `coreConfig` with the `hubPlugin` default. Imported only
-by a Cloudflare Worker deployment — never by a browser bundle. The tsdown entry is JS-only (`dts: false`). Like every
-Moku framework it EXPORTS `createApp` and never calls it, and exports NO `fetch` handler.
+The OPT-IN server tier — NOT its own core. `src/server.ts` exports just `{ hubPlugin, Hub }` (no `createCore` /
+`createApp` / `createPlugin`, no `fetch` handler). Imported only by a Cloudflare Worker deployment — never by a
+browser bundle. The tsdown entry is JS-only (`dts: false`).
 
-- `createApp` — the server core's Layer-3 entry; wires `hubPlugin` by default. `app.hub.handle(request, env, ctx)` is
-  the request handler a consumer's `cloudflare/worker.ts` delegates its `fetch` to. The `hub` reaches the DO + KV +
-  ASSETS through the per-request native Cloudflare `env` — there is no `@moku-labs/worker` dependency.
-- `createPlugin` — author a custom server plugin bound to Room's core.
-- `hubPlugin` — the `hub` plugin instance (already a server-core default; re-export for composing your own app).
+- `hubPlugin` — the `hub` plugin (a `@moku-labs/worker` plugin). Compose it into your OWN `@moku-labs/worker`
+  `createApp` (alongside `durableObjectsPlugin` + `kvPlugin` + `deployPlugin`/`cliPlugin`, §6.7).
+  `server.hub.handle(request, env, ctx)` is the request handler your `cloudflare/worker.ts` delegates its `fetch` to;
+  the `hub` reaches the DO + KV + ASSETS through the per-request native Cloudflare `env`. `@moku-labs/worker` is an
+  OPTIONAL peer dependency you provide.
 - `Hub` — the Durable Object class (re-export from your Worker entry so `wrangler` can bind `ROOM_HUB` to it).
 
 ---
@@ -403,7 +406,7 @@ these events.
 
 **Ownership:** `session` declares + emits the first three; `sync` owns `room:sync-ready`; `transport` owns
 `room:network-warning`. The `stage`/`controller` facades **re-declare all five** for compile-time visibility. The
-`hub` server-core plugin emits NOTHING (the server has no Room event bus); `room-evicted` is produced browser-side by
+`hub` server-tier plugin emits NOTHING (the server has no Room event bus); `room-evicted` is produced browser-side by
 the `serverSignaling` adapter.
 
 **Reload-path timing caveat:** `room:host-reconnecting` is emitted during `session` `onInit` (plugin #2), which runs
@@ -417,8 +420,8 @@ The event remains useful for steady-state (non-reload) host-reload detection.
 ## 6. Plugins
 
 Dependency-ordered. Of the six CLIENT-core plugins, the first four are **engines** (wired as core defaults) and the
-last two are **role facades** (an app adds one). A seventh plugin (§6.7 `hub`) is the OPT-IN SERVER core's only
-plugin, behind `@moku-labs/room/server`; it is never composed on the client.
+last two are **role facades** (an app adds one). A seventh plugin (§6.7 `hub`) is the OPT-IN SERVER tier's only
+plugin — a `@moku-labs/worker` plugin behind `@moku-labs/room/server`; it is never composed on the client.
 
 ### 6.1 transport (Complex, depends: none)
 
@@ -729,17 +732,18 @@ type ControllerApi = {
 };
 ```
 
-### 6.7 hub (Standard, server core — `@moku-labs/room/server`, native Cloudflare `env`)
+### 6.7 hub (Standard, server tier — `@moku-labs/room/server`, a `@moku-labs/worker` plugin)
 
-The OPT-IN operated signaling tier (D21/D25), the ONLY plugin of the `@moku-labs/room/server` core. Authored with
-Room's own `createPlugin` (from `src/config.ts`), NOT `@moku-labs/worker` — it reaches the Durable Object, KV, and
-ASSETS through the per-request native Cloudflare `env` threaded into `handle` (no `@moku-labs/worker` dependency).
-Reached as `app.hub` on the server app (§3.1). Emits no Room events (the server has no Room event bus). Three parts:
+The OPT-IN operated signaling tier (D21/D25), the only plugin the `@moku-labs/room/server` entry exports. Authored
+with `@moku-labs/worker`'s `createPlugin` (it IS a `@moku-labs/worker` plugin) but with no plugin `depends` — it
+reaches the Durable Object, KV, and ASSETS through the per-request native Cloudflare `env` threaded into `handle`.
+Compose it into your own `@moku-labs/worker` `createApp`; reached as `server.hub` (§3.1). Emits no Room events (the
+server has no Room event bus). Three parts:
 
 1. **`hub` plugin** (`api.ts`) — a thin fetch router. `handle(request, env, ctx)`: `Upgrade: websocket` → per-room
    `Hub` DO (after a per-IP rate-limit check; `429` over the limit, `400` without a room code); everything else →
    `env.ASSETS.fetch` (the built web client). No HTTP/REST endpoints (D21 — default endpoint only, one WS protocol).
-2. **`Hub` Durable Object** (`hub-do.ts`, `defineDurableObject` — co-located, NOT a plugin, D6/I3) — WebSocket
+2. **`Hub` Durable Object** (`hub-do.ts` — a co-located plain `Hub` class, NOT a plugin, D6/I3) — WebSocket
    Hibernation accept; a `ClientEnvelope.kind` switch (`join` / `reclaim` / `relay` — NO gameplay-relay case);
    star-topology enforcement (passive↔passive never announced); the join-window guard (late `join` → close `1008`);
    the controller cap (`{kind:"full"}` + close); the host-reload reclaim handshake; a safe-guarded Alarm TTL
@@ -813,13 +817,14 @@ verified "couch" profile.
 | `skipEmptyDeltas` | `boolean` | `true` | When true, a no-change tick sends no SyncDeltaFrame. |
 | `maxOpsPerDelta` | `number` | `512` | Max Op cells per delta before an extra frame is forced. `0` disables the cap. |
 | `resyncOnGap` | `boolean` | `true` | When true, a controller's detected gap surfaces the host onResyncRequest hook. |
+| `baselineRetryMs` | `number` | `1000` | While a replica has applied no authoritative frame yet (`ready === false`), it re-requests its join baseline every this-many ms (`sync-resync` → snapshot answer at the host's current sSeq). Heals a join `sync-snap` lost on a half-open channel when no deltas follow (idle pre-game lobby). `0` disables; gated by `resyncOnGap`. |
 
 ### stage / controller
 
 No config. The facades own no tunables; every knob lives on the engine that owns the concern. The controller's
 wake-lock behavior is opt-in via `requestWakeLock()`, not a config flag.
 
-### hub (`pluginConfigs.hub`, server core only)
+### hub (`pluginConfigs.hub`, server tier only)
 
 | Field | Type | Default | Description |
 |---|---|---|---|
@@ -1058,9 +1063,9 @@ i.e. it speaks the §1.3 `ClientEnvelope`/`ServerEnvelope` protocol against a co
   bound `createApp` + `createPlugin`, the six plugin instances, the three adapter factories (`publicRendezvous` /
   `inMemory` / `serverSignaling`), and the contract + plugin-owned type exports. No separate browser entry (this one
   entry serves browser + node tests).
-- `src/server.ts` — the SERVER core (`@moku-labs/room/server`): `createCore` with `hubPlugin`; exports the bound
-  `createApp` + `createPlugin`, the `hubPlugin` instance, and the `Hub` Durable Object class. No `@moku-labs/worker`,
-  no `fetch`. JS-only tsdown entry (`dts: false`).
+- `src/server.ts` — the SERVER tier (`@moku-labs/room/server`): exports just `{ hubPlugin, Hub }`. NOT a core — no
+  `createCore` / `createApp` / `createPlugin`, no `fetch`. `hubPlugin` is authored with `@moku-labs/worker`'s
+  `createPlugin`. JS-only tsdown entry (`dts: false`).
 - `src/plugins/<name>/` — one directory per plugin:
   - `index.ts` — the `createPlugin` wiring harness.
   - `types.ts` — the plugin's config/state/API types (shared types imported from `../transport/protocol`, never
@@ -1075,9 +1080,10 @@ i.e. it speaks the §1.3 `ClientEnvelope`/`ServerEnvelope` protocol against a co
 - `src/plugins/transport/protocol.ts` — the single physical home (D16) for all shared types (signaling, wire, sync,
   roster, the §1.3 `ClientEnvelope`/`ServerEnvelope` server-protocol unions) + `MAX_CONTROLLERS` / `ROOM_CODE_LENGTH`.
   Pure types + two consts, DOM-free by construction; re-exported from the client barrel.
-- `src/plugins/hub/` — the OPT-IN server-core plugin: `api.ts` (`handle`), `hub-do.ts` (the `Hub` Durable Object —
-  co-located, NOT a plugin), `sqlite.ts` (roster + reclaim tokens), `config.ts`, `state.ts`. Authored with Room's own
-  `createPlugin`; reaches DO/KV/ASSETS through the native Cloudflare `env` (no `@moku-labs/worker`).
+- `src/plugins/hub/` — the OPT-IN server-tier plugin: `api.ts` (`handle`), `hub-do.ts` (the `Hub` Durable Object —
+  a co-located plain class, NOT a plugin), `sqlite.ts` (roster + reclaim tokens), `config.ts`, `state.ts`. A
+  `@moku-labs/worker` plugin (its `createPlugin` comes from `@moku-labs/worker`) with no plugin `depends`; reaches
+  DO/KV/ASSETS through the native Cloudflare `env`.
 - Worker build/type isolation: `tsconfig.worker.json` (the `hub` + `server.ts` worker graph) is typechecked
   separately (`bun run typecheck` = `tsc --noEmit` ×2); tsdown emits the extra `./server` entry; `tests/e2e/` +
   `playwright.worker.config.ts` cover the real `wrangler dev` path (manual `test:e2e:worker`).
@@ -1128,14 +1134,16 @@ JSDoc required on all source exports.
   global).
 - **D21** — Reintroduce an OPT-IN operated server for SIGNALING ONLY (reverses the original no-operated-server stance);
   D2's no-gameplay-relay / no-TURN rule still holds.
-- **D22** — Single package; the opt-in SERVER CORE ships via the `@moku-labs/room/server` sub-path. The `hub` reaches
-  the DO/KV/ASSETS through the native Cloudflare `env` — no `@moku-labs/worker` dependency.
+- **D22** — Single package; the opt-in SERVER TIER ships via the `@moku-labs/room/server` sub-path as a
+  `@moku-labs/worker` plugin (`hubPlugin`), composed into the consumer's own `@moku-labs/worker` app. The `hub`
+  reaches the DO/KV/ASSETS through the native Cloudflare `env`; `@moku-labs/worker` is an OPTIONAL peer dependency.
 - **D23** — The server protocol lives in `transport/protocol.ts` as sibling `ClientEnvelope` / `ServerEnvelope` unions
   (not merged into `SignalMsg`), so `inMemory({server:true})` can simulate it.
 - **D24** — Minimal security baseline for the server tier: per-IP join rate limit, join-window guard, controller cap,
   and a wider room code (`codeLength: 8` recommended).
 - **D25** — `serverSignaling` is opt-in; its session is `persistent` (kept open post-ICE over WebSocket Hibernation),
   one Durable Object per room, with host-reload reclaim via a DO-issued `reclaimToken`.
-- **D26** — No split structure: `hub` lives in `src/plugins/hub/`, its DO is co-located, the server core is the single
-  `src/server.ts` entry, and the library ships NO `wrangler.jsonc` — deployment config is app-side.
+- **D26** — No split structure: `hub` lives in `src/plugins/hub/`, its DO is co-located, the server tier is the single
+  `src/server.ts` entry, and the library ships NO `wrangler.jsonc` — the consumer's `@moku-labs/worker` app generates
+  it (via `deployPlugin`).
 - **WARN-2** — Event-type visibility is not transitive; a facade must re-declare events for a `depends`-ing consumer.

@@ -1,9 +1,10 @@
 # hub
 
-> **Standard tier** plugin in the `@moku-labs/room` framework — Room's **opt-in operated signaling
-> tier** (D21/D25). `createPlugin` is imported from the framework via `../../config`;
-> the hub reaches the DO + KV + ASSETS through the native Cloudflare `env` (no plugin `depends`).
-> Shipped through the **`@moku-labs/room/server`** server core (`src/server.ts`).
+> **Standard tier** plugin — Room's **opt-in operated signaling tier** (D21/D25), a
+> [`@moku-labs/worker`](https://github.com/moku-labs/worker) plugin (`createPlugin` is imported from
+> `@moku-labs/worker`) with no plugin `depends`; the hub reaches the DO + KV + ASSETS through the native
+> Cloudflare `env`. Exported from **`@moku-labs/room/server`** (`src/server.ts`) — compose it into your own
+> `@moku-labs/worker` app.
 
 A DO-per-room WebSocket signaling hub: it brokers the WebRTC handshake + in-band discovery + host-reload
 recovery over **WebSocket Hibernation**, then hands off to **WebRTC P2P gameplay** — the DO has **no relay
@@ -16,7 +17,7 @@ every path is testable before deploy.
 1. **`hub` plugin** (`api.ts`) — a thin `handle(request, env, ctx)`: `Upgrade: websocket` → the
    per-room `Hub` DO (after a per-IP rate-limit check); everything else → `env.ASSETS.fetch` (the
    built web client). No HTTP/REST endpoints (D21 — default endpoint only, one WS protocol). The DO, KV,
-   and ASSETS are reached through the per-request native Cloudflare `env` (no `@moku-labs/worker`).
+   and ASSETS are reached through the per-request native Cloudflare `env` (read directly off `env`, no plugin `depends`).
 2. **`Hub` Durable Object** (`hub-do.ts`, a plain Cloudflare DO class — co-located, NOT a
    plugin, D6/I3) — Hibernation accept; a discriminated `ClientEnvelope.kind` switch
    (`join` / `reclaim` / `relay` — **no gameplay-relay case**); star-topology enforcement
@@ -70,10 +71,11 @@ receipt of `{kind:"evict"}` — never by this plugin.
 
 ## Deployment (app-side — D26)
 
-Room ships **no `wrangler.jsonc`**. The consuming app writes its own — declaring the `ROOM_HUB` (DO +
-SQLite migration), `RATE_LIMIT` (KV), and `ASSETS` (its built web client) bindings, and pointing `main` at
-its own `cloudflare/worker.ts` that composes `createApp` from `@moku-labs/room/server`, exports `{ fetch }`,
-and re-exports the `Hub` DO class for the wrangler binding.
+Room ships **no `wrangler.jsonc`**. The consuming app composes `hubPlugin` into its own `@moku-labs/worker`
+`createApp` — alongside `durableObjectsPlugin` (the `ROOM_HUB` DO + SQLite migration), `kvPlugin` (the
+`RATE_LIMIT` namespace), and `deployPlugin`/`cliPlugin`, which **generate** the `wrangler.jsonc` (plus an
+`ASSETS` binding for its built web client). Its `cloudflare/worker.ts` delegates `{ fetch }` to
+`server.hub.handle` and re-exports the `Hub` DO class for the wrangler binding.
 
 ## Testing
 
