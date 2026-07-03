@@ -7,8 +7,10 @@ Room's **role-agnostic authoritative sync engine** (D4). The host owns a map of 
 `Snapshot` shape. On a fresh join / late-join / reconnect the host sends that one peer a full snapshot;
 in steady state it broadcasts **sequence-numbered op-list delta patches** coalesced at a **20-30 Hz
 throttle** (decoupled from the 60 Hz game loop). Controllers apply `sync-snap` / `sync-delta` frames in
-`sSeq` order and re-render via per-namespace `subscribe` callbacks; a detected sequence gap requests a
-fresh snapshot rather than applying out of order. Encoding/decoding lives in a **pure `codec.ts`**. The
+`sSeq` order and re-render via per-namespace `subscribe` callbacks; a detected sequence gap reports
+itself to the host over the wire (`sync-resync`) and the host answers by re-baselining that ONE peer
+with a snapshot at its CURRENT `sSeq` — a re-baseline never consumes the shared sequence, so the other
+replicas' delta contiguity is untouched. Encoding/decoding lives in a **pure `codec.ts`**. The
 same plugin runs on the stage and on every controller — the *role* is determined by which API methods a
 facade calls, not by a branch in this plugin. All frame I/O rides `transport` (contracts section 2) —
 never Moku `emit`; the only event this engine emits is `room:sync-ready`.
@@ -23,7 +25,7 @@ a stage/controller app needs zero overrides.
 | `broadcastHz` | `number` | `30` | Authoritative broadcast rate in Hz — the throttle loop coalesces all mutates within a tick into one `SyncDeltaFrame` at this cadence, independent of the 60 Hz game loop. Verified safe band is 20-30 Hz; clamped to `[5, 60]` in `onInit` (contracts section 4.3). |
 | `skipEmptyDeltas` | `boolean` | `true` | When `true`, a no-change tick sends NO broadcast (no `SyncDeltaFrame` when zero namespaces are dirty), saving the O(N) fan-out on idle frames. Set `false` only for a heartbeat-style diagnostic. |
 | `maxOpsPerDelta` | `number` | `512` | Maximum `Op` cells batched into a single `SyncDeltaFrame` before an extra frame is forced in the same tick — bounds per-frame JSON size under the ~14 KiB transport chunk threshold (contracts section 2.3). `0` disables the cap (rely on transport chunking). |
-| `resyncOnGap` | `boolean` | `true` | When a controller detects a sequence gap (`incoming.sSeq > local.sSeq + 1`, contracts section 4.3) and `true`, the engine surfaces the host-side `onResyncRequest` hook so the host can re-snapshot that peer; when `false`, the controller waits for the next host snapshot. |
+| `resyncOnGap` | `boolean` | `true` | When a controller detects a sequence gap (`incoming.sSeq > local.sSeq + 1`, contracts section 4.3) and `true`, it reports the gap to the host over the wire (`sync-resync`, re-sent on a slow cadence while the gap persists); the host answers by re-baselining that one peer at its current `sSeq` and fires the host-side `onResyncRequest` hook. When `false`, the controller waits for the next host snapshot. |
 
 Framework-level overrides live in Web's `pluginConfigs.sync`; consumer apps override per-app via
 `createApp({ pluginConfigs: { sync: { broadcastHz: 20 } } })`.
@@ -52,15 +54,17 @@ if `ns` was never registered.
 ### `broadcast(peerId?: PeerId): void`
 
 Forces an immediate authoritative broadcast (host only), bypassing the next throttle tick. With `peerId`,
-sends a full `SyncSnapshotFrame` to that single peer (late-join / reconcile, contracts section 5.3);
-without it, broadcasts a `SyncDeltaFrame` to every controller. No-op when nothing is dirty and
-`skipEmptyDeltas`.
+sends a full `SyncSnapshotFrame` stamped at the CURRENT `sSeq` to that single peer (late-join /
+reconcile, contracts section 5.3) — a unicast re-baseline consumes NO shared sequence, so the other
+replicas' delta contiguity is untouched; no-op until a slice is registered. Without `peerId`, broadcasts
+a `SyncDeltaFrame` to every controller (no-op when nothing is dirty and `skipEmptyDeltas`).
 
 ### `onResyncRequest(handler: (peerId: PeerId) => void): () => void`
 
-Registers the host-side resync handler fired when a controller reports a sequence gap (only when
-`config.resyncOnGap`). The handler typically calls `broadcast(peerId)` to re-baseline that one peer
-(contracts section 4.3, section 5.3). Returns an unsubscribe function.
+Registers a host-side hook fired when a controller reports a sequence gap over the wire (`sync-resync`;
+sent only when the controller's `resyncOnGap` is on). The engine ALREADY answers the reporting peer with
+a fresh baseline snapshot automatically — the hook is for observability / custom policy, not for wiring
+the re-baseline (contracts section 4.3, section 5.3). Returns an unsubscribe function.
 
 **Controller**
 
@@ -82,8 +86,8 @@ function.
 Applies one inbound host frame to the replica (controller). Called by `transport`'s frame dispatch for
 `sync-snap` / `sync-delta` (contracts section 2.1, section 2.2). A `sync-snap` re-baselines (clears
 `stale`, sets `sSeq`); a `sync-delta` applies in order, or — on a gap — sets `stale` and (if
-`resyncOnGap`) signals the host to re-snapshot. The first applied snapshot emits `room:sync-ready`.
-Non-sync frames are ignored.
+`resyncOnGap`) reports the gap to the host over the wire (`sync-resync`), which answers by re-baselining
+this replica. The first applied snapshot emits `room:sync-ready`. Non-sync frames are ignored.
 
 ### `isReady(): boolean`
 

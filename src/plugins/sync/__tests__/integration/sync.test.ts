@@ -12,7 +12,6 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createApp } from "../../../../index";
 import { inMemory } from "../../../transport/adapters/in-memory";
 import type { Frame, PeerId } from "../../../transport/protocol";
-import { syncPlugin } from "../../index";
 
 // Stub wire.on implementation used in the throttle-coalescing test
 const noopUnsubscribe = () => {};
@@ -141,29 +140,42 @@ describe("sync integration (inMemory)", () => {
     await stageApp.stop();
   });
 
-  it("gap/resync: a dropped delta → controller stale → onResyncRequest → host re-baselines", async () => {
-    const stageApp = makeSyncApp(bus);
+  it("gap/resync: a gapped delta is dropped (stale), and a fresh snapshot re-baselines the replica", async () => {
+    const replicaApp = makeSyncApp(bus);
 
-    await stageApp.start();
+    await replicaApp.start();
 
-    stageApp.sync.registerSlice("scores", { p1: 0 });
-
-    // Simulate a gap on the host's sync state
-    const resyncCb = vi.fn();
-    stageApp.sync.onResyncRequest(resyncCb);
-
-    // Manually apply a frame with a gap to the host's engine
-    stageApp.sync.applyFrame({
+    // A gapped delta must NOT apply — the replica goes stale and waits for a re-baseline (the wire
+    // sync-resync report needs a joined host; the full report→answer loop is covered by the
+    // engine linked-room unit tests).
+    replicaApp.sync.applyFrame({
       t: "sync-delta",
       ops: [{ ns: "scores", key: "p1", val: 99 }],
-      sSeq: 100 // gap — host is at sSeq 0
+      sSeq: 100 // gap — replica is at sSeq 0
     });
 
-    // Host's sync should be stale now (gap detected)
-    // resyncCb was fired — host can re-baseline
-    expect(resyncCb).toHaveBeenCalled();
+    expect(replicaApp.sync.read("scores")).toBeUndefined();
+    expect(replicaApp.sync.isReady()).toBe(false);
 
-    await stageApp.stop();
+    // The host's answering whole-state snapshot clears the gap and makes the replica readable.
+    replicaApp.sync.applyFrame({
+      t: "sync-snap",
+      snapshot: { scores: { p1: 99 } },
+      sSeq: 100
+    });
+
+    expect(replicaApp.sync.isReady()).toBe(true);
+    expect(replicaApp.sync.read("scores")).toEqual({ p1: 99 });
+
+    // Post-heal deltas apply contiguously again.
+    replicaApp.sync.applyFrame({
+      t: "sync-delta",
+      ops: [{ ns: "scores", key: "p1", val: 100 }],
+      sSeq: 101
+    });
+    expect(replicaApp.sync.read("scores")).toEqual({ p1: 100 });
+
+    await replicaApp.stop();
   });
 
   it("recovery round-trip: exportSnapshot → new host importSnapshot → controllers reconcile to sSeq", async () => {

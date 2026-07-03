@@ -187,17 +187,24 @@ describe("engine", () => {
     expect(state.sSeq).toBe(0);
   });
 
-  it("onResyncRequest fires on a gap when resyncOnGap is true", () => {
-    const { engine } = makeEngine({ resyncOnGap: true });
+  it("a gap sends ONE sync-resync report to the host when resyncOnGap is true", () => {
+    const { engine, wire, state } = makeEngine({ resyncOnGap: true });
 
-    const handler = vi.fn();
-    engine.onResyncRequest(handler);
+    // Seed the replica at sSeq 2 so the report carries a non-zero last-applied sequence.
+    engine.applyFrame({ t: "sync-snap", snapshot: { scores: { p1: 0 } }, sSeq: 2 });
 
-    // Trigger a gap
+    // Trigger a gap — the replica reports it to the host over the wire (session.hostId() = "host").
     engine.applyFrame({ t: "sync-delta", ops: [], sSeq: 5 });
 
-    // Handler should have been called (with "" since applyFrame doesn't have peerId context)
-    expect(handler).toHaveBeenCalled();
+    expect(state.stale).toBe(true);
+    expect(wire.send).toHaveBeenCalledTimes(1);
+    expect(wire.send).toHaveBeenCalledWith("host", { t: "sync-resync", sSeq: 2 });
+
+    // Local resync handlers are HOST-side hooks — a replica's own gap must NOT fire them.
+    const handler = vi.fn();
+    engine.onResyncRequest(handler);
+    engine.applyFrame({ t: "sync-delta", ops: [], sSeq: 6 });
+    expect(handler).not.toHaveBeenCalled();
   });
 
   it("subscribe fires on apply and once immediately when the namespace is present", () => {
@@ -352,6 +359,36 @@ describe("engine", () => {
     engine.broadcast();
     expect(wire.broadcast).toHaveBeenCalledTimes(1);
     expect(wire.broadcast.mock.calls[0]?.[0]).toMatchObject({ t: "sync-delta" });
+  });
+
+  it("broadcast(peerId) NEVER consumes the shared sSeq — the next delta stays contiguous for everyone", () => {
+    const { engine, state, wire } = makeEngine();
+
+    // Reach sSeq 1 via a normal delta tick.
+    engine.registerSlice("scores", { p1: 0 });
+    engine.mutate("scores", s => ({ ...s, p1: 1 }));
+    engine.broadcast();
+    expect(state.sSeq).toBe(1);
+
+    // Unicast reconcile to one peer: stamped at the CURRENT sSeq, and the shared counter is untouched.
+    engine.broadcast("peer-1");
+    expect(state.sSeq).toBe(1);
+    expect(wire.send.mock.calls[0]?.[1]).toMatchObject({ t: "sync-snap", sSeq: 1 });
+
+    // The next delta broadcast is sSeq 2 — contiguous for every replica that sat at 1 (the replicas
+    // that never saw the unicast would read a bumped counter as a gap and wedge stale).
+    engine.mutate("scores", s => ({ ...s, p1: 2 }));
+    engine.broadcast();
+    expect(wire.broadcast.mock.calls[1]?.[0]).toMatchObject({ t: "sync-delta", sSeq: 2 });
+  });
+
+  it("broadcast(peerId) is a no-op before any slice is registered (no baseline to send)", () => {
+    const { engine, state, wire } = makeEngine();
+
+    engine.broadcast("peer-1");
+
+    expect(wire.send).not.toHaveBeenCalled();
+    expect(state.sSeq).toBe(0);
   });
 
   it("startBroadcast is idempotent — calling twice does not create a second timer", () => {
@@ -635,35 +672,33 @@ describe("engine", () => {
     expect(state.snapshot).toBe(before); // snapshot reference unchanged
   });
 
-  it("onResyncRequest unsubscribe removes the handler so a later gap no longer fires it", () => {
-    const { engine } = makeEngine({ resyncOnGap: true });
+  it("onResyncRequest unsubscribe removes the handler so a later inbound report no longer fires it", () => {
+    const { engine, wire } = makeEngine({ resyncOnGap: true });
+
+    // Host role: hold a slice so inbound sync-resync reports are answered.
+    engine.registerSlice("scores", { p1: 0 });
 
     const handler = vi.fn();
     const off = engine.onResyncRequest(handler);
 
-    // First gap fires the handler.
-    engine.applyFrame({ t: "sync-delta", ops: [], sSeq: 5 });
+    // First inbound gap report fires the hook with the reporting peer.
+    wire._deliver("peer-1", { t: "sync-resync", sSeq: 0 });
     expect(handler).toHaveBeenCalledTimes(1);
+    expect(handler).toHaveBeenCalledWith("peer-1");
 
-    // Unsubscribe, then a fresh snapshot clears stale so a new gap can be detected again.
+    // Unsubscribe — a later report must not fire the removed hook (the auto-answer still runs).
     off();
-    engine.applyFrame({ t: "sync-snap", snapshot: { scores: { p1: 0 } }, sSeq: 6 });
-    engine.applyFrame({ t: "sync-delta", ops: [], sSeq: 20 });
-
-    // The handler was removed — still only the single original call.
+    wire._deliver("peer-1", { t: "sync-resync", sSeq: 0 });
     expect(handler).toHaveBeenCalledTimes(1);
   });
 
-  it("a gap with resyncOnGap:false sets stale WITHOUT firing resync handlers", () => {
-    const { engine, state } = makeEngine({ resyncOnGap: false });
-
-    const handler = vi.fn();
-    engine.onResyncRequest(handler);
+  it("a gap with resyncOnGap:false sets stale WITHOUT sending a sync-resync report", () => {
+    const { engine, state, wire } = makeEngine({ resyncOnGap: false });
 
     engine.applyFrame({ t: "sync-delta", ops: [], sSeq: 5 });
 
     expect(state.stale).toBe(true);
-    expect(handler).not.toHaveBeenCalled();
+    expect(wire.send).not.toHaveBeenCalled();
   });
 
   it("stopBroadcast is an idempotent no-op when broadcasting was never started", () => {
@@ -825,5 +860,226 @@ describe("engine", () => {
 
     expect(state.broadcasting).toBe(false);
     expect(state.throttleHandle).toBeNull();
+  });
+
+  // ─────────────────────────────────────────────────────────────────────────────
+  // sync-resync gap heal: replica report path + host answer path
+  // ─────────────────────────────────────────────────────────────────────────────
+
+  it("while stale, the sync-resync report re-arms every RESYNC_RETRY_EVERY_DROPS dropped deltas", () => {
+    const { engine, wire } = makeEngine({ resyncOnGap: true });
+
+    // Enter stale: the gap itself sends report #1.
+    engine.applyFrame({ t: "sync-delta", ops: [], sSeq: 5 });
+    expect(wire.send).toHaveBeenCalledTimes(1);
+
+    // 29 dropped deltas: still just the one report (the retry paces at every 30th drop).
+    for (let i = 0; i < 29; i++) {
+      engine.applyFrame({ t: "sync-delta", ops: [], sSeq: 6 + i });
+    }
+    expect(wire.send).toHaveBeenCalledTimes(1);
+
+    // The 30th dropped delta re-sends the report — a lost report cannot wedge the replica forever.
+    engine.applyFrame({ t: "sync-delta", ops: [], sSeq: 40 });
+    expect(wire.send).toHaveBeenCalledTimes(2);
+    expect(wire.send.mock.calls[1]?.[1]).toMatchObject({ t: "sync-resync" });
+  });
+
+  it("no sync-resync report is sent while the host PeerId is unknown (pre-join)", () => {
+    const state = createSyncState();
+    const wire = makeWire();
+    const session = makeSession();
+    // Pre-join: the session has no host id yet.
+    vi.mocked(session.hostId).mockReturnValue("");
+    const engine = createSyncEngine(
+      state,
+      makeConfig({ resyncOnGap: true }),
+      wire,
+      session,
+      vi.fn()
+    );
+    engine.init();
+
+    engine.applyFrame({ t: "sync-delta", ops: [], sSeq: 5 });
+
+    expect(state.stale).toBe(true);
+    expect(wire.send).not.toHaveBeenCalled();
+  });
+
+  it("the host answers an inbound sync-resync with a baseline snapshot at the CURRENT sSeq (no bump)", () => {
+    const { engine, state, wire } = makeEngine();
+
+    // Host at sSeq 1 with authoritative state.
+    engine.registerSlice("scores", { p1: 0 });
+    engine.mutate("scores", s => ({ ...s, p1: 7 }));
+    engine.broadcast();
+    expect(state.sSeq).toBe(1);
+
+    const hook = vi.fn();
+    engine.onResyncRequest(hook);
+
+    // A gapped replica reports in — the engine fires the hook AND re-baselines that one peer.
+    wire._deliver("peer-2", { t: "sync-resync", sSeq: 0 });
+
+    expect(hook).toHaveBeenCalledWith("peer-2");
+    expect(wire.send).toHaveBeenCalledTimes(1);
+    const [target, frame] = wire.send.mock.calls[0] ?? [];
+    expect(target).toBe("peer-2");
+    expect(frame).toMatchObject({ t: "sync-snap", snapshot: { scores: { p1: 7 } }, sSeq: 1 });
+    // The answer consumed no shared sequence.
+    expect(state.sSeq).toBe(1);
+  });
+
+  it("an inbound sync-resync is ignored on a replica (no slices registered — cannot answer as host)", () => {
+    const { engine, wire } = makeEngine();
+
+    const hook = vi.fn();
+    engine.onResyncRequest(hook);
+
+    // A stray report reaches an app with no authoritative slices — fully ignored.
+    wire._deliver("peer-2", { t: "sync-resync", sSeq: 0 });
+
+    expect(hook).not.toHaveBeenCalled();
+    expect(wire.send).not.toHaveBeenCalled();
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Linked-room loop: one host engine + N replica engines cross-wired in a star,
+// exercising the REAL frame loop (gap → sync-resync → baseline answer → heal).
+// ─────────────────────────────────────────────────────────────────────────────
+
+type LinkedHandler = (peerId: PeerId, frame: Frame) => void;
+
+// Inert unsubscribe for the linked-room wires (handlers live for the whole test).
+const noopUnsubscribe = (): void => {};
+
+function makeLinkedRoom(replicaIds: readonly PeerId[]) {
+  const hostHandlers: LinkedHandler[] = [];
+  const replicaHandlers = new Map<PeerId, LinkedHandler[]>();
+  // Simulated half-open channels: host→replica frames to these ids are dropped (at-most-once wire).
+  const dropTo = new Set<PeerId>();
+
+  const deliverToReplica = (id: PeerId, frame: Frame): void => {
+    if (dropTo.has(id)) {
+      return;
+    }
+    for (const handler of replicaHandlers.get(id) ?? []) {
+      handler("host", frame);
+    }
+  };
+
+  const hostWire = {
+    send: vi.fn<(peerId: PeerId, frame: Frame) => void>((peerId, frame) =>
+      deliverToReplica(peerId, frame)
+    ),
+    broadcast: vi.fn<(frame: Frame) => void>(frame => {
+      for (const id of replicaIds) {
+        deliverToReplica(id, frame);
+      }
+    }),
+    on: (handler: LinkedHandler) => {
+      hostHandlers.push(handler);
+      return noopUnsubscribe;
+    }
+  };
+  const hostState = createSyncState();
+  const host = createSyncEngine(hostState, makeConfig(), hostWire, makeSession(), vi.fn());
+  host.init();
+
+  const replicas = replicaIds.map(id => {
+    const handlers: LinkedHandler[] = [];
+    replicaHandlers.set(id, handlers);
+    const deliverToHost = (frame: Frame): void => {
+      for (const handler of hostHandlers) {
+        handler(id, frame);
+      }
+    };
+    const wire = {
+      // Star topology: a replica's send/broadcast both collapse to "send to the host".
+      send: vi.fn<(peerId: PeerId, frame: Frame) => void>((_peerId, frame) => deliverToHost(frame)),
+      broadcast: vi.fn<(frame: Frame) => void>(frame => deliverToHost(frame)),
+      on: (handler: LinkedHandler) => {
+        handlers.push(handler);
+        return noopUnsubscribe;
+      }
+    };
+    const state = createSyncState();
+    const engine = createSyncEngine(state, makeConfig(), wire, makeSession(), vi.fn());
+    engine.init();
+    return { id, engine, state, wire };
+  });
+
+  return { host, hostState, replicas, dropTo };
+}
+
+describe("engine linked-room loop (gap heal end-to-end)", () => {
+  it("a unicast reconcile to one replica leaves every OTHER replica applying deltas contiguously", () => {
+    const { host, replicas } = makeLinkedRoom(["A", "B"]);
+    const [a, b] = replicas;
+    if (!a || !b) throw new Error("expected two replicas");
+
+    // Baseline both replicas, then one live delta.
+    host.registerSlice("scores", { p1: 0 });
+    host.sendBaselineSnapshot("A");
+    host.sendBaselineSnapshot("B");
+    host.mutate("scores", s => ({ ...s, p1: 1 }));
+    host.broadcast();
+    expect(a.state.sSeq).toBe(1);
+    expect(b.state.sSeq).toBe(1);
+
+    // The trivia join-ack shape: the host answers ONE phone with a unicast reconcile snapshot.
+    host.broadcast("A");
+
+    // The next regular delta must reach B contiguously — no gap, no stale, no resync traffic.
+    host.mutate("scores", s => ({ ...s, p1: 2 }));
+    host.broadcast();
+
+    expect(b.state.stale).toBe(false);
+    expect(b.state.sSeq).toBe(2);
+    expect(b.engine.read("scores")).toEqual({ p1: 2 });
+    // B never had to ask for help: the wedge-regression core assertion.
+    expect(b.wire.send).not.toHaveBeenCalled();
+    expect(a.engine.read("scores")).toEqual({ p1: 2 });
+  });
+
+  it("a replica that misses a delta (half-open channel) self-heals via sync-resync without a reload", () => {
+    const { host, replicas, dropTo } = makeLinkedRoom(["A", "B"]);
+    const [a, b] = replicas;
+    if (!a || !b) throw new Error("expected two replicas");
+
+    const reports = vi.fn();
+    host.onResyncRequest(reports);
+
+    host.registerSlice("scores", { p1: 0 });
+    host.sendBaselineSnapshot("A");
+    host.sendBaselineSnapshot("B");
+    host.mutate("scores", s => ({ ...s, p1: 1 }));
+    host.broadcast();
+
+    // B's channel goes half-open for one tick: it misses delta sSeq 2 entirely.
+    dropTo.add("B");
+    host.mutate("scores", s => ({ ...s, p1: 2 }));
+    host.broadcast();
+    expect(a.state.sSeq).toBe(2);
+    expect(b.state.sSeq).toBe(1);
+
+    // The channel recovers; the next delta (sSeq 3) is a gap for B → report → host re-baselines B —
+    // all inside this delivery (the loop is synchronous in the linked harness).
+    dropTo.delete("B");
+    host.mutate("scores", s => ({ ...s, p1: 3 }));
+    host.broadcast();
+
+    expect(reports).toHaveBeenCalledWith("B");
+    expect(b.state.stale).toBe(false);
+    expect(b.state.sSeq).toBe(3);
+    expect(b.engine.read("scores")).toEqual({ p1: 3 });
+
+    // And the stream continues contiguously after the heal.
+    host.mutate("scores", s => ({ ...s, p1: 4 }));
+    host.broadcast();
+    expect(b.state.sSeq).toBe(4);
+    expect(b.engine.read("scores")).toEqual({ p1: 4 });
+    expect(a.engine.read("scores")).toEqual({ p1: 4 });
   });
 });
