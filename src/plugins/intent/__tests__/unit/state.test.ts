@@ -25,6 +25,11 @@ describe("createIntentState", () => {
     expect(state.buffer).toEqual([]);
   });
 
+  it("starts with no delivery tracker (createIntentApi builds it in the api phase)", () => {
+    const state = createIntentState();
+    expect(state.delivery).toBeNull();
+  });
+
   it("does not read config defaults at construction (config-light)", () => {
     // State factory takes no arguments — it is always config-light.
     // Calling it multiple times produces independent instances.

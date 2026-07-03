@@ -4,7 +4,7 @@
  *
  * Thin phone-side facade over the four Room engines (transport / session / intent / sync). Delegates
  * join / read / observe / intent to the resolved engine APIs (`ctx.require`); owns no state and no config.
- * Re-declares all five `room:*` lifecycle events so a `depends: [controllerPlugin]` game plugin sees the
+ * Re-declares all six `room:*` lifecycle events so a `depends: [controllerPlugin]` game plugin sees the
  * complete typed surface in one edge (event visibility is NOT transitive at the TYPE level — spec/07 §5,
  * WARN-2). It does NOT re-emit (forward) them: Moku's runtime event bus is global, so the engines' own
  * emits already reach a `depends: [controllerPlugin]` consumer directly — a forwarding hook re-emitting
@@ -25,7 +25,7 @@ import { createControllerApi } from "./api";
 /**
  * `controllerPlugin` — Standard tier (CONTROLLER-role facade) over Room's four engines
  * (transport / session / intent / sync). Delegates join / read / observe / intent to the resolved engine
- * APIs; owns no state. Re-declares all five `room:*` events for compile-time visibility (WARN-2) so a
+ * APIs; owns no state. Re-declares all six `room:*` events for compile-time visibility (WARN-2) so a
  * `depends: [controllerPlugin]` game plugin sees the complete typed lifecycle surface; runtime delivery
  * rides Moku's global event bus directly, so the facade installs no forwarding hooks (D19 — re-emitting
  * a name would self-recurse). Requests the iOS Screen Wake Lock through its API to keep the DataChannel
@@ -37,7 +37,7 @@ export const controllerPlugin = createPlugin("controller", {
   // `transportPlugin` is kept in `depends` for dependency-graph/presence completeness (it is the engine
   // that owns the §2 wire + `room:network-warning`); the facade resolves only session/intent/sync via
   // `ctx.require` below. Event visibility does NOT rely on this edge — the facade's own
-  // `register.map<RoomEvents>` re-declaration already exposes all five `room:*` to a
+  // `register.map<RoomEvents>` re-declaration already exposes all six `room:*` to a
   // `depends:[controllerPlugin]` consumer (WARN-2 is closed by THAT re-declaration, not by the transport edge).
   depends: [transportPlugin, sessionPlugin, intentPlugin, syncPlugin],
   events: register =>
@@ -50,7 +50,9 @@ export const controllerPlugin = createPlugin("controller", {
         "Host tab reloaded; client-side recovery in flight (§5). Show reconnecting UX.",
       "room:sync-ready": "First full snapshot applied; the read-only replica is now readable (§4).",
       "room:network-warning":
-        "Connectivity hard-failure for failure UX (D2): ice-failed | rendezvous-unreachable | channel-closed."
+        "Connectivity hard-failure for failure UX (D2): ice-failed | rendezvous-unreachable | channel-closed.",
+      "room:intent-undeliverable":
+        "A live intent exhausted its retransmit budget with no wire-level receipt (§4.3) — the wire is dead; surface retry UX."
     }),
   api: ctx =>
     createControllerApi(

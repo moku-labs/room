@@ -1,6 +1,6 @@
 /**
  * @file Type-level tests for the controller facade (`expectTypeOf` / `@ts-expect-error`). Verifies the
- * WARN-2 build-time check (all five `room:*` keys visible/typed through the single
+ * WARN-2 build-time check (all six `room:*` keys visible/typed through the single
  * `depends: [controllerPlugin]` edge), the `ControllerApi` method signatures, the `JsonValue`-only
  * intent payload constraint, and that NO explicit generic is used on `createPlugin` (R1). Validated
  * by `bunx tsc --noEmit` — this file is EXCLUDED from vitest `include` (`.test-d.ts` convention).
@@ -31,11 +31,11 @@ expectTypeOf<ControllerApi["releaseWakeLock"]>().toMatchTypeOf<() => Promise<voi
 // room:* visibility through depends:[controllerPlugin] (WARN-2 build-time check)
 // ---------------------------------------------------------------------------
 
-// Composing a game plugin against controllerPlugin exposes all five room:* keys
+// Composing a game plugin against controllerPlugin exposes all six room:* keys
 const padGame = createPlugin("padGame", {
   depends: [controllerPlugin],
   hooks: () => ({
-    // All five room:* hooks are reachable — WARN-2 closed at the type level
+    // All six room:* hooks are reachable — WARN-2 closed at the type level
     "room:peer-joined": (p: { peerId: string }) => {
       expectTypeOf(p).toMatchTypeOf<{ peerId: string }>();
     },
@@ -55,6 +55,10 @@ const padGame = createPlugin("padGame", {
       expectTypeOf(p.reason).toMatchTypeOf<
         "ice-failed" | "rendezvous-unreachable" | "channel-closed" | "room-evicted"
       >();
+    },
+    "room:intent-undeliverable": (p: { name: string; cSeq: number }) => {
+      // the §4.3 terminal delivery verdict — name + cSeq of the dead intent
+      expectTypeOf(p).toMatchTypeOf<{ name: string; cSeq: number }>();
     }
   }),
   api: ctx => {

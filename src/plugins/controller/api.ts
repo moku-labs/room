@@ -4,7 +4,7 @@
  * the wake-lock sentinel is a transient browser handle kept in a closure (never synced, never JSON,
  * never crosses the wire). No `room:*` forwarding hooks are installed (D19 — Moku's global event bus
  * delivers each engine's emit to a `depends:[controllerPlugin]` consumer directly; a re-emitting hook
- * would recurse infinitely). The `index.ts` `events` block re-declares the five keys for compile-time
+ * would recurse infinitely). The `index.ts` `events` block re-declares the six keys for compile-time
  * type visibility only (WARN-2). The factory takes the three already-resolved engine APIs directly (NOT
  * a `ctx`): `@moku-labs/web` infers `ctx` inline in `index.ts`, which calls `ctx.require(...)` for each
  * engine and passes the resolved surfaces here. `transportPlugin` is a visibility-only dependency

@@ -39,6 +39,7 @@ export type {
   Wire,
   Frame,
   IntentFrame,
+  IntentAckFrame,
   SyncSnapshotFrame,
   SyncDeltaFrame,
   SyncResyncFrame,

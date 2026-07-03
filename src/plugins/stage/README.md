@@ -5,7 +5,7 @@
 The thin **HOST-role facade** a couch-multiplayer game plugin composes against to drive the
 authoritative TV stage. It owns no state, runs no resource, and contains no business logic: every
 method delegates via `ctx.require(...)` to one of the four engines it depends on (`transport`,
-`session`, `intent`, `sync`), and it re-declares all five `room:*` lifecycle events so a game plugin
+`session`, `intent`, `sync`), and it re-declares all six `room:*` lifecycle events so a game plugin
 with `depends: [stagePlugin]` gets the complete, typed hook surface in one edge (WARN-2 — event
 visibility is not transitive at the type level: spec/07 §5, spec/14 §7). It installs no forwarding
 hooks: Moku's event bus is global, so the engines' own emits already reach a `depends: [stagePlugin]`
@@ -80,6 +80,7 @@ Coarse lifecycle only — no gameplay payload ever flows through `emit` (spec/07
 | `room:host-reconnecting` | `Record<string, never>` (`{}`) | Host tab reloaded; client-side recovery is in flight (contracts §5). |
 | `room:sync-ready` | `Record<string, never>` (`{}`) | First full snapshot applied; the synced replica is now readable (contracts §4). |
 | `room:network-warning` | `{ reason: "ice-failed" \| "rendezvous-unreachable" \| "channel-closed" }` | A connectivity hard-failure surfaced for failure UX (contracts §3.1, D2). |
+| `room:intent-undeliverable` | `{ name: string; cSeq: number }` | A live controller intent exhausted its bounded retransmit budget with no wire-level receipt (contracts §4.3). |
 
 ## Dependencies
 
@@ -98,14 +99,14 @@ Coarse lifecycle only — no gameplay payload ever flows through `emit` (spec/07
 ## Usage
 
 A game plugin adds `stagePlugin`, drives the stage through `app.stage.*`, and hooks the `room:*` lifecycle
-by declaring `depends: [stagePlugin]` (which is how all five events become visible — WARN-2):
+by declaring `depends: [stagePlugin]` (which is how all six events become visible — WARN-2):
 
 ```typescript
 import { createApp, createPlugin, stagePlugin } from "@moku-labs/room";
 
 // A couch-multiplayer game plugin that drives the host stage.
 const scoreboardGame = createPlugin("scoreboardGame", {
-  // depends on the facade — this is what makes the five room:* events visible (WARN-2).
+  // depends on the facade — this is what makes the six room:* events visible (WARN-2).
   depends: [stagePlugin],
 
   // Hook the re-declared lifecycle events (bus-delivered). Payloads come from contracts §3.1.

@@ -21,21 +21,22 @@ import { stagePlugin } from "../../index";
 import type { IntentHandler, MutateRecipe, StageApi } from "../../types";
 
 // ---------------------------------------------------------------------------
-// WARN-2 closure — a game plugin with depends:[stagePlugin] sees all five room:* keys
+// WARN-2 closure — a game plugin with depends:[stagePlugin] sees all six room:* keys
 // ---------------------------------------------------------------------------
 
 // Build a game plugin that depends on the stage facade. This is the canonical WARN-2 test:
-// if stagePlugin does NOT re-declare all five room:* events, TypeScript will reject the hooks.
+// if stagePlugin does NOT re-declare all six room:* events, TypeScript will reject the hooks.
 const _gamePlugin = createPlugin("testGame", {
   depends: [stagePlugin],
   hooks: _ctx => ({
-    // All five room:* keys must be valid on a depends:[stagePlugin] context.
+    // All six room:* keys must be valid on a depends:[stagePlugin] context.
     // If any key is missing from stagePlugin's re-declared events, tsc reports an error here.
     "room:peer-joined": (_payload: RoomEvents["room:peer-joined"]) => {},
     "room:peer-left": (_payload: RoomEvents["room:peer-left"]) => {},
     "room:host-reconnecting": (_payload: RoomEvents["room:host-reconnecting"]) => {},
     "room:sync-ready": (_payload: RoomEvents["room:sync-ready"]) => {},
-    "room:network-warning": (_payload: RoomEvents["room:network-warning"]) => {}
+    "room:network-warning": (_payload: RoomEvents["room:network-warning"]) => {},
+    "room:intent-undeliverable": (_payload: RoomEvents["room:intent-undeliverable"]) => {}
   })
 });
 

@@ -3,7 +3,7 @@
  * the `inMemory()` signaling adapter (deterministic, no `RTCPeerConnection` — 00-contracts §1.3,
  * D13). Stands up ONE stage app + one controller app over a shared in-memory bus and drives them by
  * direct `app.controller.*` / `app.stage.*` calls. The consumer probe plugin
- * (`createPlugin("padGame", { depends:[controllerPlugin], ... })`) demonstrates that all five
+ * (`createPlugin("padGame", { depends:[controllerPlugin], ... })`) demonstrates that all six
  * `room:*` events are reachable through the single facade edge (WARN-2 runtime closure check).
  *
  * Simplification note: full cross-app round-trip delivery requires event-loop turns.
@@ -43,7 +43,7 @@ function makeStageApp(bus: ReturnType<typeof inMemory>) {
 
 /**
  * Creates a controller app with an embedded consumer probe plugin (`depends:[controllerPlugin]`)
- * that captures all five `room:*` events — proving WARN-2 closure at runtime.
+ * that captures all six `room:*` events — proving WARN-2 closure at runtime.
  */
 function makeControllerApp(
   bus: ReturnType<typeof inMemory>,
@@ -82,6 +82,9 @@ function makeControllerApp(
       "room:network-warning": (p: RoomEvents["room:network-warning"]) => {
         capturedEvents.push({ name: "room:network-warning", payload: p });
         opts.onNetworkWarning?.(p);
+      },
+      "room:intent-undeliverable": (p: RoomEvents["room:intent-undeliverable"]) => {
+        capturedEvents.push({ name: "room:intent-undeliverable", payload: p });
       }
     })
   });

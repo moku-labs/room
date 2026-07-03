@@ -42,7 +42,7 @@
 
 Declares + emits THREE of the five `room:*` events: `room:peer-joined`, `room:peer-left`,
 `room:host-reconnecting`. It does NOT declare `room:sync-ready` (owned by `sync`) or
-`room:network-warning` (owned by `transport`) — the `stage`/`controller` facades re-declare all five.
+`room:network-warning` (owned by `transport`) — the `stage`/`controller` facades re-declare all six.
 
 **No wire/DataChannel traffic flows through `emit`.** Recovery frames + roster broadcasts ride
 `transport`'s `Wire`; `emit` carries only the three coarse `room:*` events.
