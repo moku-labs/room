@@ -5,7 +5,7 @@
 The thin **CONTROLLER-role facade** (phone side) a couch-multiplayer game plugin composes against to
 join a room, observe the read-only synced replica, and send typed intents to the authoritative host. It
 owns no state and contains no business logic: every method delegates to one of the four resolved engine
-APIs it depends on (`transport`, `session`, `intent`, `sync`). It re-declares all five `room:*`
+APIs it depends on (`transport`, `session`, `intent`, `sync`). It re-declares all six `room:*`
 lifecycle events so a game plugin with `depends: [controllerPlugin]` gets the complete, typed hook
 surface in one edge (WARN-2 — event visibility is not transitive at the type level: spec/07 §5,
 spec/14 §7); it adds no forwarding hooks, since Moku's global event bus already delivers the engines'
@@ -86,6 +86,7 @@ emit to the consumer (D19). Coarse lifecycle only — no gameplay payload ever f
 | `room:host-reconnecting` | `Record<string, never>` (`{}`) | `session` | Host tab reloaded; client-side recovery is in flight (contracts §5). Show reconnecting UX. |
 | `room:sync-ready` | `Record<string, never>` (`{}`) | `sync` | First full snapshot applied; the read-only replica is now readable (contracts §4). |
 | `room:network-warning` | `{ reason: "ice-failed" \| "rendezvous-unreachable" \| "channel-closed" }` | `transport` | A connectivity hard-failure surfaced for failure UX (contracts §3.1, D2). |
+| `room:intent-undeliverable` | `{ name: string; cSeq: number }` | `intent` | A live intent exhausted its bounded retransmit budget with no wire-level receipt — the wire is dead for this controller's intent stream; surface retry UX (contracts §4.3). |
 
 ## Dependencies
 
@@ -99,7 +100,7 @@ emit to the consumer (D19). Coarse lifecycle only — no gameplay payload ever f
 ## Usage
 
 A game plugin adds `controllerPlugin`, drives the controller through `app.controller.*`, and hooks the
-`room:*` lifecycle by declaring `depends: [controllerPlugin]` (which is how all five events become
+`room:*` lifecycle by declaring `depends: [controllerPlugin]` (which is how all six events become
 visible — WARN-2):
 
 ```typescript
@@ -107,7 +108,7 @@ import { createApp, createPlugin, controllerPlugin } from "@moku-labs/room";
 
 // A couch-multiplayer game plugin that drives the phone-side controller.
 const padGame = createPlugin("padGame", {
-  // depends on the facade — this is what makes the five room:* events visible (WARN-2).
+  // depends on the facade — this is what makes the six room:* events visible (WARN-2).
   depends: [controllerPlugin],
 
   // Hook the re-declared lifecycle events (bus-delivered). Payloads come from contracts §3.1.

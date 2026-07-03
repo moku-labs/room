@@ -13,8 +13,15 @@
  * @see ../../types
  */
 import { describe, expect, expectTypeOf, it } from "vitest";
-import type { JsonValue } from "../../../transport/protocol";
-import type { BufferedIntent, IntentApi, IntentFieldRule, IntentSchema } from "../../types";
+import type { Frame, IntentAckFrame, IntentFrame, JsonValue } from "../../../transport/protocol";
+import type {
+  BufferedIntent,
+  IntentApi,
+  IntentConfig,
+  IntentDelivery,
+  IntentFieldRule,
+  IntentSchema
+} from "../../types";
 
 describe("intent type surface", () => {
   it("IntentApi['intent'] accepts (string, JsonValue)", () => {
@@ -69,6 +76,26 @@ describe("intent type surface", () => {
     expectTypeOf<IntentApi["setBuffering"]>().parameters.toMatchTypeOf<[boolean]>();
     expectTypeOf<IntentApi["drainBuffer"]>().returns.toMatchTypeOf<readonly BufferedIntent[]>();
     expectTypeOf<IntentApi["bufferedCount"]>().returns.toMatchTypeOf<number>();
+    expect(true).toBe(true);
+  });
+
+  it("IntentAckFrame is a Frame variant carrying the acknowledged cSeq (§4.3)", () => {
+    expectTypeOf<IntentAckFrame>().toMatchTypeOf<Frame>();
+    expectTypeOf<IntentAckFrame["t"]>().toEqualTypeOf<"intent-ack">();
+    expectTypeOf<IntentAckFrame["cSeq"]>().toBeNumber();
+    expect(true).toBe(true);
+  });
+
+  it("IntentConfig carries the at-least-once knobs alongside the buffer window", () => {
+    expectTypeOf<IntentConfig["ackTimeoutMs"]>().toBeNumber();
+    expectTypeOf<IntentConfig["maxRetransmits"]>().toBeNumber();
+    expect(true).toBe(true);
+  });
+
+  it("IntentDelivery's seams line up with the wire frame type", () => {
+    expectTypeOf<IntentDelivery["send"]>().parameters.toMatchTypeOf<[IntentFrame]>();
+    expectTypeOf<IntentDelivery["onAck"]>().parameters.toMatchTypeOf<[number]>();
+    expectTypeOf<IntentDelivery["retire"]>().returns.toMatchTypeOf<readonly IntentFrame[]>();
     expect(true).toBe(true);
   });
 });

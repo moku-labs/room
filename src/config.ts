@@ -32,6 +32,13 @@ export type RoomEvents = {
   "room:host-reconnecting": Record<string, never>;
   /** The first authoritative frame (snapshot, or gap-free delta) has been applied; replica readable (§4). */
   "room:sync-ready": Record<string, never>;
+  /**
+   * A live controller intent exhausted its bounded retransmit budget with no wire-level receipt from the
+   * host — the wire is dead for this controller's intent stream, and every intent queued behind the dead
+   * one is dropped with its own event (§4.3 at-least-once terminal). Fires only for LIVE sends: intents
+   * captured by the reconnect buffer during a known host absence follow the §5 recovery contract instead.
+   */
+  "room:intent-undeliverable": { name: string; cSeq: number };
   /** A network condition surfaced to the consumer for failure UX (D2 accepted hard-failure). */
   "room:network-warning": {
     reason: "ice-failed" | "rendezvous-unreachable" | "channel-closed" | "room-evicted";

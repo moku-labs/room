@@ -280,6 +280,9 @@ export type ServerEnvelope =
 /**
  * Controller → host typed input. Carries a controller sequence number for idempotent de-dup (§4.3);
  * the host drops any `cSeq <= lastApplied[peerId]`. Shape-checked only (D6 — no anti-cheat/HMAC).
+ * Delivery is at-least-once: the host receipt-acks every received frame ({@link IntentAckFrame}) and
+ * the controller retransmits the SAME frame (same `cSeq` — safe under the de-dup) until acked or its
+ * bounded retransmit budget exhausts (`room:intent-undeliverable`).
  */
 export type IntentFrame = {
   readonly t: "intent";
@@ -288,6 +291,21 @@ export type IntentFrame = {
   /** Plain-JSON intent payload; validated by a correctness-only typed shape-check (D6). */
   readonly payload: unknown;
   /** Monotonic per-controller sequence number (§4.3). */
+  readonly cSeq: number;
+};
+
+/**
+ * Host → controller wire-level receipt for ONE received {@link IntentFrame} (§4.3 at-least-once).
+ * Sent for EVERY inbound `t:"intent"` frame — fresh AND duplicate, BEFORE the registration/shape/de-dup
+ * pipeline — so a retransmitted frame whose original ack was lost is re-acked instead of retransmitting
+ * to exhaustion. Acknowledges RECEIPT by the intent engine, not application: an unregistered or
+ * shape-rejected intent is still acked (its silent drop is the D6 host-authority contract, not a wire
+ * failure). Releases the controller's bounded retransmit loop for `cSeq`; its absence past the retransmit
+ * budget is what declares the wire dead (`room:intent-undeliverable`).
+ */
+export type IntentAckFrame = {
+  readonly t: "intent-ack";
+  /** The received frame's per-controller sequence number being acknowledged (§4.3). */
   readonly cSeq: number;
 };
 
@@ -391,6 +409,7 @@ export type RosterFrame = {
  */
 export type Frame =
   | IntentFrame
+  | IntentAckFrame
   | SyncSnapshotFrame
   | SyncDeltaFrame
   | SyncResyncFrame

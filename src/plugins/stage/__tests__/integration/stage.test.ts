@@ -32,7 +32,7 @@ function makeStageApp(bus: Bus) {
   let syncReadyFired = false;
 
   // gameProbe: a throwaway plugin that depends on stagePlugin. Its hooks ONLY fire if the
-  // facade has re-declared the five room:* events (WARN-2 — event visibility is not transitive).
+  // facade has re-declared the six room:* events (WARN-2 — event visibility is not transitive).
   const gameProbe = createPlugin("gameProbe", {
     depends: [stagePlugin],
     createState: (): Record<string, never> => ({}),

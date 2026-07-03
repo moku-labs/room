@@ -3,7 +3,9 @@
  *
  * Fake `Wire` that captures the `on` handler; driven directly with the per-app `state` — no API instance
  * and no module-level singleton (D14): a second app's `state` yields an independent registration over its
- * own state.
+ * own state. Covers both halves of the §4.3 at-least-once loop: the host half's wire-level `intent-ack`
+ * receipt (sent for EVERY inbound intent — fresh, duplicate, unregistered, shape-failing) and the
+ * controller half's routing of inbound receipts to `state.delivery`.
  *
  * @file
  * @see ../../receive
@@ -12,7 +14,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { Frame, PeerId, Wire } from "../../../transport/protocol";
 import { attachIntentReceive } from "../../receive";
 import { createIntentState } from "../../state";
-import type { IntentSchema, IntentState } from "../../types";
+import type { IntentDelivery, IntentSchema, IntentState } from "../../types";
 
 /** Creates a fake `Wire` that captures the last `on` handler. */
 function makeFakeWire() {
@@ -139,5 +141,81 @@ describe("attachIntentReceive", () => {
     expect(state1.lastApplied.get("ctrl-1")).toBe(0);
     expect(state2.lastApplied.get("ctrl-2")).toBe(0);
     expect(state1.lastApplied.has("ctrl-2")).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Wire-level intent-ack receipt (§4.3 at-least-once — host half)
+// ---------------------------------------------------------------------------
+
+describe("attachIntentReceive — intent-ack receipt", () => {
+  let state: IntentState;
+  let fakeWire: ReturnType<typeof makeFakeWire>;
+
+  beforeEach(() => {
+    state = createIntentState();
+    fakeWire = makeFakeWire();
+    attachIntentReceive(state, fakeWire.wire);
+  });
+
+  it("acks a fresh applied intent back to its sender", () => {
+    const handler = vi.fn();
+    state.registry.set("move", { schema: moveSchema, handler });
+
+    fakeWire.deliver("ctrl-1", { t: "intent", name: "move", payload: { dx: 0, dy: 0 }, cSeq: 7 });
+
+    expect(handler).toHaveBeenCalledTimes(1);
+    expect(fakeWire.wire.send).toHaveBeenCalledTimes(1);
+    expect(fakeWire.wire.send).toHaveBeenCalledWith("ctrl-1", { t: "intent-ack", cSeq: 7 });
+  });
+
+  it("re-acks a de-dup-dropped duplicate (a lost ack must not retransmit to exhaustion)", () => {
+    const handler = vi.fn();
+    state.registry.set("move", { schema: moveSchema, handler });
+
+    fakeWire.deliver("ctrl-1", { t: "intent", name: "move", payload: { dx: 0, dy: 0 }, cSeq: 3 });
+    fakeWire.deliver("ctrl-1", { t: "intent", name: "move", payload: { dx: 0, dy: 0 }, cSeq: 3 });
+
+    // Applied once, acked TWICE — receipt is per received frame, not per application.
+    expect(handler).toHaveBeenCalledTimes(1);
+    expect(fakeWire.wire.send).toHaveBeenCalledTimes(2);
+    expect(fakeWire.wire.send).toHaveBeenNthCalledWith(2, "ctrl-1", { t: "intent-ack", cSeq: 3 });
+  });
+
+  it("acks receipt even for an unregistered name and a shape-failing payload (D6 drops are not wire failures)", () => {
+    state.registry.set("move", { schema: moveSchema, handler: vi.fn() });
+
+    // Unregistered name — silently dropped by the pipeline, still receipt-acked.
+    fakeWire.deliver("ctrl-1", { t: "intent", name: "unknown", payload: {}, cSeq: 0 });
+    // Shape-failing payload — silently dropped by the pipeline, still receipt-acked.
+    fakeWire.deliver("ctrl-1", { t: "intent", name: "move", payload: { dx: 99, dy: 0 }, cSeq: 1 });
+
+    expect(fakeWire.wire.send).toHaveBeenCalledTimes(2);
+    expect(fakeWire.wire.send).toHaveBeenNthCalledWith(1, "ctrl-1", { t: "intent-ack", cSeq: 0 });
+    expect(fakeWire.wire.send).toHaveBeenNthCalledWith(2, "ctrl-1", { t: "intent-ack", cSeq: 1 });
+  });
+
+  it("routes an inbound intent-ack to state.delivery.onAck (controller half) and never acks an ack", () => {
+    const onAck = vi.fn();
+    const delivery: IntentDelivery = {
+      send: vi.fn(),
+      onAck,
+      retire: vi.fn(() => []),
+      stop: vi.fn()
+    };
+    state.delivery = delivery;
+
+    fakeWire.deliver("host-id", { t: "intent-ack", cSeq: 5 });
+
+    expect(onAck).toHaveBeenCalledTimes(1);
+    expect(onAck).toHaveBeenCalledWith(5);
+    // An inbound receipt is terminal: no echo, no ack-of-ack.
+    expect(fakeWire.wire.send).not.toHaveBeenCalled();
+  });
+
+  it("an inbound intent-ack with no delivery tracker attached is a safe no-op", () => {
+    expect(state.delivery).toBeNull();
+    expect(() => fakeWire.deliver("host-id", { t: "intent-ack", cSeq: 5 })).not.toThrow();
+    expect(fakeWire.wire.send).not.toHaveBeenCalled();
   });
 });

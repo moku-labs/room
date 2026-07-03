@@ -113,13 +113,13 @@ Seven plugins. On the **client core** (`@moku-labs/room`), four are **engines** 
 |---|---|---|---|---|
 | 1 | [`transportPlugin`](src/plugins/transport/README.md) | Complex | client default | WebRTC DataChannels: signaling handshake, chunking/backpressure, mandatory heartbeat, capped ICE recovery. Owns the typed `Wire`. Emits `room:network-warning`. |
 | 2 | [`sessionPlugin`](src/plugins/session/README.md) | Complex | client default | Room code + QR + roster; star topology (`hostId()`); client-side host-reload recovery. Emits `room:peer-joined`, `room:peer-left`, `room:host-reconnecting`. |
-| 3 | [`intentPlugin`](src/plugins/intent/README.md) | Standard | client default | Controller→host typed inputs (`IntentFrame`, per-controller `cSeq` idempotent de-dup). No events. |
+| 3 | [`intentPlugin`](src/plugins/intent/README.md) | Standard | client default | Controller→host typed inputs (`IntentFrame`, per-controller `cSeq` idempotent de-dup) with at-least-once delivery (wire-level `intent-ack` + bounded retransmit). Emits `room:intent-undeliverable`. |
 | 4 | [`syncPlugin`](src/plugins/sync/README.md) | Complex | client default | Host→controller authoritative state: full snapshot + throttled op-list deltas. Emits `room:sync-ready`. |
-| 5 | [`stagePlugin`](src/plugins/stage/README.md) | Standard (facade) | app-added (host) | **Host-role facade** → `StageApi` (`app.stage`). Re-declares all five `room:*` events. |
-| 6 | [`controllerPlugin`](src/plugins/controller/README.md) | Standard (facade) | app-added (controller) | **Controller-role facade** → `ControllerApi` (`app.controller`). Re-declares all five `room:*` events. |
+| 5 | [`stagePlugin`](src/plugins/stage/README.md) | Standard (facade) | app-added (host) | **Host-role facade** → `StageApi` (`app.stage`). Re-declares all six `room:*` events. |
+| 6 | [`controllerPlugin`](src/plugins/controller/README.md) | Standard (facade) | app-added (controller) | **Controller-role facade** → `ControllerApi` (`app.controller`). Re-declares all six `room:*` events. |
 | 7 | [`hubPlugin`](src/plugins/hub/README.md) | Standard | **server core** default | The `@moku-labs/room/server` signaling tier — WS-Hibernation DO-per-room over the native Cloudflare `env` (DO + KV): handshake broker + in-band discovery + host-reload reclaim (no gameplay relay, D2). |
 
-The facade **re-declares** all five `room:*` events for *compile-time visibility only* — a downstream game plugin
+The facade **re-declares** all six `room:*` events for *compile-time visibility only* — a downstream game plugin
 (`depends: [stagePlugin]` / `[controllerPlugin]`) then sees the complete typed hook surface in one edge. It installs no
 forwarding hooks, because Moku's event bus is global and the engines' `emit("room:*")` already reaches every hook
 regardless of `depends`.
@@ -131,7 +131,7 @@ regardless of `depends`.
 ```ts
 import { createApp, createPlugin, stagePlugin } from "@moku-labs/room";
 
-// Your game logic — depends on the facade so the five room:* events are visible.
+// Your game logic — depends on the facade so the six room:* events are visible.
 const game = createPlugin("game", {
   depends: [stagePlugin],
   hooks: ctx => ({
@@ -297,6 +297,7 @@ The `room:*` plane is **coarse lifecycle only**. All gameplay rides the `Wire` (
 | `room:peer-left` | `{ peerId }` | session | A controller left or was declared dead by the heartbeat; removed from roster. |
 | `room:host-reconnecting` | `{}` | session | Host tab reloaded; client-side recovery in flight — show "reconnecting" UX. |
 | `room:sync-ready` | `{}` | sync | First full snapshot applied; the synced replica is now readable. |
+| `room:intent-undeliverable` | `{ name, cSeq }` | intent | A live intent exhausted its bounded retransmit budget with no wire-level receipt — the wire is dead for this controller's intent stream; surface retry UX. |
 | `room:network-warning` | `{ reason: "ice-failed" \| "rendezvous-unreachable" \| "channel-closed" \| "room-evicted" }` | transport | A connectivity hard-failure surfaced for failure UX (D2). `room-evicted` is server-core only — the `serverSignaling` DO's idle Alarm tore the room down. |
 
 > [!NOTE]

@@ -2,7 +2,8 @@
  * Public + internal type contracts for the intent plugin.
  *
  * Carries the CONCRETE signatures from the spec: the role-agnostic {@link IntentApi}, the controller-side
- * buffer {@link IntentConfig}, the correctness-only {@link IntentSchema} / {@link IntentFieldRule} (D6),
+ * buffer + retransmit {@link IntentConfig}, the correctness-only {@link IntentSchema} /
+ * {@link IntentFieldRule} (D6), the at-least-once {@link IntentDelivery} tracker contract (§4.3),
  * and the per-app {@link IntentState}. Shared wire/roster types (`IntentFrame`, `PeerId`, `JsonValue`)
  * are imported from their owning plugins (`../transport/protocol` for the wire/signaling protocol; `RoomEvents` from `../../config`) — never re-declared here.
  *
@@ -14,14 +15,20 @@ import type { IntentFrame, JsonValue, PeerId } from "../transport/protocol";
 /**
  * Configuration for the intent plugin.
  *
- * Governs ONLY the controller-side reconnect buffer (recovery contract). There is no validation knob:
- * shape-checking is correctness-only and always on (D6 — no anti-cheat / rate-limit toggle would make
- * sense in the trusted living-room threat model). Flat config (no nesting).
+ * Governs the controller-side reconnect buffer (recovery contract) and the controller-side at-least-once
+ * delivery window (retransmit contract, §4.3). There is no validation knob: shape-checking is
+ * correctness-only and always on (D6 — no anti-cheat / rate-limit toggle would make sense in the trusted
+ * living-room threat model). Flat config (no nesting).
  *
  * @example
  * ```ts
- * // Defaults — a 256-entry, 10-second buffer window.
- * const cfg: IntentConfig = { bufferCap: 256, bufferMaxAgeMs: 10_000 };
+ * // Defaults — a 256-entry, 10-second buffer window; 1 s ack timeout, 3 bounded retransmits.
+ * const cfg: IntentConfig = {
+ *   bufferCap: 256,
+ *   bufferMaxAgeMs: 10_000,
+ *   ackTimeoutMs: 1000,
+ *   maxRetransmits: 3
+ * };
  * ```
  */
 export type IntentConfig = {
@@ -29,6 +36,9 @@ export type IntentConfig = {
    * Maximum number of timestamped intents the controller buffers during a host absence before the
    * OLDEST entries are discarded (FIFO drop). Bounds memory for high-frequency analog intents
    * (e.g. a tilt/joystick stream) when a host reload runs long. Lossy by design. Default `256`.
+   * Doubles as the cap on the live delivery tracker's send queue (the intents waiting behind the
+   * one in-flight unacked frame) — past it the OLDEST queued intent is dropped with its own
+   * `room:intent-undeliverable`.
    */
   readonly bufferCap: number;
   /**
@@ -37,6 +47,19 @@ export type IntentConfig = {
    * out-lives the recovery window it feeds. Default `10_000`.
    */
   readonly bufferMaxAgeMs: number;
+  /**
+   * Milliseconds a live intent may sit unacked before its first retransmit; the wait DOUBLES after each
+   * retransmit (1×, 2×, 4×, …), so the total silence budget is `ackTimeoutMs * (2^(maxRetransmits+1) - 1)`
+   * (~15 s at the defaults). Must be `>= 1`. Default `1000`.
+   */
+  readonly ackTimeoutMs: number;
+  /**
+   * Maximum number of times the SAME unacked frame (same `cSeq` — safe under the host's §4.3 de-dup) is
+   * re-sent before the wire is declared dead: the intent and everything queued behind it drop with one
+   * `room:intent-undeliverable` each. Must be a non-negative integer (`0` = track + signal, never
+   * re-send). Default `3`.
+   */
+  readonly maxRetransmits: number;
 };
 
 /**
@@ -139,6 +162,49 @@ export type BufferedIntent = {
 };
 
 /**
+ * The controller-side at-least-once delivery tracker for LIVE intent sends (§4.3). Stop-and-wait: ONE
+ * unacked frame in flight at a time, later intents queue behind it in `cSeq` order — forced by the
+ * host's high-water-mark de-dup (if a newer `cSeq` ever applied first, a retransmitted older frame
+ * would be `<= lastApplied` and silently eaten forever). Built once per app by `createIntentApi` and
+ * shared via {@link IntentState.delivery}; the receive path routes inbound `intent-ack` frames to it,
+ * and `onStop` reaches it to clear the retransmit timer.
+ */
+export type IntentDelivery = {
+  /**
+   * Tracks + transmits one live `IntentFrame`: sends immediately when nothing is in flight, otherwise
+   * queues it (FIFO, `bufferCap`-capped — past the cap the OLDEST queued intent drops with its own
+   * `room:intent-undeliverable`). Arms the bounded retransmit loop for the in-flight frame.
+   *
+   * @param frame - The fully-formed, `cSeq`-stamped frame to deliver at-least-once.
+   */
+  send(frame: IntentFrame): void;
+
+  /**
+   * Applies one inbound wire-level receipt. Releases the in-flight frame when `cSeq` matches it (then
+   * promotes the next queued frame); any other receipt (stale, duplicate, unknown) is ignored.
+   *
+   * @param cSeq - The acknowledged frame's per-controller sequence number.
+   */
+  onAck(cSeq: number): void;
+
+  /**
+   * Recovery seam: atomically returns EVERY tracked frame (the in-flight one first, then the queue, in
+   * `cSeq` order), clears the tracker, and cancels the retransmit timer. Called when buffering turns on
+   * so the §5 reconnect buffer subsumes the live window during a known host absence — no
+   * `room:intent-undeliverable` fires for retired frames.
+   *
+   * @returns The retired frames in `cSeq` order (empty when nothing was tracked).
+   */
+  retire(): readonly IntentFrame[];
+
+  /**
+   * Teardown (called from the plugin's `onStop` via the per-instance registry): cancels the retransmit
+   * timer and drops all tracked frames SILENTLY (no terminal events at app stop). Idempotent.
+   */
+  stop(): void;
+};
+
+/**
  * Internal mutable state for the intent plugin. A single instance is role-agnostic (D5): the host
  * populates `registry` + `lastApplied`; the controller advances `nextCSeq` and fills `buffer` while
  * `buffering` is on. Unused halves simply stay empty for the other role.
@@ -151,7 +217,8 @@ export type BufferedIntent = {
  *   lastApplied: new Map([["ctrl-a", 42], ["ctrl-b", 17]]),
  *   nextCSeq: 0, // host never sends intents
  *   buffering: false,
- *   buffer: []
+ *   buffer: [],
+ *   delivery: null // host never tracks outbound deliveries
  * };
  * ```
  */
@@ -166,6 +233,8 @@ export type IntentState = {
   buffering: boolean;
   /** Controller-only: FIFO queue of timestamped intents accumulated while `buffering`. Capped/pruned per config; drained by `drainBuffer()`. Starts empty. */
   buffer: BufferedIntent[];
+  /** Controller-only: the at-least-once delivery tracker for live sends (see {@link IntentDelivery}). Built once by `createIntentApi`; the receive path and `onStop` reach the SAME instance through here. Starts `null`. */
+  delivery: IntentDelivery | null;
 };
 
 /**
@@ -213,10 +282,13 @@ export type IntentApi = {
 
   /**
    * Controller: sends one typed intent to the host. Stamps the next `cSeq`, builds an `IntentFrame`,
-   * and EITHER hands it to the transport `Wire.send` (live) OR — when buffering is on during a host
-   * absence — enqueues it as a timestamped `BufferedIntent`. NEVER routes through Moku `emit`. Payload
-   * is not validated client-side — the host is the sole authority (D6); a malformed payload is simply
-   * dropped on arrival.
+   * and EITHER hands it to the at-least-once delivery tracker (live — retransmitted until the host's
+   * wire-level `intent-ack` receipt or, past the bounded budget, dropped with
+   * `room:intent-undeliverable`) OR — when buffering is on during a host absence — enqueues it as a
+   * timestamped `BufferedIntent`. Live delivery is stop-and-wait: one unacked frame in flight, later
+   * intents queue behind it in `cSeq` order (§4.3). NEVER routes through Moku `emit`. Payload is not
+   * validated client-side — the host is the sole authority (D6); a malformed payload is acked on
+   * receipt but dropped before dispatch.
    *
    * @param name - The intent kind to send (must match a host `register` for the host to apply it).
    * @param payload - The plain-JSON intent payload.

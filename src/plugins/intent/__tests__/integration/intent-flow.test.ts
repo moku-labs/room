@@ -164,7 +164,13 @@ describe("intent — idempotent reconcile (D4)", () => {
     });
     attachIntentReceive(hostState, hostWire);
 
-    const ctrlApi = createIntentApi(ctrlState, DEFAULT_INTENT_CONFIG, ctrlWire, () => "host-id");
+    const ctrlApi = createIntentApi(
+      ctrlState,
+      DEFAULT_INTENT_CONFIG,
+      ctrlWire,
+      () => "host-id",
+      vi.fn()
+    );
 
     // Controller enters buffering mode
     ctrlApi.setBuffering(true);
@@ -209,7 +215,13 @@ describe("intent — idempotent reconcile (D4)", () => {
     });
     attachIntentReceive(hostState, hostWire);
 
-    const ctrlApi = createIntentApi(ctrlState, DEFAULT_INTENT_CONFIG, ctrlWire, () => "host-id");
+    const ctrlApi = createIntentApi(
+      ctrlState,
+      DEFAULT_INTENT_CONFIG,
+      ctrlWire,
+      () => "host-id",
+      vi.fn()
+    );
     ctrlApi.setBuffering(true);
 
     const N = 5;
@@ -241,9 +253,10 @@ describe("intent — cap/age loss", () => {
     const wire = makeSendWire();
     const api = createIntentApi(
       state,
-      { bufferCap: 3, bufferMaxAgeMs: 10_000 },
+      { ...DEFAULT_INTENT_CONFIG, bufferCap: 3 },
       wire,
-      () => "host"
+      () => "host",
+      vi.fn()
     );
 
     api.setBuffering(true);
@@ -263,7 +276,13 @@ describe("intent — cap/age loss", () => {
 
     const state = createIntentState();
     const wire = makeSendWire();
-    const api = createIntentApi(state, { bufferCap: 256, bufferMaxAgeMs: 500 }, wire, () => "host");
+    const api = createIntentApi(
+      state,
+      { ...DEFAULT_INTENT_CONFIG, bufferMaxAgeMs: 500 },
+      wire,
+      () => "host",
+      vi.fn()
+    );
 
     api.setBuffering(true);
     api.intent("move", { seq: 0 });

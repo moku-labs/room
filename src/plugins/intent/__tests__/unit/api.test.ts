@@ -48,7 +48,20 @@ function makeFakeWire() {
   };
 }
 
-const defaultConfig: IntentConfig = { bufferCap: 256, bufferMaxAgeMs: 10_000 };
+const defaultConfig: IntentConfig = {
+  bufferCap: 256,
+  bufferMaxAgeMs: 10_000,
+  ackTimeoutMs: 1000,
+  maxRetransmits: 3
+};
+
+/**
+ * Delivers the host's wire-level receipt for `cSeq` back into the controller's receive path,
+ * releasing the delivery tracker's stop-and-wait window for the next queued intent.
+ */
+function ackBack(fakeWire: ReturnType<typeof makeFakeWire>, hostId: PeerId, cSeq: number): void {
+  fakeWire.deliver(hostId, { t: "intent-ack", cSeq });
+}
 
 const moveSchema: IntentSchema = {
   fields: {
@@ -72,11 +85,21 @@ describe("createIntentApi — controller intent()", () => {
     fakeWire = makeFakeWire();
   });
 
-  it("stamps a monotonic cSeq starting at 0 and increments across calls", () => {
-    const api = createIntentApi(state, defaultConfig, fakeWire.wire, () => hostId);
+  it("stamps a monotonic cSeq starting at 0 and increments across calls (ack releases each next send)", () => {
+    // The receive path routes the host's intent-ack receipts to the delivery tracker (same state).
+    attachIntentReceive(state, fakeWire.wire);
+    const api = createIntentApi(state, defaultConfig, fakeWire.wire, () => hostId, vi.fn());
+
+    // Stop-and-wait: only the first frame transmits; the rest queue behind it in cSeq order.
     api.intent("move", { dx: 0.1, dy: 0.2 });
     api.intent("move", { dx: 0.2, dy: 0.3 });
     api.intent("move", { dx: 0.3, dy: 0.4 });
+    expect(fakeWire.send).toHaveBeenCalledTimes(1);
+
+    // Each wire-level receipt releases the window and transmits the next queued frame.
+    ackBack(fakeWire, hostId, 0);
+    ackBack(fakeWire, hostId, 1);
+    ackBack(fakeWire, hostId, 2);
 
     expect(fakeWire.send).toHaveBeenCalledTimes(3);
     const calls = fakeWire.send.mock.calls;
@@ -86,7 +109,7 @@ describe("createIntentApi — controller intent()", () => {
   });
 
   it("builds the correct IntentFrame and calls wire.send(hostId, frame)", () => {
-    const api = createIntentApi(state, defaultConfig, fakeWire.wire, () => hostId);
+    const api = createIntentApi(state, defaultConfig, fakeWire.wire, () => hostId, vi.fn());
     api.intent("jump", { height: 1 });
 
     expect(fakeWire.send).toHaveBeenCalledTimes(1);
@@ -98,17 +121,23 @@ describe("createIntentApi — controller intent()", () => {
     });
   });
 
-  it("never routes through emit (asserts no emit on the ctx)", () => {
-    const emit = vi.fn();
-    // The createIntentApi takes a wire + getHostId but NOT emit — this test confirms
-    // the API closure never calls a hypothetical emit by verifying the wire is the only channel.
-    const api = createIntentApi(state, defaultConfig, fakeWire.wire, () => hostId);
+  it("never routes gameplay through emit (the injected emit fires ONLY for intent-undeliverable)", () => {
+    const emitUndeliverable = vi.fn();
+    // The API's only emit channel is the terminal room:intent-undeliverable — a live send that is
+    // acked (or still in flight) must ride the wire exclusively.
+    const api = createIntentApi(
+      state,
+      defaultConfig,
+      fakeWire.wire,
+      () => hostId,
+      emitUndeliverable
+    );
     api.intent("fire", { power: 0.5 });
 
     // wire.send was called (live send path)
     expect(fakeWire.send).toHaveBeenCalledTimes(1);
-    // emit mock was never invoked (it was not given to the API)
-    expect(emit).not.toHaveBeenCalled();
+    // the narrowed emit never fires for a healthy send
+    expect(emitUndeliverable).not.toHaveBeenCalled();
   });
 });
 
@@ -129,7 +158,7 @@ describe("createIntentApi — host register() + onIntent()", () => {
   });
 
   it("a valid IntentFrame invokes the handler with (payload, { peerId, cSeq })", () => {
-    const api = createIntentApi(state, defaultConfig, fakeWire.wire, () => hostId);
+    const api = createIntentApi(state, defaultConfig, fakeWire.wire, () => hostId, vi.fn());
     const handler = vi.fn();
     api.register("move", moveSchema);
     api.onIntent("move", handler);
@@ -146,7 +175,7 @@ describe("createIntentApi — host register() + onIntent()", () => {
   });
 
   it("an unregistered name drops silently (handler not called)", () => {
-    const api = createIntentApi(state, defaultConfig, fakeWire.wire, () => hostId);
+    const api = createIntentApi(state, defaultConfig, fakeWire.wire, () => hostId, vi.fn());
     const handler = vi.fn();
     api.register("move", moveSchema);
     api.onIntent("move", handler);
@@ -163,7 +192,7 @@ describe("createIntentApi — host register() + onIntent()", () => {
   });
 
   it("a schema-failing payload drops silently (handler not called)", () => {
-    const api = createIntentApi(state, defaultConfig, fakeWire.wire, () => hostId);
+    const api = createIntentApi(state, defaultConfig, fakeWire.wire, () => hostId, vi.fn());
     const handler = vi.fn();
     api.register("move", moveSchema);
     api.onIntent("move", handler);
@@ -177,7 +206,7 @@ describe("createIntentApi — host register() + onIntent()", () => {
   });
 
   it("a duplicate (cSeq <= lastApplied[peerId]) drops silently", () => {
-    const api = createIntentApi(state, defaultConfig, fakeWire.wire, () => hostId);
+    const api = createIntentApi(state, defaultConfig, fakeWire.wire, () => hostId, vi.fn());
     const handler = vi.fn();
     api.register("move", moveSchema);
     api.onIntent("move", handler);
@@ -194,7 +223,7 @@ describe("createIntentApi — host register() + onIntent()", () => {
   });
 
   it("lastApplied[peerId] advances only on applied frames; two peers stay independent", () => {
-    const api = createIntentApi(state, defaultConfig, fakeWire.wire, () => hostId);
+    const api = createIntentApi(state, defaultConfig, fakeWire.wire, () => hostId, vi.fn());
     const handler = vi.fn();
     api.register("move", moveSchema);
     api.onIntent("move", handler);
@@ -215,7 +244,7 @@ describe("createIntentApi — host register() + onIntent()", () => {
   });
 
   it("onIntent returns an unsubscribe that detaches the handler", () => {
-    const api = createIntentApi(state, defaultConfig, fakeWire.wire, () => hostId);
+    const api = createIntentApi(state, defaultConfig, fakeWire.wire, () => hostId, vi.fn());
     const handler = vi.fn();
     api.register("move", moveSchema);
     const off = api.onIntent("move", handler);
@@ -248,7 +277,7 @@ describe("createIntentApi — buffer seam", () => {
   });
 
   it("setBuffering(true) makes intent() enqueue instead of send", () => {
-    const api = createIntentApi(state, defaultConfig, fakeWire.wire, () => hostId);
+    const api = createIntentApi(state, defaultConfig, fakeWire.wire, () => hostId, vi.fn());
     api.setBuffering(true);
     api.intent("move", { dx: 0.1, dy: 0.2 });
     api.intent("move", { dx: 0.3, dy: 0.4 });
@@ -257,8 +286,39 @@ describe("createIntentApi — buffer seam", () => {
     expect(state.buffer).toHaveLength(2);
   });
 
+  it("setBuffering(true) retires the live delivery window into the reconnect buffer (cSeq order, silent)", () => {
+    vi.useFakeTimers();
+    const emitUndeliverable = vi.fn();
+    const api = createIntentApi(
+      state,
+      defaultConfig,
+      fakeWire.wire,
+      () => hostId,
+      emitUndeliverable
+    );
+
+    // Live sends: one in flight (unacked), two queued behind it in the stop-and-wait window.
+    api.intent("move", { dx: 0.1, dy: 0 });
+    api.intent("move", { dx: 0.2, dy: 0 });
+    api.intent("move", { dx: 0.3, dy: 0 });
+    expect(fakeWire.send).toHaveBeenCalledTimes(1);
+
+    // Known host absence: the §5 recovery contract subsumes the live window.
+    api.setBuffering(true);
+
+    expect(api.bufferedCount()).toBe(3);
+    const drained = api.drainBuffer();
+    expect(drained.map(entry => entry.intent.cSeq)).toEqual([0, 1, 2]);
+
+    // Retirement disarmed the retransmit loop: no re-sends into the dead wire, no terminal events.
+    vi.advanceTimersByTime(60_000);
+    expect(fakeWire.send).toHaveBeenCalledTimes(1);
+    expect(emitUndeliverable).not.toHaveBeenCalled();
+    vi.useRealTimers();
+  });
+
   it("bufferedCount() reflects the queue size", () => {
-    const api = createIntentApi(state, defaultConfig, fakeWire.wire, () => hostId);
+    const api = createIntentApi(state, defaultConfig, fakeWire.wire, () => hostId, vi.fn());
     api.setBuffering(true);
     expect(api.bufferedCount()).toBe(0);
 
@@ -270,7 +330,7 @@ describe("createIntentApi — buffer seam", () => {
   });
 
   it("drainBuffer() returns ts-ordered entries and empties the buffer", () => {
-    const api = createIntentApi(state, defaultConfig, fakeWire.wire, () => hostId);
+    const api = createIntentApi(state, defaultConfig, fakeWire.wire, () => hostId, vi.fn());
     api.setBuffering(true);
 
     api.intent("move", { dx: 0.1 });
@@ -293,8 +353,8 @@ describe("createIntentApi — buffer seam", () => {
 
   it("bufferCap FIFO-drops the oldest entries past the cap", () => {
     const smallCap = 3;
-    const cfg: IntentConfig = { bufferCap: smallCap, bufferMaxAgeMs: 10_000 };
-    const api = createIntentApi(state, cfg, fakeWire.wire, () => hostId);
+    const cfg: IntentConfig = { ...defaultConfig, bufferCap: smallCap };
+    const api = createIntentApi(state, cfg, fakeWire.wire, () => hostId, vi.fn());
     api.setBuffering(true);
 
     // Push 5 intents — first 2 should be FIFO-dropped
@@ -312,8 +372,8 @@ describe("createIntentApi — buffer seam", () => {
   it("bufferMaxAgeMs prunes stale entries on enqueue/drain", () => {
     vi.useFakeTimers();
 
-    const cfg: IntentConfig = { bufferCap: 256, bufferMaxAgeMs: 1000 };
-    const api = createIntentApi(state, cfg, fakeWire.wire, () => hostId);
+    const cfg: IntentConfig = { ...defaultConfig, bufferMaxAgeMs: 1000 };
+    const api = createIntentApi(state, cfg, fakeWire.wire, () => hostId, vi.fn());
     api.setBuffering(true);
 
     // Add two intents at t=0
