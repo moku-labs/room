@@ -53,9 +53,21 @@ export type Config = {
    * re-sent on a slow cadence while the gap persists) — the host answers by re-baselining that ONE peer
    * with a snapshot at its CURRENT `sSeq` (no shared sequence is consumed) and fires the host-side
    * `onResyncRequest` hook with the reporting peer. If `false`, the controller waits for the next host
-   * snapshot. Default `true`.
+   * snapshot (this also disables the not-ready baseline retry loop — see `baselineRetryMs`). Default
+   * `true`.
    */
   readonly resyncOnGap: boolean;
+  /**
+   * While a replica has applied NO authoritative frame yet (`ready === false`), it re-requests its join
+   * baseline from the host every this-many ms (`sync-resync` → whole-state snapshot answer at the host's
+   * CURRENT `sSeq`). This is the receive-direction at-least-once guard for the join/late-join `sync-snap`:
+   * the delta-triggered gap heal never fires on a replica with ZERO inbound traffic (a pre-game lobby with
+   * no mutations), so a baseline lost on a half-open channel would otherwise wedge the replica un-ready
+   * until a reload. The loop no-ops while the host `PeerId` is unknown, keeps asking while the host has no
+   * slice registered yet (the host ignores reports until a baseline exists), and stops the moment the
+   * replica turns `ready`. `0` disables the loop; gated by `resyncOnGap`. Default `1000`.
+   */
+  readonly baselineRetryMs: number;
 };
 
 /**
@@ -508,4 +520,29 @@ export type SyncEngine = {
    * ```
    */
   stopBroadcast(): void;
+
+  /**
+   * Arms the not-ready baseline retry loop: while `ready` is false, re-request the join baseline from the
+   * host every `baselineRetryMs` (re-using the `sync-resync` → baseline-snapshot answer loop). Idempotent;
+   * a no-op when the replica is already `ready`, when `resyncOnGap` is off, or when `baselineRetryMs` is
+   * `0`. Called by `onStart`; the loop stops itself on the first applied authoritative frame
+   * (`markReady`).
+   *
+   * @example
+   * ```ts
+   * engine.startBaselineRetry();
+   * ```
+   */
+  startBaselineRetry(): void;
+
+  /**
+   * Stops the not-ready baseline retry loop and clears its timer. Idempotent; called by `markReady` (the
+   * loop's goal is met) and by `onStop` through the `teardownRegistry` entry.
+   *
+   * @example
+   * ```ts
+   * engine.stopBaselineRetry();
+   * ```
+   */
+  stopBaselineRetry(): void;
 };

@@ -6,7 +6,9 @@
  * `SessionApi`/`emit`, then shared via `ctx.state.engine`. Owns the slice registry, the per-namespace
  * dirty-flag, the 20-30 Hz throttle broadcast loop (timer id stored in `state.throttleHandle`), the
  * read-only replica apply path with `sSeq` gap detection + the `sync-resync` gap-heal loop (replica
- * reports the gap, host answers with a baseline snapshot at its CURRENT `sSeq`), the per-namespace
+ * reports the gap, host answers with a baseline snapshot at its CURRENT `sSeq`), the not-ready baseline
+ * retry loop (a replica whose join `sync-snap` was lost re-requests it every `baselineRetryMs` until the
+ * first authoritative frame applies — the receive-direction at-least-once guard), the per-namespace
  * `subscribe` callback `Map` (a closure-scope `Map` — kept OUT of `State` so `State.snapshot` stays
  * plain-JSON), and the single `room:sync-ready` emit. Pure codec work delegates to `codec.ts`. All wire
  * I/O rides the injected `Wire` (contracts section 2) — NEVER Moku `emit` (only `room:sync-ready` rides
@@ -85,6 +87,10 @@ export function createSyncEngine(
   // (see RESYNC_RETRY_EVERY_DROPS). Reset on each fresh gap detection.
   let staleDeltasDropped = 0;
 
+  // The not-ready baseline retry timer (closure scope, like intent's retransmit timer — NOT in State so
+  // the at-rest state stays plain-JSON). Armed by startBaselineRetry, cleared by markReady/onStop.
+  let baselineRetryTimer: ReturnType<typeof setInterval> | null = null;
+
   /**
    * Notify a namespace's subscribers with its current cells (frozen copy, never a live reference).
    *
@@ -117,6 +123,8 @@ export function createSyncEngine(
    * ```
    */
   function markReady(): void {
+    // The baseline retry loop's goal is met the moment ANY authoritative frame applies.
+    stopBaselineRetry();
     if (!state.ready) {
       state.ready = true;
       emit();
@@ -164,6 +172,52 @@ export function createSyncEngine(
       return;
     }
     wire.send(hostId, { t: "sync-resync", sSeq: state.sSeq });
+  }
+
+  /**
+   * Arms the not-ready baseline retry loop (contracts section 4.3 — the receive-direction analogue of
+   * intent's at-least-once retransmit). While `ready` is false, every `baselineRetryMs` the replica
+   * re-requests its baseline via {@link requestResync} — this covers the join/late-join `sync-snap` lost
+   * on a half-open channel with ZERO deltas following (a pre-game lobby), where the delta-triggered gap
+   * heal can never fire. Each tick no-ops while the host `PeerId` is unknown, and keeps asking while the
+   * host holds no slice yet (the host ignores reports until a baseline exists) — the loop only ends on
+   * `markReady` (goal met) or `stopBaselineRetry` (teardown). Idempotent; a no-op when already `ready`,
+   * when `resyncOnGap` is off, or when `baselineRetryMs` is `0`.
+   *
+   * @example
+   * ```ts
+   * startBaselineRetry(); // onStart — un-armed again by the first applied snapshot/delta
+   * ```
+   */
+  function startBaselineRetry(): void {
+    const disabled = !config.resyncOnGap || config.baselineRetryMs <= 0;
+    if (state.ready || disabled || baselineRetryTimer !== null) {
+      return;
+    }
+    baselineRetryTimer = setInterval(() => {
+      // Defensive: markReady already clears the timer on the ready transition.
+      if (state.ready) {
+        stopBaselineRetry();
+        return;
+      }
+      requestResync();
+    }, config.baselineRetryMs);
+  }
+
+  /**
+   * Stops the not-ready baseline retry loop and clears its timer. Idempotent. Called by `markReady` (the
+   * first authoritative frame applied) and by `onStop` via the teardown registry.
+   *
+   * @example
+   * ```ts
+   * stopBaselineRetry(); // safe whether or not the loop is armed
+   * ```
+   */
+  function stopBaselineRetry(): void {
+    if (baselineRetryTimer !== null) {
+      clearInterval(baselineRetryTimer);
+      baselineRetryTimer = null;
+    }
   }
 
   /**
@@ -334,6 +388,11 @@ export function createSyncEngine(
       if (config.maxOpsPerDelta < 0) {
         throw new Error(
           `${ERROR_PREFIX} sync.maxOpsPerDelta must be >= 0 (got ${config.maxOpsPerDelta}).\n  Set a non-negative value in pluginConfigs.sync.maxOpsPerDelta.`
+        );
+      }
+      if (!Number.isFinite(config.baselineRetryMs) || config.baselineRetryMs < 0) {
+        throw new Error(
+          `${ERROR_PREFIX} sync.baselineRetryMs must be >= 0 (got ${config.baselineRetryMs}).\n  Set 0 to disable the not-ready baseline retry, or a positive ms cadence in pluginConfigs.sync.baselineRetryMs.`
         );
       }
 
@@ -529,6 +588,14 @@ export function createSyncEngine(
         state.throttleHandle = null;
       }
       state.broadcasting = false;
+    },
+
+    startBaselineRetry() {
+      startBaselineRetry();
+    },
+
+    stopBaselineRetry() {
+      stopBaselineRetry();
     }
   };
   /* eslint-enable jsdoc/require-jsdoc */

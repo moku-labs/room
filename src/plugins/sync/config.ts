@@ -16,6 +16,13 @@ const DEFAULT_BROADCAST_HZ = 30;
 const DEFAULT_MAX_OPS_PER_DELTA = 512;
 
 /**
+ * Default ms between a not-yet-ready replica's baseline re-requests (`sync-resync` while `ready` is
+ * false). Matches the ~1 s heal cadence of the delta-paced stale retry and intent's first retransmit —
+ * a dropped join `sync-snap` on an idle (pre-game) wire heals after ~1 s instead of wedging.
+ */
+const DEFAULT_BASELINE_RETRY_MS = 1000;
+
+/**
  * The typed default `syncPlugin` config. All fields have safe defaults (the verified couch profile), so
  * composing `[stagePlugin]` / `[controllerPlugin]` needs zero overrides.
  *
@@ -29,5 +36,6 @@ export const DEFAULT_SYNC_CONFIG: Config = {
   broadcastHz: DEFAULT_BROADCAST_HZ,
   skipEmptyDeltas: true,
   maxOpsPerDelta: DEFAULT_MAX_OPS_PER_DELTA,
-  resyncOnGap: true
+  resyncOnGap: true,
+  baselineRetryMs: DEFAULT_BASELINE_RETRY_MS
 };

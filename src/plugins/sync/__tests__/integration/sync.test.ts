@@ -352,7 +352,13 @@ describe("sync integration (inMemory)", () => {
 
     const engine = createSyncEngine(
       state,
-      { broadcastHz: 30, skipEmptyDeltas: true, maxOpsPerDelta: 512, resyncOnGap: true },
+      {
+        broadcastHz: 30,
+        skipEmptyDeltas: true,
+        maxOpsPerDelta: 512,
+        resyncOnGap: true,
+        baselineRetryMs: 1000
+      },
       wire,
       session,
       vi.fn()

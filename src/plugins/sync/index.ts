@@ -49,14 +49,18 @@ export const syncPlugin = createPlugin("sync", {
   hooks: ctx => ({
     "room:peer-joined": payload => ctx.state.engine?.sendBaselineSnapshot(payload.peerId)
   }),
-  // @no-resource-check — onStart/onStop start + stop the 20-30 Hz throttle broadcast loop, torn down via
-  // the D14 per-instance registry (onStop gets `{ global }` only — no `ctx.state`). contracts section 4.3.
+  // @no-resource-check — onStart/onStop start + stop the plugin's two timers (the 20-30 Hz throttle
+  // broadcast loop and the not-ready baseline retry loop), torn down via the D14 per-instance registry
+  // (onStop gets `{ global }` only — no `ctx.state`). contracts section 4.3.
   onStart: ctx => {
     ctx.state.engine?.startBroadcast();
+    ctx.state.engine?.startBaselineRetry();
     teardownRegistry.set(ctx.global, ctx.state);
   },
   onStop: ctx => {
-    teardownRegistry.get(ctx.global)?.engine?.stopBroadcast();
+    const engine = teardownRegistry.get(ctx.global)?.engine;
+    engine?.stopBroadcast();
+    engine?.stopBaselineRetry();
     teardownRegistry.delete(ctx.global);
   }
 });
