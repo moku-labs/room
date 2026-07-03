@@ -30,8 +30,8 @@ are no role arrays.
   AP-isolated / symmetric-NAT / iOS-Private-Relay networks (~15–30%) the connection hard-fails with no recovery;
   surfaces `room:network-warning`. Design target: the home LAN.
 - **Wire vs events (two planes, strictly separate).** The typed `Wire` (`Frame` DataChannel) carries ALL gameplay
-  (intents, snapshots, deltas, heartbeats, recovery, roster). Moku `emit` (`room:*`) carries ONLY coarse lifecycle
-  (5 events). No gameplay ever rides `emit`; no `room:*` event ever carries gameplay.
+  (intents + their receipt acks, snapshots, deltas, resync, heartbeats, recovery, roster). Moku `emit` (`room:*`)
+  carries ONLY coarse lifecycle (6 events). No gameplay ever rides `emit`; no `room:*` event ever carries gameplay.
 - **Star topology, 8-cap.** Stage is the sole hub; NO controller↔controller channels. `MAX_CONTROLLERS = 8`,
   `ROOM_CODE_LENGTH = 6`.
 - **Signaling adapter seam (D12).** Transport talks to discovery only through the DOM-free `Signaling` contract.
@@ -58,7 +58,7 @@ are no role arrays.
 ## Facades (D19)
 
 The two role facades (`stagePlugin`, `controllerPlugin`) are added to a client app via `createApp({ plugins: [...] })`
-and RE-DECLARE all five `room:*` events so a game plugin with `depends: [stagePlugin]` / `[controllerPlugin]` sees the
+and RE-DECLARE all six `room:*` events so a game plugin with `depends: [stagePlugin]` / `[controllerPlugin]` sees the
 full typed hook surface in one edge (event-type visibility is not transitive). They install NO forwarding hooks —
 Moku's event bus is GLOBAL, so engines' `emit("room:*")` already reach every hook regardless of `depends`. Facades
 delegate API methods only; they do not re-emit/proxy events, and own no config.
@@ -72,7 +72,7 @@ facade + its game plugin; there are no role arrays.
 import { createApp, createPlugin, stagePlugin } from "@moku-labs/room";
 
 const game = createPlugin("game", {
-  depends: [stagePlugin], // makes the five room:* events visible
+  depends: [stagePlugin], // makes the six room:* events visible
   hooks: ctx => ({ "room:peer-joined": ({ peerId }) => ctx.log.info(peerId) })
 });
 
@@ -101,7 +101,9 @@ plugin: `ctx.require(stagePlugin)` / `ctx.require(controllerPlugin)`.
 - `joinRoom(code): Promise<void>` — passive join; THROWS `Error("full"|"not-found"|"unreachable")` on failure.
 - `read(ns): Readonly<Record<string, JsonValue>> | undefined` — read the replica.
 - `on(ns, cb): () => void` — subscribe to one namespace.
-- `intent(name, payload): void` — send a typed input over the Wire (never emit); fire-and-forget.
+- `intent(name, payload): void` — send a typed input over the Wire (never emit). Fire-and-forget surface (returns
+  `void`, no reply); delivery is at-least-once — receipt-acked + bounded retransmit, terminal
+  `room:intent-undeliverable` when the budget exhausts.
 - `requestWakeLock(): Promise<boolean>` / `releaseWakeLock(): Promise<void>` — iOS Screen Wake Lock.
 
 ## Quick reference — adapters
@@ -176,9 +178,9 @@ export default {
   `controllerPlugin`.
 - Signaling adapter factories: `publicRendezvous` (default), `inMemory` (tests), `serverSignaling` (opt-in, worker).
 - Contract types (from `transport/protocol`): `Signaling`, `SignalingSession`, `SignalingJoinOpts`, `SignalMsg`,
-  `IceCandidateInit`, `Wire`, `Frame`, `IntentFrame`, `SyncSnapshotFrame`, `SyncDeltaFrame`, `HeartbeatPingFrame`,
-  `HeartbeatPongFrame`, `RecoveryHelloFrame`, `RecoveryWelcomeFrame`, `RecoveryFlushFrame`, `PeerId`, `RosterEntry`,
-  `Snapshot`, `Op`, `JsonValue`, `Namespace`.
+  `IceCandidateInit`, `Wire`, `Frame`, `IntentFrame`, `IntentAckFrame`, `SyncSnapshotFrame`, `SyncDeltaFrame`,
+  `SyncResyncFrame`, `HeartbeatPingFrame`, `HeartbeatPongFrame`, `RecoveryHelloFrame`, `RecoveryWelcomeFrame`,
+  `RecoveryFlushFrame`, `PeerId`, `RosterEntry`, `Snapshot`, `Op`, `JsonValue`, `Namespace`.
 - Contract consts: `MAX_CONTROLLERS` (8), `ROOM_CODE_LENGTH` (6).
 - Event contract: `RoomEvents` (from `src/config.ts`).
 - Plugin-owned public types: `RoomDescriptor`, `JoinResult`, `QrMatrix` (session); `StageApi` (stage); `ControllerApi`
@@ -201,10 +203,10 @@ Just two exports — NOT a core (no `createApp`/`createPlugin`/`createCore`, no 
 |---|---|---|---|---|---|---|
 | `transportPlugin` | Complex | client default | — | WebRTC floor: handshake, chunking/backpressure, heartbeat, capped ICE recovery; owns `Wire`. | `connect`, `wire`, `disconnect`, `peers`, `close` | emits `room:network-warning` |
 | `sessionPlugin` | Complex | client default | transport | Room code + QR + roster; star topology (`hostId()`); host-reload recovery. | `createRoom`, `qr`, `joinRoom`, `leave`, `rejoin`, `roster`, `self`, `hostId`, `hostToken`, `persistSnapshot`, `recoveryPhase` | emits `room:peer-joined`, `room:peer-left`, `room:host-reconnecting` |
-| `intentPlugin` | Standard | client default | transport, session | Controller→host typed inputs; per-controller `cSeq` idempotent de-dup; reconnect buffer. | `register`, `onIntent`, `intent`, `setBuffering`, `drainBuffer`, `bufferedCount` | none |
+| `intentPlugin` | Standard | client default | transport, session | Controller→host typed inputs; at-least-once live delivery (receipt-ack + bounded retransmit); per-controller `cSeq` idempotent de-dup; reconnect buffer. | `register`, `onIntent`, `intent`, `setBuffering`, `drainBuffer`, `bufferedCount` | emits `room:intent-undeliverable` |
 | `syncPlugin` | Complex | client default | transport, session | Host→controller authoritative state: snapshot + throttled op-list deltas (custom codec). | `registerSlice`, `mutate`, `broadcast`, `read`, `subscribe`, `applyFrame`, `exportSnapshot`, `importSnapshot` | emits `room:sync-ready` |
-| `stagePlugin` | Standard (facade) | app-added (host) | all four engines | Host-role facade → `StageApi` (`app.stage`). | `createRoom`, `qr`, `mutate`, `broadcast`, `onIntent`, `roster` | re-declares all five |
-| `controllerPlugin` | Standard (facade) | app-added (controller) | all four engines | Controller-role facade → `ControllerApi` (`app.controller`). | `joinRoom`, `read`, `on`, `intent`, `requestWakeLock`, `releaseWakeLock` | re-declares all five |
+| `stagePlugin` | Standard (facade) | app-added (host) | all four engines | Host-role facade → `StageApi` (`app.stage`). | `createRoom`, `qr`, `mutate`, `broadcast`, `onIntent`, `roster` | re-declares all six |
+| `controllerPlugin` | Standard (facade) | app-added (controller) | all four engines | Controller-role facade → `ControllerApi` (`app.controller`). | `joinRoom`, `read`, `on`, `intent`, `requestWakeLock`, `releaseWakeLock` | re-declares all six |
 | `hubPlugin` | Standard | app-added (worker) | native Cloudflare `env` (DO + KV) | OPT-IN operated signaling tier (`@moku-labs/room/server`); a `@moku-labs/worker` plugin composed into your own worker app. WS-Hibernation `Hub` DO-per-room: handshake + in-band discovery + host-reload reclaim; NO gameplay relay (D2). | `handle(request, env, ctx)` | none |
 
 ## Events — `room:*` (Moku `emit`, coarse lifecycle ONLY)
@@ -215,6 +217,9 @@ ALL gameplay rides the `Wire` (`Frame`s), never these events.
 - `room:peer-left` → `{ peerId: PeerId }` — controller left or heartbeat-declared dead (session).
 - `room:host-reconnecting` → `{}` (`Record<string, never>`) — host reloaded, recovery in flight (session).
 - `room:sync-ready` → `{}` — first full snapshot applied, replica readable (sync).
+- `room:intent-undeliverable` → `{ name: string; cSeq: number }` — a LIVE intent exhausted its bounded retransmit
+  budget with no wire receipt; every intent queued behind it drops with its own event (intent). Buffered intents
+  (host absence) follow the recovery contract instead. A verdict, not a latch — a later `intent()` starts fresh.
 - `room:network-warning` → `{ reason: "ice-failed" | "rendezvous-unreachable" | "channel-closed" | "room-evicted" }`
   — connectivity hard-failure UX hook (transport, D2). `room-evicted` is server-tier only (`serverSignaling` got
   `{kind:"evict"}` from the DO's idle Alarm).
@@ -227,9 +232,14 @@ reload path, POLL `app.session.recoveryPhase()` (non-`"stable"` = recovery in fl
 Discriminated on `t`. `Wire = { send(peerId, frame), broadcast(frame), on(handler) => unsubscribe }`. On a
 controller, `send`/`broadcast` collapse to "send to host".
 
-- `IntentFrame` (`t: "intent"`) — controller→host typed input; `{ name, payload, cSeq }`.
+- `IntentFrame` (`t: "intent"`) — controller→host typed input; `{ name, payload, cSeq }`. At-least-once: receipt-acked
+  by the host, retransmitted (same `cSeq`, safe under de-dup) until acked or the bounded budget exhausts.
+- `IntentAckFrame` (`t: "intent-ack"`) — host→controller wire receipt for a received intent (sent pre-validation,
+  fresh AND duplicate); `{ cSeq }`. Releases the controller's bounded retransmit loop.
 - `SyncSnapshotFrame` (`t: "sync-snap"`) — host→controller full snapshot; `{ snapshot, sSeq }`.
 - `SyncDeltaFrame` (`t: "sync-delta"`) — host→controller op-list delta; `{ ops, sSeq }`.
+- `SyncResyncFrame` (`t: "sync-resync"`) — controller→host gap-heal / baseline re-request; `{ sSeq }`; answered with a
+  full snapshot.
 - `HeartbeatPingFrame` (`t: "ping"`) / `HeartbeatPongFrame` (`t: "pong"`) — `{ ts }` liveness.
 - `RecoveryHelloFrame` (`t: "recovery-hello"`) — controller→host re-entry claim; `{ hostToken, peerId }`.
 - `RecoveryWelcomeFrame` (`t: "recovery-welcome"`) — host→controller ack; `{ hostToken, sSeq }`.
@@ -254,7 +264,10 @@ Internal types (`transport/protocol.ts`; NOT client-barrel exports). The client�
 - session: `joinUrlBase=""`, `generateQr=true`, `maxControllers=8`, `snapshotDebounceMs=500`,
   `reconnectTimeoutMs=10000`, `intentBufferMax=256`, `intentBufferMaxAgeMs=8000`, `storageKeyPrefix="moku.room"`,
   `codeLength=6` (set `8` for `serverSignaling` deployments — D24 room-code-enumeration resistance).
-- intent: `bufferCap=256`, `bufferMaxAgeMs=10000`.
+- intent: `bufferCap=256`, `bufferMaxAgeMs=10000`, `ackTimeoutMs=1000` (wait before an unacked live intent's first
+  retransmit; doubles per attempt), `maxRetransmits=3` (same-frame re-sends before the terminal
+  `room:intent-undeliverable`; `0` = track + signal, never re-send; ≈15 s total silence budget at the defaults —
+  spans the ~10 s heartbeat dead-peer window).
 - sync: `broadcastHz=30` (clamped [5,60]), `skipEmptyDeltas=true`, `maxOpsPerDelta=512`, `resyncOnGap=true`,
   `baselineRetryMs=1000` (an un-`ready` replica re-requests its join baseline on this cadence — heals a
   join `sync-snap` lost on a half-open channel with zero deltas following; `0` disables).
@@ -268,7 +281,7 @@ Internal types (`transport/protocol.ts`; NOT client-barrel exports). The client�
    slices + intent handlers.
 2. Controller scans QR, `await app.controller.joinRoom(code)`; `requestWakeLock()`.
 3. Controller `app.controller.intent("move", {...})` → `IntentFrame` over the Wire → host.
-4. Host `onIntent` validates + de-dups by `cSeq`, then `app.stage.mutate(ns, recipe)`.
+4. Host receipt-acks (`intent-ack`), then `onIntent` validates + de-dups by `cSeq`, then `app.stage.mutate(ns, recipe)`.
 5. Sync coalesces mutates at `broadcastHz` and broadcasts `SyncDeltaFrame`s; new/late joiners get a
    `SyncSnapshotFrame`.
 6. Controller `app.controller.on(ns, cb)` re-renders on each applied frame; first snapshot → `room:sync-ready`.
