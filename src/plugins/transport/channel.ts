@@ -475,6 +475,7 @@ export function startHeartbeat(
  * ```
  */
 export function disconnectPeer(state: TransportState, peerId: PeerId): void {
+  state.earlyCandidates.delete(peerId);
   const peer = state.peers.get(peerId);
   if (!peer) return;
   if (peer.openTimer !== null) clearTimeout(peer.openTimer);
@@ -511,6 +512,11 @@ export async function tearDownState(state: TransportState): Promise<void> {
   state.peerConnectedCb = null;
   state.peerLostCb = null;
   state.warned.clear();
+  state.earlyCandidates.clear();
+  // End the ICE epoch: nulling `icePending` also disarms a still-in-flight provider resolution (its
+  // stale-epoch guard sees the mismatch), so the next connect() re-primes with fresh credentials.
+  state.iceServers = null;
+  state.icePending = null;
   await session?.leave();
 }
 

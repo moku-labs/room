@@ -24,7 +24,8 @@ are no role arrays.
 - **Stage vs controller.** Stage = the shared TV/laptop screen, the authoritative HOST and star hub: owns game
   state, validates inputs, broadcasts state, calls `createRoom()`. Controller = a phone, a passive peer: joins by
   code, sends typed intents, renders a read-only state replica.
-- **Peer-to-peer, no game server (D2 — accepted hard-failure).** Strictly P2P, NO TURN ever. Stage `createRoom()`
+- **Peer-to-peer, no game server (D2 — accepted hard-failure).** Strictly P2P; Room operates no TURN and adds
+  none by default (a consumer MAY inject its own STUN/TURN via `iceServers`). Stage `createRoom()`
   → 6-char code → QR → both devices join a public rendezvous (Trystero/Nostr by default) → one-time SDP/ICE
   handshake over public relays → direct P2P DataChannels on the LAN. The rendezvous never carries gameplay. On
   AP-isolated / symmetric-NAT / iOS-Private-Relay networks (~15–30%) the connection hard-fails with no recovery;
@@ -259,7 +260,10 @@ Internal types (`transport/protocol.ts`; NOT client-barrel exports). The client�
 
 ## Config defaults (override via createApp pluginConfigs)
 
-- transport: `signaling=publicRendezvous()`, `iceServers=[one public STUN]`, `heartbeatIntervalMs=2000`,
+- transport: `signaling=publicRendezvous()`, `iceServers=[one public STUN]` (array OR lazy async provider
+  `() => Promise<readonly RTCIceServer[] | undefined>` — invoked at connect(), parallel with the signaling join,
+  resolved just before the first RTCPeerConnection; undefined/throw/timeout fails open to the STUN default),
+  `iceTransportPolicy="all"` (`"relay"` = deterministic force-relay test mode), `heartbeatIntervalMs=2000`,
   `heartbeatTimeoutMs=6000`, `openTimeoutMs=3000`, `maxMessageBytes=14336`.
 - session: `joinUrlBase=""`, `generateQr=true`, `maxControllers=8`, `snapshotDebounceMs=500`,
   `reconnectTimeoutMs=10000`, `intentBufferMax=256`, `intentBufferMaxAgeMs=8000`, `storageKeyPrefix="moku.room"`,

@@ -26,6 +26,9 @@ export function createTransportState(): TransportState {
     frameConsumers: new Set(),
     peerConnectedCb: null,
     peerLostCb: null,
-    warned: new Set()
+    warned: new Set(),
+    iceServers: null,
+    icePending: null,
+    earlyCandidates: new Map()
   };
 }

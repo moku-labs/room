@@ -12,6 +12,7 @@
 import type { RoomEvents } from "../../config";
 import { createWire, disconnectPeer, startHeartbeat, tearDownState } from "./channel";
 import { handlePeerArrival, handlePeerLeave, handleSignal } from "./handlers";
+import { primeIceServers } from "./ice";
 import type { SignalingJoinOpts, Wire } from "./protocol";
 import type { ConnectOpts, TransportApi, TransportConfig, TransportState } from "./types";
 
@@ -47,6 +48,10 @@ export function createTransportApi(
     async connect(opts: ConnectOpts): Promise<void> {
       state.role = opts.role;
       state.selfId = opts.selfId;
+      // Prime ICE resolution FIRST (fire-and-forget): an `IceServersProvider`'s credential fetch runs
+      // concurrently with the signaling join below, and peer creation waits on it — connect() never
+      // does. Array config just mirrors into state here.
+      primeIceServers(state, cfg);
       // Idempotent: a prior live session is released before rejoining so it cannot leak (contracts §1.2).
       if (state.session) {
         await state.session.leave().catch(() => {

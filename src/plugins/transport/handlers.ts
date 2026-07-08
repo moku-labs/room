@@ -15,6 +15,7 @@
 import type { RoomEvents } from "../../config";
 import type { LoopbackSignaling, WireChannel } from "./channel";
 import { bindPeerChannel } from "./channel";
+import { iceServersReady, peekIceServers } from "./ice";
 import type { IceCandidateInit, PeerId, SignalingSession, SignalMsg } from "./protocol";
 import type { PeerConnection, TransportConfig, TransportState } from "./types";
 
@@ -27,6 +28,12 @@ type EmitWarning = (reason: RoomEvents["room:network-warning"]["reason"]) => voi
  * mitigation so a permanently-unreachable peer cannot drive an infinite offer/answer loop.
  */
 const MAX_OPEN_RETRIES = 3;
+
+/**
+ * Cap on buffered early ICE candidates per peer (a normal gather trickles well under 16; the cap only
+ * guards against a misbehaving remote flooding the buffer while an `IceServersProvider` resolves).
+ */
+const MAX_EARLY_CANDIDATES = 16;
 
 /**
  * User-defined type guard: narrows a `SignalingSession` to one that ALSO exposes the transport-internal
@@ -77,20 +84,25 @@ function asLoopback(session: TransportState["session"]): LoopbackSignaling | nul
  * schedules a signaling `leave()` once the channel is up (contracts section 1.2).
  *
  * @param state - The per-app transport state holding the peer map and signaling session.
- * @param cfg - The transport config (ICE servers).
+ * @param cfg - The transport config (ICE transport policy, session lifecycle).
  * @param peerId - The peer id to create the connection for.
+ * @param iceServers - The ICE servers resolved for this epoch (array config or provider resolution).
  * @returns The newly-created and registered `PeerConnection` record.
  * @example
  * ```ts
- * const peer = createPeer(state, cfg, "p_ab12");
+ * const peer = createPeer(state, cfg, "p_ab12", await iceServersReady(state, cfg));
  * ```
  */
 function createPeer(
   state: TransportState,
   cfg: Readonly<TransportConfig>,
-  peerId: PeerId
+  peerId: PeerId,
+  iceServers: readonly RTCIceServer[]
 ): PeerConnection {
-  const pc = new RTCPeerConnection({ iceServers: [...cfg.iceServers] });
+  const pc = new RTCPeerConnection({
+    iceServers: [...iceServers],
+    iceTransportPolicy: cfg.iceTransportPolicy
+  });
   const peer: PeerConnection = {
     peerId,
     pc,
@@ -240,7 +252,53 @@ export function handlePeerArrival(
 
   // Real WebRTC path: only the active host offers on peer arrival.
   if (state.role !== "host") return;
-  const peer = createPeer(state, cfg, peerId);
+
+  // Fast path — ICE servers already known (array config, or the provider resolved): offer now.
+  const known = peekIceServers(state, cfg);
+  if (known) {
+    offerToPeer(state, cfg, peerId, emitWarning, retries, known);
+    return;
+  }
+
+  // Provider still resolving: defer the offer until the servers land (bounded, fail-open wait).
+  // Re-check the world after the await — the session may have been torn down, or a concurrent path
+  // may have created the peer already.
+  iceServersReady(state, cfg)
+    .then(servers => {
+      if (!state.session || state.peers.has(peerId)) return;
+      offerToPeer(state, cfg, peerId, emitWarning, retries, servers);
+    })
+    .catch(() => {
+      // unreachable — iceServersReady never rejects (fail-open contract)
+    });
+}
+
+/**
+ * The host's offer flow for one peer, with the epoch's ICE servers in hand: mints the
+ * `RTCPeerConnection` + DataChannel, arms the open-timeout retry, and sends the offer over the
+ * signaling plane. The synchronous tail of {@link handlePeerArrival} (which resolves the ICE servers
+ * first when an `IceServersProvider` is configured).
+ *
+ * @param state - The per-app transport state holding the peer map and signaling session.
+ * @param cfg - The transport config (open timeout, ICE transport policy).
+ * @param peerId - The peer to offer to.
+ * @param emitWarning - Narrowed `room:network-warning` emitter; fired with `ice-failed` once retries exhaust.
+ * @param retries - Open-timeout retries already spent for this peer.
+ * @param iceServers - The resolved ICE servers for this epoch.
+ * @example
+ * ```ts
+ * offerToPeer(state, cfg, "p_ab12", emitWarning, 0, servers);
+ * ```
+ */
+function offerToPeer(
+  state: TransportState,
+  cfg: Readonly<TransportConfig>,
+  peerId: PeerId,
+  emitWarning: EmitWarning,
+  retries: number,
+  iceServers: readonly RTCIceServer[]
+): void {
+  const peer = createPeer(state, cfg, peerId, iceServers);
   peer.retries = retries;
   const channel = peer.pc.createDataChannel("room", { ordered: true });
   channel.addEventListener("open", () => {
@@ -329,12 +387,16 @@ export function handleSignal(
 ): void {
   if (asLoopback(state.session)) return;
   if (msg.kind === "candidate") {
-    state.peers
-      .get(peerId)
-      ?.pc.addIceCandidate(msg.candidate)
-      .catch(() => {
-        // addIceCandidate failure is non-fatal; trickle-ICE may deliver candidates out of order
-      });
+    const peer = state.peers.get(peerId);
+    // No pc yet (the answerer may still be awaiting an IceServersProvider): buffer, don't drop —
+    // losing the host's whole trickle here would silently cost an open-timeout retry beat.
+    if (!peer) {
+      bufferEarlyCandidate(state, peerId, msg.candidate);
+      return;
+    }
+    peer.pc.addIceCandidate(msg.candidate).catch(() => {
+      // addIceCandidate failure is non-fatal; trickle-ICE may deliver candidates out of order
+    });
     return;
   }
   if (msg.kind === "answer") {
@@ -349,8 +411,16 @@ export function handleSignal(
   // msg.kind === "offer" — apply it and answer back.
   const sdp = msg.sdp;
   (async (): Promise<void> => {
-    const peer = state.peers.get(peerId) ?? createAnswerer(state, cfg, peerId);
+    let peer = state.peers.get(peerId);
+    if (!peer) {
+      // Resolve the epoch's ICE servers first (a provider may still be in flight; bounded fail-open
+      // wait) — then re-check the map so two racing offers cannot double-create the answerer.
+      const iceServers = await iceServersReady(state, cfg);
+      peer = state.peers.get(peerId) ?? createAnswerer(state, cfg, peerId, iceServers);
+    }
     await peer.pc.setRemoteDescription({ type: "offer", sdp });
+    // The remote description is in — candidates buffered while the pc didn't exist can flow now.
+    flushEarlyCandidates(state, peerId);
     const answer = await peer.pc.createAnswer();
     await peer.pc.setLocalDescription(answer);
     state.session?.send(peerId, { kind: "answer", sdp: answer.sdp ?? "" });
@@ -360,26 +430,78 @@ export function handleSignal(
 }
 
 /**
+ * Buffers an inbound ICE candidate that arrived before its peer's `RTCPeerConnection` exists (the
+ * answerer path can be awaiting an `IceServersProvider` while the host trickles). Bounded at
+ * {@link MAX_EARLY_CANDIDATES} per peer; overflow is dropped (non-fatal — same contract as an
+ * out-of-order `addIceCandidate` failure).
+ *
+ * @param state - The per-app transport state holding the early-candidate buffers.
+ * @param peerId - The peer the candidate belongs to.
+ * @param candidate - The candidate to buffer.
+ * @example
+ * ```ts
+ * if (!state.peers.has(peerId)) bufferEarlyCandidate(state, peerId, msg.candidate);
+ * ```
+ */
+function bufferEarlyCandidate(
+  state: TransportState,
+  peerId: PeerId,
+  candidate: IceCandidateInit
+): void {
+  const buffer = state.earlyCandidates.get(peerId) ?? [];
+  if (buffer.length >= MAX_EARLY_CANDIDATES) return;
+  buffer.push(candidate);
+  state.earlyCandidates.set(peerId, buffer);
+}
+
+/**
+ * Applies (and clears) a peer's buffered early ICE candidates. Called once the peer's remote
+ * description has been applied — the earliest point `addIceCandidate` is valid.
+ *
+ * @param state - The per-app transport state holding the early-candidate buffers.
+ * @param peerId - The peer whose buffered candidates should be applied.
+ * @example
+ * ```ts
+ * await peer.pc.setRemoteDescription({ type: "offer", sdp });
+ * flushEarlyCandidates(state, peerId);
+ * ```
+ */
+function flushEarlyCandidates(state: TransportState, peerId: PeerId): void {
+  const buffered = state.earlyCandidates.get(peerId);
+  if (!buffered) return;
+  state.earlyCandidates.delete(peerId);
+  const peer = state.peers.get(peerId);
+  if (!peer) return;
+  for (const candidate of buffered) {
+    peer.pc.addIceCandidate(candidate).catch(() => {
+      // addIceCandidate failure is non-fatal; trickle-ICE may deliver candidates out of order
+    });
+  }
+}
+
+/**
  * Creates a passive answerer peer for the controller side: mints the `RTCPeerConnection`, wires the
  * `ondatachannel` callback that binds the host-offered DataChannel once it arrives, and arms the
  * open-timeout guard. The `RTCPeerConnection` is created before the remote description so it is ready
  * to accept the offer and negotiate ICE.
  *
  * @param state - The per-app transport state holding the peer map.
- * @param cfg - The transport config (ICE servers, open timeout).
+ * @param cfg - The transport config (ICE transport policy, open timeout).
  * @param peerId - The host peer id this answerer will connect to.
+ * @param iceServers - The resolved ICE servers for this epoch.
  * @returns The newly-created `PeerConnection` record in `"connecting"` state.
  * @example
  * ```ts
- * const peer = createAnswerer(state, cfg, "host_root");
+ * const peer = createAnswerer(state, cfg, "host_root", await iceServersReady(state, cfg));
  * ```
  */
 function createAnswerer(
   state: TransportState,
   cfg: Readonly<TransportConfig>,
-  peerId: PeerId
+  peerId: PeerId,
+  iceServers: readonly RTCIceServer[]
 ): PeerConnection {
-  const peer = createPeer(state, cfg, peerId);
+  const peer = createPeer(state, cfg, peerId, iceServers);
   /**
    * Receives the host-offered DataChannel, clears the open timer on `open`, and binds the receive pump.
    *
@@ -418,6 +540,7 @@ function createAnswerer(
  * ```
  */
 export function handlePeerLeave(state: TransportState, peerId: PeerId): void {
+  state.earlyCandidates.delete(peerId);
   const peer = state.peers.get(peerId);
   if (!peer || peer.state === "connected") return;
   if (peer.openTimer !== null) clearTimeout(peer.openTimer);
