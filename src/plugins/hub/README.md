@@ -15,9 +15,11 @@ every path is testable before deploy.
 ## Responsibilities
 
 1. **`hub` plugin** (`api.ts`) — a thin `handle(request, env, ctx)`: `Upgrade: websocket` → the
-   per-room `Hub` DO (after a per-IP rate-limit check); everything else → `env.ASSETS.fetch` (the
-   built web client). No HTTP/REST endpoints (D21 — default endpoint only, one WS protocol). The DO, KV,
-   and ASSETS are reached through the per-request native Cloudflare `env` (read directly off `env`, no plugin `depends`).
+   per-room `Hub` DO (after a per-IP rate-limit check); `GET /api/ice` → the TURN-credential mint
+   (`ice.ts` — see *Internet play* below); everything else → `env.ASSETS.fetch` (the built web
+   client). One WS protocol (D21); `/api/ice` is the single HTTP endpoint, and it is an *upgrade*,
+   never a dependency. The DO, KV, ASSETS, and TURN secrets are reached through the per-request
+   native Cloudflare `env` (read directly off `env`, no plugin `depends`).
 2. **`Hub` Durable Object** (`hub-do.ts`, a plain Cloudflare DO class — co-located, NOT a
    plugin, D6/I3) — Hibernation accept; a discriminated `ClientEnvelope.kind` switch
    (`join` / `reclaim` / `relay` — **no gameplay-relay case**); star-topology enforcement
@@ -32,7 +34,7 @@ every path is testable before deploy.
 
 | Method | Signature | Notes |
 |---|---|---|
-| `handle` | `(request, env, ctx) => Promise<Response>` | The sole worker fetch handler. WS upgrade → per-room DO (`429` over the rate limit, `400` without a room code); else → `env.ASSETS`. |
+| `handle` | `(request, env, ctx) => Promise<Response>` | The sole worker fetch handler. WS upgrade → per-room DO (`429` over the rate limit, `400` without a room code); `GET /api/ice` → the TURN-credential mint; else → `env.ASSETS`. |
 
 ## Configuration (`pluginConfigs.hub`)
 
@@ -42,6 +44,7 @@ every path is testable before deploy.
 | `doClassName` | `"Hub"` | The exported DO class. |
 | `assetsBinding` | `"ASSETS"` | Static-assets binding serving the web client. |
 | `rateLimit` | `{ joins: 30, windowSec: 60, kvBinding: "RATE_LIMIT" }` | Per-IP join rate limit (D24). |
+| `ice` | `{ path: "/api/ice", keyIdBinding: "TURN_KEY_ID", apiTokenBinding: "TURN_KEY_API_TOKEN", rateLimit: { max: 30, windowSec: 60 } }` | The TURN-credential endpoint: route path, the two worker-secret names it mints with, and its own per-IP mint budget (same KV as `rateLimit.kvBinding`). |
 | `joinWindowMs` | `10_000` | Reject a `join` arriving later than this after the socket opened (D24). |
 | `roomTtlMs` | `1_800_000` | Idle TTL before the Alarm tears the room down (fires only at 0 sockets). |
 
@@ -69,13 +72,34 @@ re-announces the host so controllers re-handshake — the room survives the relo
 `room:network-warning {reason:"room-evicted"}`, emitted **browser-side** by the `serverSignaling` adapter on
 receipt of `{kind:"evict"}` — never by this plugin.
 
+## Internet play (zero-config TURN)
+
+The relay rung splits cleanly across the two frameworks — the app writes **zero** ICE code:
+
+- **`GET /api/ice`** (`ice.ts`, this plugin) mints short-lived Cloudflare Realtime TURN credentials
+  (4 h TTL, `Cache-Control: no-store`, per-IP rate-limited through the same `RATE_LIMIT` KV) when
+  the deployment carries the two TURN secrets. Without them it answers a **quiet empty `200 {}`** —
+  an expected state (every local dev run), never a red console line; the browser transport fails
+  open onto its public-STUN default. Real failures stay loud: `405` / `429` / `502`.
+- **The secrets** are provisioned by `@moku-labs/worker`'s **`turnPlugin`** (worker ≥ 0.16) — a
+  first-class resource plugin, the same shape as `kvPlugin`: declare
+  `pluginConfigs.turn = { relay: { name: "myapp-turn" } }` in the app's worker composition and
+  every successful `deploy` ensures the key (idempotent secret check → key creation → bind; strictly
+  fail-open + `--ci` safe — an impediment prints one instruction line and the deploy continues).
+  The hub itself stays a pure runtime plugin: it only READS the secrets off `env`. You can also
+  bind them by hand (`wrangler secret put TURN_KEY_ID / TURN_KEY_API_TOKEN`).
+- **The browser side** is the transport's `iceServers: "auto"` default (see
+  `../transport/README.md`): `serverSignaling` exposes the derived `iceEndpoint`, and `"auto"`
+  fetches `/api/ice` lazily, in parallel with the signaling join.
+
 ## Deployment (app-side — D26)
 
 Room ships **no `wrangler.jsonc`**. The consuming app composes `hubPlugin` into its own `@moku-labs/worker`
 `createApp` — alongside `durableObjectsPlugin` (the `ROOM_HUB` DO + SQLite migration), `kvPlugin` (the
 `RATE_LIMIT` namespace), and `deployPlugin`/`cliPlugin`, which **generate** the `wrangler.jsonc` (plus an
 `ASSETS` binding for its built web client). Its `cloudflare/worker.ts` delegates `{ fetch }` to
-`server.hub.handle` and re-exports the `Hub` DO class for the wrangler binding.
+`server.hub.handle` and re-exports the `Hub` DO class for the wrangler binding. For internet play,
+add worker's `turnPlugin` + one `pluginConfigs.turn` line (see *Internet play* above).
 
 ## Testing
 

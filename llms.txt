@@ -24,12 +24,14 @@ are no role arrays.
 - **Stage vs controller.** Stage = the shared TV/laptop screen, the authoritative HOST and star hub: owns game
   state, validates inputs, broadcasts state, calls `createRoom()`. Controller = a phone, a passive peer: joins by
   code, sends typed intents, renders a read-only state replica.
-- **Peer-to-peer, no game server (D2 — accepted hard-failure).** Strictly P2P; Room operates no TURN and adds
-  none by default (a consumer MAY inject its own STUN/TURN via `iceServers`). Stage `createRoom()`
+- **Peer-to-peer, no game server (D2 — accepted hard-failure on the default tier).** Strictly P2P; under the
+  default `publicRendezvous` tier Room operates no TURN and adds none (a consumer MAY inject its own STUN/TURN
+  via `iceServers`). Stage `createRoom()`
   → 6-char code → QR → both devices join a public rendezvous (Trystero/Nostr by default) → one-time SDP/ICE
   handshake over public relays → direct P2P DataChannels on the LAN. The rendezvous never carries gameplay. On
   AP-isolated / symmetric-NAT / iOS-Private-Relay networks (~15–30%) the connection hard-fails with no recovery;
-  surfaces `room:network-warning`. Design target: the home LAN.
+  surfaces `room:network-warning`. Design target: the home LAN. The opt-in SERVER tier closes that gap with
+  zero-config TURN (see the operated-tier bullet): ICE races local/STUN/relay pairs and picks the best.
 - **Wire vs events (two planes, strictly separate).** The typed `Wire` (`Frame` DataChannel) carries ALL gameplay
   (intents + their receipt acks, snapshots, deltas, resync, heartbeats, recovery, roster). Moku `emit` (`room:*`)
   carries ONLY coarse lifecycle (6 events). No gameplay ever rides `emit`; no `room:*` event ever carries gameplay.
@@ -40,9 +42,21 @@ are no role arrays.
   `{ server: true }` to simulate the server protocol), and `serverSignaling(url)` (opt-in, worker-backed; lazy-loaded).
 - **Optional operated signaling tier (D21/D25, `@moku-labs/room/server`).** An opt-in server tier: a Cloudflare Worker
   with ONE Durable Object per room (`Hub`, WebSocket Hibernation). Reached via `serverSignaling(url)`. Brokers
-  SIGNALING ONLY — handshake + in-band discovery + host-reload reclaim; NO gameplay relay, so **D2 still holds**
-  (gameplay stays strict P2P, no TURN). The `hub` is a `@moku-labs/worker` plugin you compose into your own
+  SIGNALING ONLY — handshake + in-band discovery + host-reload reclaim; the DO has NO gameplay-relay path, so
+  **D2 still holds** (gameplay stays P2P DataChannels — on a hostile NAT the candidate pair may ride a Cloudflare
+  TURN relay, never the DO). The `hub` is a `@moku-labs/worker` plugin you compose into your own
   `@moku-labs/worker` app; at runtime it reaches the DO + KV + ASSETS through the per-request native Cloudflare `env`.
+  **Zero-config internet play:** the hub also serves `GET /api/ice` — short-lived Cloudflare Realtime TURN
+  credentials (quiet empty `200 {}` when un-provisioned, per-IP rate-limited, `Cache-Control: no-store`), minted
+  from the two worker secrets (`TURN_KEY_ID`/`TURN_KEY_API_TOKEN` by default). The secrets are provisioned by
+  `@moku-labs/worker`'s `turnPlugin` (worker ≥ 0.16) — a FIRST-CLASS resource plugin the app declares next to its
+  KV (`pluginConfigs.turn = { relay: { name } }`); every successful `deploy` ensures the key (idempotent secret
+  check → `POST /accounts/{account_id}/calls/turn_keys` → bind; needs Calls: Edit on `CLOUDFLARE_API_TOKEN`,
+  which `auth setup` lists automatically). Strictly fail-open + `--ci` safe: any impediment prints ONE actionable
+  line and the deploy continues (degraded to STUN, not broken). The hub itself stays runtime-only — it just READS
+  the secrets off `env`. Browser-side, `serverSignaling` exposes the derived `iceEndpoint` and the `iceServers`
+  DEFAULT sentinel `"auto"` resolves to the built-in lazy `/api/ice` provider (2 s bound, fail-open; STUN off the
+  server tier); the default `iceTransportPolicy="all"` honors the `?ice=relay` force-relay diagnostic toggle.
   A `serverSignaling` session is `persistent: true` —
   transport keeps the WS open past ICE as the discovery-push + reclaim conduit (vs. `publicRendezvous`/`inMemory`
   which discard the session once connected). The DO mints a `reclaimToken` on join → `session` persists it → replays
@@ -169,7 +183,8 @@ export default {
 - `src/plugins/transport/protocol.ts` — the single physical home for the wire/signaling protocol: all shared types,
   the two consts, the `Frame` union, and the §1.3 `ClientEnvelope`/`ServerEnvelope` server-protocol unions.
 - `src/plugins/hub/` — the opt-in server plugin: `api.ts` (`handle`), `hub-do.ts` (the `Hub` Durable Object,
-  co-located — `defineDurableObject`, NOT a plugin), `sqlite.ts` (roster + reclaim tokens), `config.ts`, `state.ts`.
+  co-located — `defineDurableObject`, NOT a plugin), `ice.ts` (the `GET /api/ice` TURN-credential mint),
+  `sqlite.ts` (roster + reclaim tokens), `config.ts`, `state.ts`.
 
 ## Public export surface (from src/index.ts)
 
@@ -260,10 +275,12 @@ Internal types (`transport/protocol.ts`; NOT client-barrel exports). The client�
 
 ## Config defaults (override via createApp pluginConfigs)
 
-- transport: `signaling=publicRendezvous()`, `iceServers=[one public STUN]` (array OR lazy async provider
+- transport: `signaling=publicRendezvous()`, `iceServers="auto"` (the default sentinel: `serverSignaling` → the
+  built-in lazy `/api/ice` provider, else one public STUN; ALSO accepts an array or a lazy async provider
   `() => Promise<readonly RTCIceServer[] | undefined>` — invoked at connect(), parallel with the signaling join,
-  resolved just before the first RTCPeerConnection; undefined/throw/timeout fails open to the STUN default),
-  `iceTransportPolicy="all"` (`"relay"` = deterministic force-relay test mode), `heartbeatIntervalMs=2000`,
+  resolved just before the first RTCPeerConnection; undefined/throw/timeout fails open to the STUN default; any
+  explicit value, even `[]`, replaces the sentinel), `iceTransportPolicy="all"` (`"relay"` = deterministic
+  force-relay test mode; the default also honors the `?ice=relay` page-URL toggle), `heartbeatIntervalMs=2000`,
   `heartbeatTimeoutMs=6000`, `openTimeoutMs=3000`, `maxMessageBytes=14336`.
 - session: `joinUrlBase=""`, `generateQr=true`, `maxControllers=8`, `snapshotDebounceMs=500`,
   `reconnectTimeoutMs=10000`, `intentBufferMax=256`, `intentBufferMaxAgeMs=8000`, `storageKeyPrefix="moku.room"`,
@@ -276,7 +293,9 @@ Internal types (`transport/protocol.ts`; NOT client-barrel exports). The client�
   `baselineRetryMs=1000` (an un-`ready` replica re-requests its join baseline on this cadence — heals a
   join `sync-snap` lost on a half-open channel with zero deltas following; `0` disables).
 - hub (server tier, `pluginConfigs.hub`): `doBinding="ROOM_HUB"`, `doClassName="Hub"`, `assetsBinding="ASSETS"`,
-  `rateLimit={joins:30,windowSec:60,kvBinding:"RATE_LIMIT"}`, `joinWindowMs=10000`, `roomTtlMs=1800000`.
+  `rateLimit={joins:30,windowSec:60,kvBinding:"RATE_LIMIT"}`,
+  `ice={path:"/api/ice",keyIdBinding:"TURN_KEY_ID",apiTokenBinding:"TURN_KEY_API_TOKEN",rateLimit:{max:30,windowSec:60}}`,
+  `joinWindowMs=10000`, `roomTtlMs=1800000`.
 - stage / controller: no config (facades own no tunables).
 
 ## End-to-end flow

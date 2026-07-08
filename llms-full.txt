@@ -75,20 +75,22 @@ bun add @moku-labs/room   # client core: that's all — createApp/createPlugin c
 - **Moku `emit`** (`room:*` events) carries **ONLY coarse lifecycle** — the six `room:*` events. No gameplay
   payload ever flows through `emit`, and no `room:*` event ever carries gameplay.
 
-### No game server — D2 accepted hard-failure
+### No game server — D2 accepted hard-failure (default tier)
 
-Room is strictly peer-to-peer with **no TURN relay, ever**. On AP-isolated / symmetric-NAT / iOS-Private-Relay
-networks (~15–30% in the wild) the P2P connection cannot be established and there is **no recovery path** — it
-hard-fails and surfaces `room:network-warning`. The design target is the **home LAN** (everyone in the same room on
-the same Wi-Fi). Treat `room:network-warning` as the failure-UX hook.
+Room is peer-to-peer; the DEFAULT (`publicRendezvous`) tier ships **no TURN relay**. On AP-isolated /
+symmetric-NAT / iOS-Private-Relay networks (~15–30% in the wild) that default cannot establish the P2P connection
+and there is **no recovery path** — it hard-fails and surfaces `room:network-warning`. The design target is the
+**home LAN** (everyone in the same room on the same Wi-Fi). Treat `room:network-warning` as the failure-UX hook.
 
-The opt-in **server tier** (§3.1, §6.7) does NOT relax D2. It reintroduces an operated server for **signaling /
-discovery only** (D21 reverses the *no-operated-server* part of the original decision, but D2's no-relay rule holds):
-the `Hub` DO brokers the handshake + in-band discovery + host-reload reclaim and has **no gameplay-relay path**.
-Once peers connect, gameplay still flows over direct P2P DataChannels with no server hop — only the
-*rendezvous backbone* changes (public relays → your Worker). Room itself operates no TURN and adds none by
-default; a consumer MAY supply its own STUN/TURN via `iceServers` (array or lazy async provider), which upgrades
-the hard-fail networks at the consumer's option while the default stays STUN-only.
+The opt-in **server tier** (§3.1, §6.7) does NOT relax the DO's role. It reintroduces an operated server for
+**signaling / discovery only** (D21 reverses the *no-operated-server* part of the original decision; the `Hub` DO
+brokers the handshake + in-band discovery + host-reload reclaim and has **no gameplay-relay path**). Once peers
+connect, gameplay still flows over P2P DataChannels with no DO hop. The server tier ALSO carries **zero-config
+internet play**: the hub serves `GET /api/ice` (short-lived Cloudflare Realtime TURN credentials) and
+with secrets provisioned by `@moku-labs/worker`'s `turnPlugin` — a first-class resource the app declares
+next to its KV (§6.7); the transport's `iceServers: "auto"` default resolves to a lazy fail-open fetch of that
+endpoint, so ICE races local/STUN/relay pairs and the hard-fail networks connect via the Cloudflare TURN rung. A consumer MAY still supply its own STUN/TURN via `iceServers`
+(array or lazy async provider) — any explicit value disables the built-in default.
 
 ### iOS caveats
 
@@ -788,8 +790,19 @@ Compose it into your own `@moku-labs/worker` `createApp`; reached as `server.hub
 server has no Room event bus). Three parts:
 
 1. **`hub` plugin** (`api.ts`) — a thin fetch router. `handle(request, env, ctx)`: `Upgrade: websocket` → per-room
-   `Hub` DO (after a per-IP rate-limit check; `429` over the limit, `400` without a room code); everything else →
-   `env.ASSETS.fetch` (the built web client). No HTTP/REST endpoints (D21 — default endpoint only, one WS protocol).
+   `Hub` DO (after a per-IP rate-limit check; `429` over the limit, `400` without a room code); `GET /api/ice` →
+   the TURN-credential mint (`ice.ts`); everything else → `env.ASSETS.fetch` (the built web client). One WS
+   protocol (D21); `/api/ice` is the single HTTP endpoint — an upgrade, never a dependency: with no TURN secrets
+   bound it answers a quiet empty `200 {}` (expected on every local dev run), with them it mints short-lived
+   (4 h) credentials from Cloudflare's Realtime TURN service, per-IP rate-limited through the same KV,
+   `Cache-Control: no-store`; real failures stay loud (`405`/`429`/`502`) and the browser fails open to STUN.
+   The secrets themselves are provisioned by `@moku-labs/worker`'s **`turnPlugin`** (worker ≥ 0.16) — a
+   first-class resource plugin the app declares next to its KV (`pluginConfigs.turn = { relay: { name } }`);
+   every successful `deploy` ensures the key in worker's built-in post-deploy phase (idempotent secret check →
+   `POST /accounts/{account_id}/calls/turn_keys` → bind; needs Calls: Edit on `CLOUDFLARE_API_TOKEN`, listed by
+   `auth setup` automatically). Strictly fail-open + `--ci` safe: any impediment prints ONE actionable line and
+   the deploy continues. The hub stays runtime-only — it just READS the secrets off `env` (manual
+   `wrangler secret put` works too).
 2. **`Hub` Durable Object** (`hub-do.ts` — a co-located plain `Hub` class, NOT a plugin, D6/I3) — WebSocket
    Hibernation accept; a `ClientEnvelope.kind` switch (`join` / `reclaim` / `relay` — NO gameplay-relay case);
    star-topology enforcement (passive↔passive never announced); the join-window guard (late `join` → close `1008`);
@@ -829,8 +842,8 @@ verified "couch" profile.
 | Field | Type | Default | Description |
 |---|---|---|---|
 | `signaling` | `Signaling` | `publicRendezvous()` | The signaling seam; discarded once connected. |
-| `iceServers` | `readonly RTCIceServer[] \| IceServersProvider` | one public STUN (`stun.l.google.com:19302`) | ICE servers for every connection. `[]` = LAN-only (mDNS). The provider form (`() => Promise<readonly RTCIceServer[] \| undefined>`) is invoked at `connect()` — parallel with the signaling join — and resolved just before the first `RTCPeerConnection`; `undefined`/throw/timeout fails open onto the STUN default (a late resolution still serves later peers; candidates arriving during the wait are buffered, never dropped). Room adds no TURN itself (D2); supply your own. |
-| `iceTransportPolicy` | `RTCIceTransportPolicy` | `"all"` | Passed to every `RTCPeerConnection`. `"relay"` forces TURN-only candidate pairs — deterministic force-relay test mode. |
+| `iceServers` | `readonly RTCIceServer[] \| IceServersProvider \| "auto"` | `"auto"` | ICE servers for every connection. The `"auto"` sentinel resolves per the signaling adapter: `serverSignaling` (exposes `iceEndpoint`) → the built-in lazy `/api/ice` credential provider (zero-config internet play, §6.7); else one public STUN (`stun.l.google.com:19302`). `[]` = LAN-only (mDNS). The provider form (`() => Promise<readonly RTCIceServer[] \| undefined>`) is invoked at `connect()` — parallel with the signaling join — and resolved just before the first `RTCPeerConnection`; `undefined`/throw/timeout fails open onto the STUN default (a late resolution still serves later peers; candidates arriving during the wait are buffered, never dropped). ANY explicit value, even `[]`, replaces the sentinel. |
+| `iceTransportPolicy` | `RTCIceTransportPolicy` | `"all"` | Passed to every `RTCPeerConnection`. `"relay"` forces TURN-only candidate pairs — deterministic force-relay test mode. The `"all"` default additionally honors the `?ice=relay` page-URL diagnostic toggle. |
 | `heartbeatIntervalMs` | `number` | `2000` | App-layer ping interval. Mandatory (WebKit 303052). |
 | `heartbeatTimeoutMs` | `number` | `6000` | No-pong window before a peer is declared dead. |
 | `openTimeoutMs` | `number` | `3000` | DataChannel-open timeout before retrying the handshake (capped). |
@@ -882,6 +895,7 @@ wake-lock behavior is opt-in via `requestWakeLock()`, not a config flag.
 | `doClassName` | `string` | `"Hub"` | The exported DO class name. |
 | `assetsBinding` | `string` | `"ASSETS"` | Static-assets binding serving the web client. |
 | `rateLimit` | `{ joins; windowSec; kvBinding }` | `{ joins: 30, windowSec: 60, kvBinding: "RATE_LIMIT" }` | Per-IP join rate limit (D24). |
+| `ice` | `{ path; keyIdBinding; apiTokenBinding; rateLimit: { max; windowSec } }` | `{ path: "/api/ice", keyIdBinding: "TURN_KEY_ID", apiTokenBinding: "TURN_KEY_API_TOKEN", rateLimit: { max: 30, windowSec: 60 } }` | The TURN-credential endpoint: route path, the two worker-secret names it mints with (provisioned by worker's `turnPlugin`, or bound by hand), and its per-IP mint budget (counted in `rateLimit.kvBinding`). |
 | `joinWindowMs` | `number` | `10000` | Reject a `join` arriving later than this after the socket opened (D24). |
 | `roomTtlMs` | `number` | `1800000` | Idle TTL before the Alarm tears the room down (fires only at 0 sockets). |
 
@@ -1172,8 +1186,10 @@ JSDoc required on all source exports.
 
 - **D1** — Room is its OWN `@moku-labs/core` framework (reversed by the #4 rebuild — it WAS a plugin pack on
   @moku-labs/web): it calls `createCoreConfig`/`createCore` and EXPORTS `createApp`; consumers `createApp` from it.
-- **D2** — Strict no-server P2P; Room operates/adds no TURN (default STUN-only). Accepted hard-failure on hostile
-  networks; `room:network-warning` is the UX hook. Consumers MAY inject their own STUN/TURN via `iceServers`.
+- **D2** — Strict no-server P2P on the default tier; the DO never relays gameplay. Default STUN-only → accepted
+  hard-failure on hostile networks; `room:network-warning` is the UX hook. The opt-in server tier provisions
+  Cloudflare TURN zero-config (the hub's `/api/ice` + worker's `turnPlugin` resource + the `"auto"` client
+  default); consumers MAY still inject their own STUN/TURN via `iceServers`.
 - **D4** — Custom op-list sync codec (Snapshot + Op deltas), lighter than RFC 6902 JSON Patch.
 - **D5** — intent is split out of sync; role-agnostic engines, role chosen by which facade exposes which methods.
 - **D6** — Correctness-only intent shape-check; trusted living-room threat model (no anti-cheat / rate-limit / HMAC).

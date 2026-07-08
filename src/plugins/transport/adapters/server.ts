@@ -18,6 +18,7 @@
  *  - `session.leave() → ws.close(1000)`
  * @see ../protocol
  */
+import { ICE_PATH } from "../ice-shared";
 import type { Signaling, SignalingJoinOpts, SignalingSession } from "../protocol";
 
 /**
@@ -50,5 +51,32 @@ export function serverSignaling(url: string): Signaling {
     return buildServerSession(url, code, opts);
   };
 
-  return { join };
+  // The hub serves the TURN-credential endpoint on the same origin as its signaling WS — expose it
+  // so transport can default its lazy ICE provider (zero-config internet play; `ice.ts`).
+  return { join, ...maybeIceEndpoint(url) };
+}
+
+/**
+ * Derive the hub's ICE-credential endpoint from its signaling URL via the `URL` API:
+ * `ws(s)://host` → `http(s)://host/api/ice`. An unparsable URL yields no endpoint (fail-open —
+ * `join()` will surface the real error; the ICE default simply stays on STUN).
+ *
+ * @param url - The `ws(s)://…` hub base URL.
+ * @returns `{ iceEndpoint }`, or `{}` when the URL does not parse.
+ * @example
+ * ```ts
+ * maybeIceEndpoint("wss://room.example.com"); // { iceEndpoint: "https://room.example.com/api/ice" }
+ * ```
+ */
+function maybeIceEndpoint(url: string): { iceEndpoint?: string } {
+  try {
+    const endpoint = new URL(url);
+    endpoint.protocol = endpoint.protocol === "wss:" ? "https:" : "http:";
+    endpoint.pathname = ICE_PATH;
+    endpoint.search = "";
+    endpoint.hash = "";
+    return { iceEndpoint: endpoint.toString() };
+  } catch {
+    return {};
+  }
 }

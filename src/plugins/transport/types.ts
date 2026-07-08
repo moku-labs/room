@@ -57,20 +57,24 @@ export type TransportConfig = {
    */
   signaling: Signaling;
   /**
-   * ICE servers passed to every `RTCPeerConnection`, as either a plain array or a lazy async
-   * {@link IceServersProvider}. Default: a single public STUN (`stun.l.google.com:19302`) —
-   * recommended even on-LAN for the iOS-Private-Relay / NAT edge (D11). Override to `[]` to force
-   * LAN-only (mDNS host candidates). The framework itself never adds TURN (D2, amended: the
-   * SIGNALING tier stays serverless-optional) — but a consumer MAY supply TURN relays here, e.g. via
-   * a provider that mints short-lived credentials from its own endpoint; the provider is invoked at
-   * `connect()` (parallel with the signaling join) and resolved just before the first
-   * `RTCPeerConnection` is created, failing open onto the default STUN on `undefined`/throw/timeout.
+   * ICE servers passed to every `RTCPeerConnection`: a plain array, a lazy async
+   * {@link IceServersProvider}, or the DEFAULT sentinel `"auto"`. `"auto"` resolves per the
+   * signaling adapter: server-backed (`serverSignaling` exposes `iceEndpoint`) → the built-in lazy
+   * `/api/ice` credential fetch (the hub mints short-lived TURN credentials when its deployment
+   * carries the TURN secrets — zero-config internet play; strictly fail-open onto the STUN
+   * default); any other adapter → a single public STUN (`stun.l.google.com:19302`, recommended
+   * even on-LAN for the iOS-Private-Relay / NAT edge, D11). Any explicit value replaces the
+   * sentinel wholesale: `[]` forces LAN-only (mDNS host candidates), or supply your own
+   * array/provider. A provider is invoked at `connect()` (parallel with the signaling join) and
+   * resolved just before the first `RTCPeerConnection` is created, failing open onto the default
+   * STUN on `undefined`/throw/timeout.
    */
-  iceServers: readonly RTCIceServer[] | IceServersProvider;
+  iceServers: readonly RTCIceServer[] | IceServersProvider | "auto";
   /**
    * The `iceTransportPolicy` passed to every `RTCPeerConnection`. Default `"all"` (host + srflx +
-   * relay — the platform default). Set `"relay"` to force TURN-only candidate pairs — a deterministic
-   * way to exercise the relay rung end-to-end (e.g. a dev-only force-relay test mode). With `"relay"`
+   * relay — the platform default), which additionally honors the `?ice=relay` page-URL diagnostic
+   * toggle (force TURN-only pairs for the one session that opts in — proves the relay rung
+   * end-to-end). Set `"relay"` to force TURN-only candidate pairs unconditionally. With `"relay"`
    * and no TURN server in `iceServers`, no candidate pairs form and the connection fails by design.
    */
   iceTransportPolicy: RTCIceTransportPolicy;

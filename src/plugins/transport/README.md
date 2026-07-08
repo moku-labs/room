@@ -37,20 +37,36 @@ device-to-host frames ride the `Wire`.
 
 ## Config
 
-`signaling` (default `publicRendezvous()`), `iceServers` (default one public STUN; `[]` for LAN-only;
-also accepts a lazy async provider `() => Promise<readonly RTCIceServer[] | undefined>` — invoked at
+`signaling` (default `publicRendezvous()`), `iceServers` (default the `"auto"` sentinel — see below;
+`[]` for LAN-only; also accepts a plain array or a lazy async provider
+`() => Promise<readonly RTCIceServer[] | undefined>` — invoked at
 `connect()` in parallel with the signaling join, resolved just before the first `RTCPeerConnection`,
 failing open onto the STUN default on `undefined`/throw/timeout; candidates arriving during the wait are
 buffered and flushed once the peer's remote description applies), `iceTransportPolicy` (default `"all"`;
-`"relay"` forces TURN-only pairs — a deterministic force-relay test mode), `heartbeatIntervalMs` (2000),
+`"relay"` forces TURN-only pairs — a deterministic force-relay test mode; the `"all"` default also honors
+the `?ice=relay` page-URL diagnostic toggle), `heartbeatIntervalMs` (2000),
 `heartbeatTimeoutMs` (6000), `openTimeoutMs` (3000), `maxMessageBytes` (14336).
+
+### Zero-config internet play (`iceServers: "auto"`)
+
+The `"auto"` default sentinel resolves per the signaling adapter: server-backed
+(`serverSignaling(url)` exposes a derived `iceEndpoint` — `http(s)://<hub>/api/ice`) → a built-in
+lazy provider that fetches short-lived TURN credentials from the hub (`ice-default.ts`; bounded at
+2 s, strictly fail-open onto the STUN fallback); any other adapter → a single public STUN. The hub
+mints credentials only when its deployment carries the TURN secrets — provisioned by
+`@moku-labs/worker`'s `turnPlugin`, a first-class resource the app declares next to its KV
+(see `../hub/README.md` § Internet play). ANY explicit `iceServers` value — an array (even `[]`) or
+your own provider — replaces the sentinel wholesale.
 
 ## Accepted hard-failure (D2)
 
-Strict no-server P2P: Room operates no TURN and adds none by default (a consumer MAY supply its own via
-`iceServers`). Under the default config, **~15–30% of AP-isolated / symmetric-NAT / iOS-Private-Relay
-networks hard-fail with no recovery path.** These surface `room:network-warning { reason: "ice-failed" }`
-and do not recover. Room's design target is the home LAN (same room, shared AP).
+Strict no-server P2P under the DEFAULT (`publicRendezvous`) tier: Room operates no TURN there and adds
+none. Under that config, **~15–30% of AP-isolated / symmetric-NAT / iOS-Private-Relay networks
+hard-fail with no recovery path.** These surface `room:network-warning { reason: "ice-failed" }` and do
+not recover. Room's design target is the home LAN (same room, shared AP). The opt-in SERVER tier
+(`serverSignaling` + the hub, with the app declaring worker's `turnPlugin`) closes that gap: the
+`"auto"` default fetches Cloudflare TURN credentials from the hub's `/api/ice`, and ICE itself races
+local/STUN/relay candidate pairs and picks the best.
 
 ## v1 GATE
 

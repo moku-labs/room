@@ -10,9 +10,9 @@ import { publicRendezvous } from "./adapter";
 import type { TransportConfig } from "./types";
 
 /**
- * Default ICE servers — a single public STUN. Typed `const` so no inline `as` appears in the config
- * object (R6). Override to `[]` for LAN-only. Also the fail-open target when an `IceServersProvider`
- * resolves `undefined`, throws, or outlasts the bounded wait (ice.ts).
+ * The STUN fallback — a single public STUN server. What the `"auto"` sentinel resolves to off the
+ * server tier, and the fail-open target when an `IceServersProvider` resolves `undefined`, throws,
+ * or outlasts the bounded wait (ice.ts). Typed `const` so no inline `as` appears in config (R6).
  */
 export const DEFAULT_ICE_SERVERS: readonly RTCIceServer[] = [
   { urls: "stun:stun.l.google.com:19302" }
@@ -42,7 +42,7 @@ const DEFAULT_MAX_MESSAGE_BYTES = 14_336;
  */
 export const DEFAULT_TRANSPORT_CONFIG: TransportConfig = {
   signaling: publicRendezvous(),
-  iceServers: DEFAULT_ICE_SERVERS,
+  iceServers: "auto",
   iceTransportPolicy: "all",
   heartbeatIntervalMs: DEFAULT_HEARTBEAT_INTERVAL_MS,
   heartbeatTimeoutMs: DEFAULT_HEARTBEAT_TIMEOUT_MS,

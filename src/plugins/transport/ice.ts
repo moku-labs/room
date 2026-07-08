@@ -12,7 +12,34 @@
  * A resolution that arrives after the bounded wait is still stored for subsequently-created peers.
  */
 import { DEFAULT_ICE_SERVERS } from "./config";
-import type { TransportConfig, TransportState } from "./types";
+import { defaultIceProvider } from "./ice-default";
+import type { IceServersProvider, TransportConfig, TransportState } from "./types";
+
+/**
+ * Resolve the EFFECTIVE `iceServers` source: explicit config (array or provider) wins untouched;
+ * the `"auto"` default sentinel resolves per the signaling adapter — server-backed (it exposes
+ * `iceEndpoint`; `serverSignaling` does) → the built-in lazy `/api/ice` credential provider, any
+ * other adapter → {@link DEFAULT_ICE_SERVERS} (the public-STUN fallback). This is the zero-config
+ * internet-play default: compose a hub, and the relay rung provisions itself — strictly fail-open
+ * back onto the STUN fallback, so a hub without TURN secrets (every local dev run) behaves exactly
+ * like a plain STUN config. Any explicit value (even `[]` for LAN-only) replaces the sentinel.
+ *
+ * @param cfg - The transport config (`iceServers` + the signaling adapter).
+ * @returns The source `prime`/`peek`/`ready` operate on.
+ * @example
+ * ```ts
+ * const source = effectiveIceSource(cfg); // serverSignaling + "auto" → the /api/ice provider
+ * ```
+ */
+export function effectiveIceSource(
+  cfg: Readonly<TransportConfig>
+): readonly RTCIceServer[] | IceServersProvider {
+  const source = cfg.iceServers;
+  if (source !== "auto") return source;
+
+  const endpoint = cfg.signaling.iceEndpoint;
+  return endpoint === undefined ? DEFAULT_ICE_SERVERS : defaultIceProvider(endpoint);
+}
 
 /**
  * Starts (or restarts) ICE-server resolution for a new connection epoch. Array config is mirrored
@@ -29,7 +56,7 @@ import type { TransportConfig, TransportState } from "./types";
  * ```
  */
 export function primeIceServers(state: TransportState, cfg: Readonly<TransportConfig>): void {
-  const source = cfg.iceServers;
+  const source = effectiveIceSource(cfg);
 
   // Array config: resolved by definition — mirror and done.
   if (typeof source !== "function") {
@@ -72,7 +99,8 @@ export function peekIceServers(
   state: TransportState,
   cfg: Readonly<TransportConfig>
 ): readonly RTCIceServer[] | null {
-  return typeof cfg.iceServers === "function" ? state.iceServers : cfg.iceServers;
+  const source = effectiveIceSource(cfg);
+  return typeof source === "function" ? state.iceServers : source;
 }
 
 /**
