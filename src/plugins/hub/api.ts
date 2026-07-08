@@ -7,6 +7,7 @@
  * @see ./hub-do
  * @see .planning/specs/07-hub.md §API
  */
+import { handleIce } from "./ice";
 import type { Api, HubDeps } from "./types";
 
 /**
@@ -44,8 +45,13 @@ export function createApi(deps: HubDeps): Api {
   return {
     /** @inheritdoc */
     async handle(request, env, _exec): Promise<Response> {
-      // 1. Not a WS upgrade → serve the built web client from the static-assets binding.
+      // 1. Not a WS upgrade → the ICE-credential endpoint, else the built web client from ASSETS.
       if (request.headers.get("Upgrade") !== "websocket") {
+        // `/api/ice` mints fail-open TURN relay credentials (internet play) — answered before the
+        // asset fallback so the SPA's single-page-application handling never swallows it.
+        if (new URL(request.url).pathname === config.ice.path) {
+          return handleIce(request, env, config);
+        }
         const assets = env[config.assetsBinding] as Fetcher;
         return assets.fetch(request);
       }

@@ -9,6 +9,7 @@ import { createPlugin } from "@moku-labs/worker";
 import { createApi } from "./api";
 import { defaultConfig } from "./config";
 import { createState } from "./state";
+import type { Api } from "./types";
 
 /* eslint-disable jsdoc/require-jsdoc -- structural wiring callback; domain JSDoc lives in api/types */
 /**
@@ -23,6 +24,6 @@ import { createState } from "./state";
 export const hubPlugin = createPlugin("hub", {
   config: defaultConfig,
   createState,
-  api: ctx => createApi({ config: ctx.config })
+  api: (ctx): Api => createApi({ config: ctx.config })
 });
 /* eslint-enable jsdoc/require-jsdoc */

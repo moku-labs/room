@@ -27,6 +27,20 @@ export type Config = {
     readonly windowSec: number;
     readonly kvBinding: string;
   };
+  /**
+   * The `/api/ice` TURN-credential endpoint: `handle` answers `GET {path}` by minting short-lived
+   * relay credentials from Cloudflare's Realtime TURN service using the two worker secrets bound at
+   * `keyIdBinding`/`apiTokenBinding` (provisioned by `@moku-labs/worker`'s `turnPlugin` when the
+   * app declares one — see the README's Internet play section). Without
+   * the secrets it answers a quiet empty `200 {}` (fail-open: the transport keeps its STUN default).
+   * `rateLimit` is the per-IP mint budget inside one window (counted in the same `rateLimit.kvBinding` KV).
+   */
+  readonly ice: {
+    readonly path: string;
+    readonly keyIdBinding: string;
+    readonly apiTokenBinding: string;
+    readonly rateLimit: { readonly max: number; readonly windowSec: number };
+  };
   /** Reject a `join` arriving more than this many ms after the socket opened (join-window guard, D24). */
   readonly joinWindowMs: number;
   /** Idle TTL before the DO Alarm tears the room down (only fires at 0 live sockets). */

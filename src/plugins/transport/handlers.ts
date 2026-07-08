@@ -16,6 +16,7 @@ import type { RoomEvents } from "../../config";
 import type { LoopbackSignaling, WireChannel } from "./channel";
 import { bindPeerChannel } from "./channel";
 import { iceServersReady, peekIceServers } from "./ice";
+import { effectiveIcePolicy } from "./ice-default";
 import type { IceCandidateInit, PeerId, SignalingSession, SignalMsg } from "./protocol";
 import type { PeerConnection, TransportConfig, TransportState } from "./types";
 
@@ -101,7 +102,8 @@ function createPeer(
 ): PeerConnection {
   const pc = new RTCPeerConnection({
     iceServers: [...iceServers],
-    iceTransportPolicy: cfg.iceTransportPolicy
+    // The configured policy, with the `?ice=relay` force-relay diagnostic honored on the default.
+    iceTransportPolicy: effectiveIcePolicy(cfg.iceTransportPolicy)
   });
   const peer: PeerConnection = {
     peerId,

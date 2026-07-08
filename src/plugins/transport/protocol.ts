@@ -238,6 +238,14 @@ export type Signaling = {
    * @returns A promise resolving to the live {@link SignalingSession}.
    */
   join(code: string, opts: SignalingJoinOpts): Promise<SignalingSession>;
+  /**
+   * (`serverSignaling` only) The hub's TURN-credential endpoint (`http(s)://…/api/ice`), derived
+   * from the hub URL. When present AND the app left `iceServers` at its default, the transport
+   * defaults its lazy ICE provider to a fail-open fetch of this endpoint — zero-config internet
+   * play against a hub that carries the TURN secrets. Adapters without an operated credential
+   * tier (`publicRendezvous`, `inMemory`) simply omit it.
+   */
+  readonly iceEndpoint?: string;
 };
 
 // ---------------------------------------------------------------------------
