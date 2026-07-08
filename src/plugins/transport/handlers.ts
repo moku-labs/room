@@ -261,10 +261,16 @@ export function handlePeerArrival(
   }
 
   // Provider still resolving: defer the offer until the servers land (bounded, fail-open wait).
-  // Re-check the world after the await — the session may have been torn down, or a concurrent path
-  // may have created the peer already.
+  // The continuation re-validates the world after the await: the peer must not have LEFT the
+  // signaling room mid-wait (its `pendingArrivals` entry survives), the connection EPOCH must be
+  // unchanged (no rejoin/teardown swapped the credentials underneath), the session must still be
+  // live, and no concurrent path may have created the peer already.
+  const epoch = state.iceEpoch;
+  state.pendingArrivals.add(peerId);
   iceServersReady(state, cfg)
     .then(servers => {
+      const departed = !state.pendingArrivals.delete(peerId);
+      if (departed || state.iceEpoch !== epoch) return;
       if (!state.session || state.peers.has(peerId)) return;
       offerToPeer(state, cfg, peerId, emitWarning, retries, servers);
     })
@@ -298,6 +304,7 @@ function offerToPeer(
   retries: number,
   iceServers: readonly RTCIceServer[]
 ): void {
+  // Mint the peer + DataChannel, bind the receive pump, arm the open-timeout retry.
   const peer = createPeer(state, cfg, peerId, iceServers);
   peer.retries = retries;
   const channel = peer.pc.createDataChannel("room", { ordered: true });
@@ -314,6 +321,7 @@ function offerToPeer(
     cfg.openTimeoutMs
   );
 
+  // Create the offer and trickle it out over the signaling plane.
   (async (): Promise<void> => {
     const offer = await peer.pc.createOffer();
     await peer.pc.setLocalDescription(offer);
@@ -347,12 +355,17 @@ function retryHandshake(
   peerId: PeerId,
   emitWarning: EmitWarning
 ): void {
+  // Guard: no half-open peer, or it already connected before the timer fired.
   const peer = state.peers.get(peerId);
   if (!peer || peer.state === "connected") return;
+
+  // Tear down the stale peer record; the next stanza decides retry vs give-up.
   const next = peer.retries + 1;
   peer.state = "retrying";
   peer.pc.close();
   state.peers.delete(peerId);
+
+  // Past the cap: warn once (per-peer de-dup) and stop — never re-arm the timer.
   if (next > MAX_OPEN_RETRIES) {
     const key = `ice-failed:${peerId}`;
     if (!state.warned.has(key)) {
@@ -361,6 +374,8 @@ function retryHandshake(
     }
     return;
   }
+
+  // Within the cap: re-enter the arrival flow for a fresh offer/answer exchange.
   handlePeerArrival(state, cfg, peerId, emitWarning, next);
 }
 
@@ -414,8 +429,12 @@ export function handleSignal(
     let peer = state.peers.get(peerId);
     if (!peer) {
       // Resolve the epoch's ICE servers first (a provider may still be in flight; bounded fail-open
-      // wait) — then re-check the map so two racing offers cannot double-create the answerer.
+      // wait) — then re-validate: the connection epoch must be unchanged (a rejoin/teardown mid-wait
+      // means these servers are stale), and re-check the map so two racing offers cannot
+      // double-create the answerer.
+      const epoch = state.iceEpoch;
       const iceServers = await iceServersReady(state, cfg);
+      if (state.iceEpoch !== epoch) return;
       peer = state.peers.get(peerId) ?? createAnswerer(state, cfg, peerId, iceServers);
     }
     await peer.pc.setRemoteDescription({ type: "offer", sdp });
@@ -541,6 +560,9 @@ function createAnswerer(
  */
 export function handlePeerLeave(state: TransportState, peerId: PeerId): void {
   state.earlyCandidates.delete(peerId);
+  // Cancel a host offer still deferred on an ICE-provider wait — the peer is gone; offering to it
+  // after the wait would only burn the full open-timeout retry ladder into a spurious ice-failed.
+  state.pendingArrivals.delete(peerId);
   const peer = state.peers.get(peerId);
   if (!peer || peer.state === "connected") return;
   if (peer.openTimer !== null) clearTimeout(peer.openTimer);

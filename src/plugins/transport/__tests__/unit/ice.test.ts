@@ -288,6 +288,60 @@ describe("RTCPeerConnection construction — resolved servers + iceTransportPoli
     expect(constructedWith).toHaveLength(0);
   });
 
+  it("a peer that LEAVES during the deferred wait never gets an offer (no spurious retry ladder)", async () => {
+    const state = createTransportState();
+    state.role = "host";
+    const session = fakeSession();
+    state.session = session;
+    const gate = deferred<readonly RTCIceServer[] | undefined>();
+    const cfg = makeConfig(() => gate.promise);
+    primeIceServers(state, cfg);
+
+    handlePeerArrival(state, cfg, "p_ab12", noopWarn); // deferred on the provider…
+    handlePeerLeave(state, "p_ab12"); // …and the peer leaves the signaling room mid-wait
+
+    gate.resolve(TURN_SERVERS);
+    await state.icePending;
+    await new Promise(resolve => setTimeout(resolve, 0));
+
+    expect(state.peers.has("p_ab12")).toBe(false);
+    expect(constructedWith).toHaveLength(0);
+    expect(session.send).not.toHaveBeenCalled();
+  });
+
+  it("a REJOIN mid-wait aborts the stale deferred offer (epoch guard — no stale credentials)", async () => {
+    const state = createTransportState();
+    const session = fakeSession();
+    const gate = deferred<readonly RTCIceServer[] | undefined>();
+    let providerCalls = 0;
+    const provider = vi.fn((): Promise<readonly RTCIceServer[] | undefined> => {
+      providerCalls += 1;
+      return providerCalls === 1 ? gate.promise : Promise.resolve(TURN_SERVERS);
+    });
+    const cfg: TransportConfig = {
+      ...makeConfig(provider),
+      signaling: { join: vi.fn().mockResolvedValue(session) }
+    };
+    const api = createTransportApi(state, cfg, noopWarn);
+
+    // Epoch 1: a peer arrives while the (hung) provider is still resolving → offer deferred.
+    await api.connect({ role: "host", selfId: "host_root", code: "K7M2QX" });
+    const onPeer = session.onPeer.mock.calls[0]?.[0] as (peerId: string) => void;
+    onPeer("p_ab12");
+    expect(state.peers.has("p_ab12")).toBe(false);
+
+    // Epoch 2: a rejoin re-primes with fresh credentials before the old wait settles.
+    await api.connect({ role: "host", selfId: "host_root", code: "K7M2QX" });
+
+    // The epoch-1 provider finally lands: the stale continuation must abort, not offer.
+    gate.resolve([{ urls: "turn:stale.example.com" }]);
+    await new Promise(resolve => setTimeout(resolve, 0));
+
+    expect(state.peers.has("p_ab12")).toBe(false);
+    expect(constructedWith).toHaveLength(0);
+    expect(state.iceServers).toBe(TURN_SERVERS); // the CURRENT epoch's credentials won
+  });
+
   it("answerer path (inbound offer) waits on the provider and answers with its servers", async () => {
     const state = createTransportState();
     state.role = "controller";

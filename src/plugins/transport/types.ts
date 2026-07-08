@@ -234,6 +234,20 @@ export type TransportState = {
    * after the peer's remote description is applied, cleared on peer leave/teardown.
    */
   earlyCandidates: Map<PeerId, IceCandidateInit[]>;
+  /**
+   * Connection-epoch counter, bumped by every `connect()` and by teardown. A continuation deferred on
+   * an {@link IceServersProvider} wait captures the epoch it started under and aborts on mismatch —
+   * so a rejoin or `close()` landing mid-wait can never have a stale continuation act with the
+   * PREVIOUS epoch's (possibly expired short-lived TURN) credentials.
+   */
+  iceEpoch: number;
+  /**
+   * Peer ids whose host-side offer is deferred on an in-flight {@link IceServersProvider} wait.
+   * `handlePeerLeave` removes a departing peer's id, so the deferred continuation (which must
+   * successfully delete its own entry to proceed) never offers to a peer that left the signaling
+   * room mid-wait. Cleared on teardown.
+   */
+  pendingArrivals: Set<PeerId>;
 };
 
 /**

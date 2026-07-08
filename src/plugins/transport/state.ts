@@ -29,6 +29,8 @@ export function createTransportState(): TransportState {
     warned: new Set(),
     iceServers: null,
     icePending: null,
-    earlyCandidates: new Map()
+    earlyCandidates: new Map(),
+    iceEpoch: 0,
+    pendingArrivals: new Set()
   };
 }
