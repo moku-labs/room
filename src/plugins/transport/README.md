@@ -37,13 +37,18 @@ device-to-host frames ride the `Wire`.
 
 ## Config
 
-`signaling` (default `publicRendezvous()`), `iceServers` (default one public STUN; `[]` for LAN-only,
-never TURN), `heartbeatIntervalMs` (2000), `heartbeatTimeoutMs` (6000), `openTimeoutMs` (3000),
-`maxMessageBytes` (14336).
+`signaling` (default `publicRendezvous()`), `iceServers` (default one public STUN; `[]` for LAN-only;
+also accepts a lazy async provider `() => Promise<readonly RTCIceServer[] | undefined>` — invoked at
+`connect()` in parallel with the signaling join, resolved just before the first `RTCPeerConnection`,
+failing open onto the STUN default on `undefined`/throw/timeout; candidates arriving during the wait are
+buffered and flushed once the peer's remote description applies), `iceTransportPolicy` (default `"all"`;
+`"relay"` forces TURN-only pairs — a deterministic force-relay test mode), `heartbeatIntervalMs` (2000),
+`heartbeatTimeoutMs` (6000), `openTimeoutMs` (3000), `maxMessageBytes` (14336).
 
 ## Accepted hard-failure (D2)
 
-Strict no-server P2P: no TURN, ever. **~15–30% of AP-isolated / symmetric-NAT / iOS-Private-Relay
+Strict no-server P2P: Room operates no TURN and adds none by default (a consumer MAY supply its own via
+`iceServers`). Under the default config, **~15–30% of AP-isolated / symmetric-NAT / iOS-Private-Relay
 networks hard-fail with no recovery path.** These surface `room:network-warning { reason: "ice-failed" }`
 and do not recover. Room's design target is the home LAN (same room, shared AP).
 

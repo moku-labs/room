@@ -6,7 +6,34 @@
  * `Frame`, `PeerId`, `Signaling`, `SignalingSession`) live in transport's own DOM-free `./protocol`
  * module and are imported here — never re-declared.
  */
-import type { Frame, PeerId, Signaling, SignalingSession, Wire } from "./protocol";
+import type {
+  Frame,
+  IceCandidateInit,
+  PeerId,
+  Signaling,
+  SignalingSession,
+  Wire
+} from "./protocol";
+
+/**
+ * Lazy async ICE-server source — the provider form of {@link TransportConfig.iceServers}. Invoked by
+ * `connect()` (NOT at app boot), so a consumer's credential fetch (e.g. minting short-lived TURN
+ * credentials from its own worker) runs in parallel with the signaling join instead of serially before
+ * `createApp`. The resolved servers are applied to every `RTCPeerConnection` created for this
+ * connection epoch; resolving `undefined` (or throwing) fails open onto the default public-STUN set.
+ * Peer creation waits on the provider at most `openTimeoutMs` before failing open the same way — a
+ * later resolution is still stored and used for subsequently-created peers.
+ *
+ * @returns The ICE servers to use, or `undefined` to keep the default public-STUN set.
+ * @example
+ * ```ts
+ * const provider: IceServersProvider = async () => {
+ *   const res = await fetch("/api/ice", { signal: AbortSignal.timeout(2000) });
+ *   return res.ok ? (await res.json()).iceServers : undefined; // fail open
+ * };
+ * ```
+ */
+export type IceServersProvider = () => Promise<readonly RTCIceServer[] | undefined>;
 
 /**
  * `transportPlugin` configuration. Tunes the WebRTC + DataChannel transport floor. Every timing default
@@ -30,12 +57,23 @@ export type TransportConfig = {
    */
   signaling: Signaling;
   /**
-   * ICE servers passed to every `RTCPeerConnection`. Default: a single public STUN
-   * (`stun.l.google.com:19302`) — recommended even on-LAN for the iOS-Private-Relay / NAT edge (D11).
-   * Override to `[]` to force LAN-only (mDNS host candidates). No TURN is ever added — strict no-server
-   * (D2).
+   * ICE servers passed to every `RTCPeerConnection`, as either a plain array or a lazy async
+   * {@link IceServersProvider}. Default: a single public STUN (`stun.l.google.com:19302`) —
+   * recommended even on-LAN for the iOS-Private-Relay / NAT edge (D11). Override to `[]` to force
+   * LAN-only (mDNS host candidates). The framework itself never adds TURN (D2, amended: the
+   * SIGNALING tier stays serverless-optional) — but a consumer MAY supply TURN relays here, e.g. via
+   * a provider that mints short-lived credentials from its own endpoint; the provider is invoked at
+   * `connect()` (parallel with the signaling join) and resolved just before the first
+   * `RTCPeerConnection` is created, failing open onto the default STUN on `undefined`/throw/timeout.
    */
-  iceServers: readonly RTCIceServer[];
+  iceServers: readonly RTCIceServer[] | IceServersProvider;
+  /**
+   * The `iceTransportPolicy` passed to every `RTCPeerConnection`. Default `"all"` (host + srflx +
+   * relay — the platform default). Set `"relay"` to force TURN-only candidate pairs — a deterministic
+   * way to exercise the relay rung end-to-end (e.g. a dev-only force-relay test mode). With `"relay"`
+   * and no TURN server in `iceServers`, no candidate pairs form and the connection fails by design.
+   */
+  iceTransportPolicy: RTCIceTransportPolicy;
   /**
    * App-layer heartbeat ping interval in ms. Default `2000`. A `ping` is sent to every connected peer
    * every `heartbeatIntervalMs`; the peer echoes a `pong` (contracts section 2.4). MANDATORY — WebKit
@@ -176,6 +214,40 @@ export type TransportState = {
   peerLostCb: ((peerId: PeerId) => void) | null;
   /** Per-reason de-dup guard so a given `room:network-warning` reason is emitted at most once per peer-epoch. */
   warned: Set<string>;
+  /**
+   * ICE servers resolved for the current connection epoch, or `null` before an
+   * {@link IceServersProvider} resolves (array config is mirrored here by `connect()`'s prime).
+   * Peer creation reads this synchronously when available; `close()`/teardown resets it so the next
+   * `connect()` re-invokes the provider (fresh short-lived credentials per epoch).
+   */
+  iceServers: readonly RTCIceServer[] | null;
+  /**
+   * The in-flight {@link IceServersProvider} resolution (never rejects — provider failure resolves to
+   * the default STUN set), or `null` when nothing is pending. Doubles as the stale-epoch guard: a
+   * resolution only writes `iceServers` while it is still the registered pending promise.
+   */
+  icePending: Promise<readonly RTCIceServer[]> | null;
+  /**
+   * Inbound ICE candidates buffered for a peer whose `RTCPeerConnection` does not exist yet — the
+   * answerer path can wait on an {@link IceServersProvider} while the host is already trickling, and
+   * dropping those candidates would silently cost an open-timeout retry. Bounded per peer; flushed
+   * after the peer's remote description is applied, cleared on peer leave/teardown.
+   */
+  earlyCandidates: Map<PeerId, IceCandidateInit[]>;
+  /**
+   * Connection-epoch counter, bumped by every `connect()` and by teardown. A continuation deferred on
+   * an {@link IceServersProvider} wait captures the epoch it started under and aborts on mismatch —
+   * so a rejoin or `close()` landing mid-wait can never have a stale continuation act with the
+   * PREVIOUS epoch's (possibly expired short-lived TURN) credentials.
+   */
+  iceEpoch: number;
+  /**
+   * Peer ids whose host-side offer is deferred on an in-flight {@link IceServersProvider} wait.
+   * `handlePeerLeave` removes a departing peer's id, so the deferred continuation (which must
+   * successfully delete its own entry to proceed) never offers to a peer that left the signaling
+   * room mid-wait. Cleared on teardown.
+   */
+  pendingArrivals: Set<PeerId>;
 };
 
 /**

@@ -475,6 +475,7 @@ export function startHeartbeat(
  * ```
  */
 export function disconnectPeer(state: TransportState, peerId: PeerId): void {
+  state.earlyCandidates.delete(peerId);
   const peer = state.peers.get(peerId);
   if (!peer) return;
   if (peer.openTimer !== null) clearTimeout(peer.openTimer);
@@ -500,17 +501,32 @@ export function disconnectPeer(state: TransportState, peerId: PeerId): void {
  * ```
  */
 export async function tearDownState(state: TransportState): Promise<void> {
+  // Stop the heartbeat loop.
   if (state.heartbeatTimer !== null) {
     clearInterval(state.heartbeatTimer);
     state.heartbeatTimer = null;
   }
+
+  // Disconnect every live peer (clears each peer's open timer, channel, and reassembly state).
   for (const peerId of state.peers.keys()) disconnectPeer(state, peerId);
+
+  // Clear the per-app consumers, warn de-dup state, and any buffered early candidates.
   const session = state.session;
   state.session = null;
   state.frameConsumers.clear();
   state.peerConnectedCb = null;
   state.peerLostCb = null;
   state.warned.clear();
+  state.earlyCandidates.clear();
+
+  // End the ICE epoch: nulling `icePending` also disarms a still-in-flight provider resolution (its
+  // stale-epoch guard sees the mismatch), the epoch bump aborts any continuation still deferred on
+  // the old wait, and the next connect() re-primes with fresh credentials.
+  state.iceServers = null;
+  state.icePending = null;
+  state.iceEpoch += 1;
+  state.pendingArrivals.clear();
+
   await session?.leave();
 }
 

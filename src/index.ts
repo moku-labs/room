@@ -61,6 +61,7 @@ export { MAX_CONTROLLERS, ROOM_CODE_LENGTH } from "./plugins/transport/protocol"
 export type { RoomEvents } from "./config";
 
 // --- Public plugin types (owned by their plugins) ---
+export type { IceServersProvider, TransportConfig } from "./plugins/transport/types";
 export type { RoomDescriptor, JoinResult, QrMatrix } from "./plugins/session/types";
 export type { StageApi } from "./plugins/stage/types";
 export type { ControllerApi } from "./plugins/controller/types";

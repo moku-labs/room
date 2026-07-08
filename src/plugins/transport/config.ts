@@ -11,9 +11,12 @@ import type { TransportConfig } from "./types";
 
 /**
  * Default ICE servers — a single public STUN. Typed `const` so no inline `as` appears in the config
- * object (R6). Override to `[]` for LAN-only; never TURN (D2).
+ * object (R6). Override to `[]` for LAN-only. Also the fail-open target when an `IceServersProvider`
+ * resolves `undefined`, throws, or outlasts the bounded wait (ice.ts).
  */
-const DEFAULT_ICE_SERVERS: readonly RTCIceServer[] = [{ urls: "stun:stun.l.google.com:19302" }];
+export const DEFAULT_ICE_SERVERS: readonly RTCIceServer[] = [
+  { urls: "stun:stun.l.google.com:19302" }
+];
 
 /** Default heartbeat ping interval in ms (contracts section 2.4; D11). */
 const DEFAULT_HEARTBEAT_INTERVAL_MS = 2000;
@@ -40,6 +43,7 @@ const DEFAULT_MAX_MESSAGE_BYTES = 14_336;
 export const DEFAULT_TRANSPORT_CONFIG: TransportConfig = {
   signaling: publicRendezvous(),
   iceServers: DEFAULT_ICE_SERVERS,
+  iceTransportPolicy: "all",
   heartbeatIntervalMs: DEFAULT_HEARTBEAT_INTERVAL_MS,
   heartbeatTimeoutMs: DEFAULT_HEARTBEAT_TIMEOUT_MS,
   openTimeoutMs: DEFAULT_OPEN_TIMEOUT_MS,

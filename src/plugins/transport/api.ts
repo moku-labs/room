@@ -12,6 +12,7 @@
 import type { RoomEvents } from "../../config";
 import { createWire, disconnectPeer, startHeartbeat, tearDownState } from "./channel";
 import { handlePeerArrival, handlePeerLeave, handleSignal } from "./handlers";
+import { primeIceServers } from "./ice";
 import type { SignalingJoinOpts, Wire } from "./protocol";
 import type { ConnectOpts, TransportApi, TransportConfig, TransportState } from "./types";
 
@@ -45,8 +46,15 @@ export function createTransportApi(
   return {
     /** @inheritdoc */
     async connect(opts: ConnectOpts): Promise<void> {
+      // Stamp the star role and open a new connection epoch, then prime ICE resolution FIRST
+      // (fire-and-forget): an `IceServersProvider`'s credential fetch runs concurrently with the
+      // signaling join below, and peer creation waits on it — connect() never does. The epoch bump
+      // aborts any continuation still deferred on a PRIOR epoch's provider wait (stale credentials).
       state.role = opts.role;
       state.selfId = opts.selfId;
+      state.iceEpoch += 1;
+      primeIceServers(state, cfg);
+
       // Idempotent: a prior live session is released before rejoining so it cannot leak (contracts §1.2).
       if (state.session) {
         await state.session.leave().catch(() => {
@@ -54,6 +62,7 @@ export function createTransportApi(
         });
         state.session = null;
       }
+
       // Star role → passive flag; thread the host-reload reclaim token only when present (exact-optional:
       // omit the key entirely rather than passing `undefined`). serverSignaling sends {kind:"reclaim"}
       // when it is set; other adapters ignore it (contracts §1.3, D25).
@@ -65,6 +74,8 @@ export function createTransportApi(
               passive: opts.role === "controller",
               reclaimToken: opts.reclaimToken
             };
+
+      // Join the signaling room; failure surfaces the rendezvous-unreachable warning and rethrows.
       let session: TransportState["session"];
       try {
         session = await cfg.signaling.join(opts.code, joinOpts);
@@ -72,6 +83,8 @@ export function createTransportApi(
         emitWarning("rendezvous-unreachable");
         throw error;
       }
+
+      // Wire the live session's handshake glue and start the heartbeat loop.
       state.session = session;
       session.onPeer(peerId =>
         handlePeerArrival(state, cfg, peerId, reason => emitWarning(reason))

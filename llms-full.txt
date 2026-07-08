@@ -85,8 +85,10 @@ the same Wi-Fi). Treat `room:network-warning` as the failure-UX hook.
 The opt-in **server tier** (§3.1, §6.7) does NOT relax D2. It reintroduces an operated server for **signaling /
 discovery only** (D21 reverses the *no-operated-server* part of the original decision, but D2's no-relay rule holds):
 the `Hub` DO brokers the handshake + in-band discovery + host-reload reclaim and has **no gameplay-relay path**.
-Once peers connect, gameplay still flows over direct P2P DataChannels with no TURN and no server hop — only the
-*rendezvous backbone* changes (public relays → your Worker).
+Once peers connect, gameplay still flows over direct P2P DataChannels with no server hop — only the
+*rendezvous backbone* changes (public relays → your Worker). Room itself operates no TURN and adds none by
+default; a consumer MAY supply its own STUN/TURN via `iceServers` (array or lazy async provider), which upgrades
+the hard-fail networks at the consumer's option while the default stays STUN-only.
 
 ### iOS caveats
 
@@ -827,7 +829,8 @@ verified "couch" profile.
 | Field | Type | Default | Description |
 |---|---|---|---|
 | `signaling` | `Signaling` | `publicRendezvous()` | The signaling seam; discarded once connected. |
-| `iceServers` | `readonly RTCIceServer[]` | one public STUN (`stun.l.google.com:19302`) | ICE servers for every connection. `[]` = LAN-only (mDNS). NO TURN ever (D2). |
+| `iceServers` | `readonly RTCIceServer[] \| IceServersProvider` | one public STUN (`stun.l.google.com:19302`) | ICE servers for every connection. `[]` = LAN-only (mDNS). The provider form (`() => Promise<readonly RTCIceServer[] \| undefined>`) is invoked at `connect()` — parallel with the signaling join — and resolved just before the first `RTCPeerConnection`; `undefined`/throw/timeout fails open onto the STUN default (a late resolution still serves later peers; candidates arriving during the wait are buffered, never dropped). Room adds no TURN itself (D2); supply your own. |
+| `iceTransportPolicy` | `RTCIceTransportPolicy` | `"all"` | Passed to every `RTCPeerConnection`. `"relay"` forces TURN-only candidate pairs — deterministic force-relay test mode. |
 | `heartbeatIntervalMs` | `number` | `2000` | App-layer ping interval. Mandatory (WebKit 303052). |
 | `heartbeatTimeoutMs` | `number` | `6000` | No-pong window before a peer is declared dead. |
 | `openTimeoutMs` | `number` | `3000` | DataChannel-open timeout before retrying the handshake (capped). |
@@ -1169,8 +1172,8 @@ JSDoc required on all source exports.
 
 - **D1** — Room is its OWN `@moku-labs/core` framework (reversed by the #4 rebuild — it WAS a plugin pack on
   @moku-labs/web): it calls `createCoreConfig`/`createCore` and EXPORTS `createApp`; consumers `createApp` from it.
-- **D2** — Strict no-server P2P, no TURN. Accepted hard-failure on hostile networks; `room:network-warning` is the
-  UX hook.
+- **D2** — Strict no-server P2P; Room operates/adds no TURN (default STUN-only). Accepted hard-failure on hostile
+  networks; `room:network-warning` is the UX hook. Consumers MAY inject their own STUN/TURN via `iceServers`.
 - **D4** — Custom op-list sync codec (Snapshot + Op deltas), lighter than RFC 6902 JSON Patch.
 - **D5** — intent is split out of sync; role-agnostic engines, role chosen by which facade exposes which methods.
 - **D6** — Correctness-only intent shape-check; trusted living-room threat model (no anti-cheat / rate-limit / HMAC).

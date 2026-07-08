@@ -95,7 +95,9 @@ lifecycle. Nothing in `Frame` ever rides `emit`, and no `room:*` event ever carr
 > is no recovery path** — it hard-fails and surfaces `room:network-warning`. Room's design target is the **home LAN**
 > (everyone in the same room on the same Wi-Fi); surface that event as failure UX. The opt-in
 > [server tier](#server-tier-moku-labsroomserver) does **not** change this — it operates the *signaling / discovery*
-> rendezvous only; gameplay stays strict P2P with no TURN and no relay.
+> rendezvous only; gameplay stays strict P2P and Room itself operates no TURN and no relay. (A consumer MAY supply
+> its **own** STUN/TURN via `iceServers` — as an array or a lazy async provider that mints short-lived credentials —
+> which upgrades those hard-fail networks at the consumer's option; the default stays STUN-only.)
 
 > [!TIP]
 > **iOS realities.** The app-layer heartbeat is **mandatory** (WebKit's DataChannel `onclose` doesn't fire on iOS, so
@@ -317,7 +319,8 @@ README — [transport](src/plugins/transport/README.md), [session](src/plugins/s
 
 | Field | Engine | Default | Why you'd change it |
 |---|---|---|---|
-| `iceServers` | transport | one public STUN | `[]` forces LAN-only (mDNS). No TURN is ever added (D2). |
+| `iceServers` | transport | one public STUN | `[]` forces LAN-only (mDNS). Also accepts a lazy async provider — `() => Promise<readonly RTCIceServer[] \| undefined>` — invoked at `connect()` (parallel with the signaling join) and resolved just before the first `RTCPeerConnection`; `undefined`/throw/timeout fails open onto the STUN default. Room adds no TURN itself (D2); supply your own here if you run one. |
+| `iceTransportPolicy` | transport | `"all"` | `"relay"` forces TURN-only candidate pairs — a deterministic force-relay test mode for exercising the relay rung. |
 | `signaling` | transport | `publicRendezvous()` | Swap to `inMemory()` for tests, or `serverSignaling(url)` for the server tier. |
 | `maxControllers` | session | `8` | Cap simultaneous controllers (excludes host); lowering is fine. |
 | `joinUrlBase` | session | `""` (uses `location.origin`) | Set the origin baked into the join URL / QR. |

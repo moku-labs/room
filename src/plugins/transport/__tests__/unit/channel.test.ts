@@ -77,6 +77,7 @@ const cfg: TransportConfig = {
   heartbeatIntervalMs: 2000,
   heartbeatTimeoutMs: 6000,
   openTimeoutMs: 3000,
+  iceTransportPolicy: "all",
   maxMessageBytes: 14_336
 };
 
