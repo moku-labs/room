@@ -1,54 +1,22 @@
 name: CI
+
+# Thin caller. All logic lives in moku-labs/ci, pinned to the moving @v1 major tag.
+# Required status checks land as "ci / lint", "ci / types", "ci / test", "ci / build"
+# (GitHub prefixes a reusable workflow's jobs with the CALLER's job id) — see rulesets/main.json.
 on:
   push:
     branches: [main]
   pull_request:
-  workflow_call: # lets publish.yml reuse these exact checks
+  # No `workflow_call:` needed — publish.yml reaches the same checks through
+  # package-release.yml, which calls package-ci.yml itself.
 
-# Scope the group by github.workflow: a release's reuse of CI runs under the "Release"
-# workflow name, so it never shares a group with — and never cancels — a standalone CI run.
-concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+# NO concurrency block here on purpose: package-ci.yml already scopes its group by
+# github.workflow (= this workflow's name), and a caller group with the same value would
+# deadlock against its own child.
 
 permissions:
-  contents: read # workflow-level least privilege; no job here needs more
+  contents: read
 
 jobs:
-  lint:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@1af3b93b6815bc44a9784bd300feb67ff0d1eeb3 # v6.0.0
-        with:
-          persist-credentials: false
-      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
-      - run: bun install --frozen-lockfile
-      - run: bun run lint
-  types:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@1af3b93b6815bc44a9784bd300feb67ff0d1eeb3 # v6.0.0
-        with:
-          persist-credentials: false
-      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
-      - run: bun install --frozen-lockfile
-      - run: bun run typecheck
-  test:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@1af3b93b6815bc44a9784bd300feb67ff0d1eeb3 # v6.0.0
-        with:
-          persist-credentials: false
-      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
-      - run: bun install --frozen-lockfile
-      - run: bun run test # NOT `bun test`: Bun's native runner bleeds vitest module mocks across files
-  build:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@1af3b93b6815bc44a9784bd300feb67ff0d1eeb3 # v6.0.0
-        with:
-          persist-credentials: false
-      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
-      - run: bun install --frozen-lockfile
-      - run: bun run build
-      - run: bun run validate # type/lint/test gate baked into the build job
+  ci:
+    uses: moku-labs/ci/.github/workflows/package-ci.yml@v1
