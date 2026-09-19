@@ -67,11 +67,12 @@
     }
   },
   "devDependencies": {
-    "@moku-labs/worker": "0.15.0",
     "@arethetypeswrong/cli": "0.18.3",
     "@arethetypeswrong/core": "0.18.3",
     "@biomejs/biome": "2.4.16",
     "@cloudflare/workers-types": "4.20260621.1",
+    "@moku-labs/ci": "1.2.3",
+    "@moku-labs/worker": "0.15.0",
     "@playwright/test": "1.61.0",
     "@types/bun": "1.3.14",
     "@types/qrcode": "1.5.6",
@@ -105,6 +106,9 @@
     "test:e2e": "playwright test",
     "test:e2e:worker": "playwright test -c playwright.worker.config.ts",
     "sandbox": "bun tests/sandbox/serve.ts",
-    "sandbox:worker": "bun tests/sandbox/build-client.ts && wrangler dev --config tests/sandbox/wrangler.jsonc --port 5180 --persist-to .wrangler-sandbox"
+    "sandbox:worker": "bun tests/sandbox/build-client.ts && wrangler dev --config tests/sandbox/wrangler.jsonc --port 5180 --persist-to .wrangler-sandbox",
+    "release:setup": "moku-release setup",
+    "release:doctor": "moku-release doctor",
+    "release": "moku-release"
   }
 }
