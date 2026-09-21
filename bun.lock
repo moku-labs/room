@@ -5,8 +5,8 @@
     "": {
       "name": "room",
       "dependencies": {
-        "@moku-labs/common": "0.2.1",
-        "@moku-labs/core": "1.5.0",
+        "@moku-labs/common": "0.3.2",
+        "@moku-labs/core": "1.6.0",
         "qrcode": "^1.5.4",
         "trystero": "~0.25.2",
       },
@@ -279,9 +279,9 @@
 
     "@moku-labs/ci": ["@moku-labs/ci@1.2.6", "", { "bin": { "moku-release": "dist/release.mjs" } }, "sha512-KIUvh3Sk+CvGM5v/r6pYNlJmbmpv5KxvNDzcMUjsfdUCcb8liSv+jAQ3JbZfBtQUKPMqXhAuOqf0BHe6aMHmGQ=="],
 
-    "@moku-labs/common": ["@moku-labs/common@0.2.1", "", { "dependencies": { "@moku-labs/core": "1.5.0" } }, "sha512-z7gbsQgutGdN0jaxXZpJjfMKVZuPvMM5NP9jfPcHK3chY/SwlxhoGExDb1xeYQfl4RgqiHI7xh2f+b8oF3dImw=="],
+    "@moku-labs/common": ["@moku-labs/common@0.3.2", "", { "dependencies": { "@moku-labs/core": "1.6.0" } }, "sha512-pAYvFDk+g4m4dkUNKyk94FrR1Qov7nMdIryE+FHc8L5JTCMXRofI7xRs5vaq9VsXFSp2MrjH/W2T73oD3K6xuw=="],
 
-    "@moku-labs/core": ["@moku-labs/core@1.5.0", "", {}, "sha512-CPQmvFvLTo/NpQBeoyLFXNcfuNIxtuSuFXkGwCpvuS0KmWwzkd8ObnN1s3xpzQ8J681t2NsrdDr+Fhc6DuFBvQ=="],
+    "@moku-labs/core": ["@moku-labs/core@1.6.0", "", {}, "sha512-Y6ws8WDa0lnxD810XSts1eoiZ5Hvc2ZjtthP5e1PcqhOxmomZlnk4JCcjcWYINaymZxpI42HZg05KW14rRdBWw=="],
 
     "@moku-labs/worker": ["@moku-labs/worker@0.15.0", "", { "dependencies": { "@moku-labs/common": "0.3.0", "@moku-labs/core": "1.5.0" }, "peerDependencies": { "wrangler": ">=3" }, "optionalPeers": ["wrangler"] }, "sha512-4ft3qXxeRE0TDE8fkk4Mf1dEMkQmejD9UT+zInpFrzpTObxLInkrvRfS0ZeM+d9HHSC1CI3IMs7vhgv8ZijA9A=="],
 
@@ -982,6 +982,8 @@
     "@eslint/eslintrc/globals": ["globals@14.0.0", "", {}, "sha512-oahGvuMGQlPw/ivIYBjVSrWAfWLBeku5tpPE2fOPLi+WHffIWbuh2tCjhyQhTBPMf5E9jDEH4FOmTYgYwbKwtQ=="],
 
     "@moku-labs/worker/@moku-labs/common": ["@moku-labs/common@0.3.0", "", { "dependencies": { "@moku-labs/core": "1.5.0" } }, "sha512-HmubQmY1YSP4A2Xa0po4T1sNXYEjlwLv4uTkKqpKiQGaZw3OqZVkQtl9yobMBHITP3B5PHHxj9FQMt8I0t+99A=="],
+
+    "@moku-labs/worker/@moku-labs/core": ["@moku-labs/core@1.5.0", "", {}, "sha512-CPQmvFvLTo/NpQBeoyLFXNcfuNIxtuSuFXkGwCpvuS0KmWwzkd8ObnN1s3xpzQ8J681t2NsrdDr+Fhc6DuFBvQ=="],
 
     "@poppinss/dumper/@sindresorhus/is": ["@sindresorhus/is@7.2.0", "", {}, "sha512-P1Cz1dWaFfR4IR+U13mqqiGsLFf1KbayybWwdd2vfctdV6hDpUkgCY0nKOLLTMSoRd/jJNjtbqzf13K8DCCXQw=="],
 
