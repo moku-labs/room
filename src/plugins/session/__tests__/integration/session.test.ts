@@ -3,8 +3,8 @@
  * (createApp(stage) -> start -> createRoom -> wire N controllers -> room:peer-joined per join, 9th
  * full), leave -> room:peer-left, the host-reload scenario (persist -> tear down host -> re-create against
  * the same inMemory room + persisted record -> room:host-reconnecting + buffered-intent flush in cSeq
- * order + duplicate drop + fresh re-baseline), onStop via the teardownRegistry (flushNow wrote + dispose
- * cleared timers + entry deleted), and D14 per-instance teardown (stop ONE of two apps; the other is
+ * order + duplicate drop + fresh re-baseline), onStop through the plugin's own state (flushNow wrote + dispose
+ * cleared timers), and D14 per-instance teardown (stop ONE of two apps; the other is
  * untouched).
  */
 
@@ -202,14 +202,13 @@ describe("session integration (inMemory)", () => {
     await host.stop();
   });
 
-  it("start -> API -> stop: the teardownRegistry entry is deleted after stop()", async () => {
+  it("start -> API -> stop: stop() tears the session down and resolves", async () => {
     const { app } = makeSessionApp(bus);
     await app.start();
     app.session.createRoom();
     // Arm the persistence driver.
     app.session.persistSnapshot({}, 1);
-    // stop() must resolve cleanly — the per-instance teardownRegistry entry + timers are torn down.
-    // (The WeakMap can't be inspected directly; the observable signal is that stop() resolves without throwing.)
+    // stop() must resolve cleanly — this app's timers are torn down through its own state.
     await expect(app.stop()).resolves.toBeUndefined();
   });
 

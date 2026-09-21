@@ -115,8 +115,8 @@ export type BufferedIntent = { readonly intent: IntentFrame; readonly ts: number
 /**
  * The live recovery sub-state (§5). The `phase` + `buffer` + `reconnectDeadline` are plain-JSON; the
  * `timer`/`persistHandle` fields are runtime-only resources (NEVER persisted, NEVER sent over §2) and are
- * `null` when idle. Lives inside `ctx.state`; `onStop` reaches it via the module-level
- * `teardownRegistry: WeakMap<object, SessionState>` keyed by `ctx.global` (D14), never a singleton.
+ * `null` when idle. Lives inside `ctx.state`; `onStop` reaches it through its own
+ * `state` (kernel 1.6 passes `{ global, config, state }`; D14), never a singleton.
  */
 export type RecoverySubState = {
   /** Current recovery phase (controller-relevant; on the host it stays `"stable"` and flips to drive `room:host-reconnecting`). */

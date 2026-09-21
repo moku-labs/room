@@ -354,7 +354,7 @@ export type TransportApi = {
    * Closes ALL peer connections (clearing each peer's open timer + reassembly), stops the
    * heartbeat loop, and leaves the signaling session. Exposed for an explicit room teardown without
    * stopping the app. `onStop` performs the same teardown work against this app's `TransportState`
-   * (reached via the per-instance teardown registry keyed by `ctx.global`). Idempotent.
+   * (its own state, passed to `onStop` since kernel 1.6). Idempotent.
    *
    * @returns A promise that resolves once every connection and the signaling session are released.
    * @example

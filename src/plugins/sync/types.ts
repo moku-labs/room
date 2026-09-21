@@ -127,7 +127,7 @@ export type State = {
    * `ctx.state` (per-app) rather than a module-level variable because Room composes MULTIPLE app instances
    * in one process. `startBroadcast` assigns it; `stopBroadcast`/`onStop` clears it and sets it back to
    * `null`. `null` whenever the loop is not scheduled (always on a controller). `onStop` reaches it via
-   * the per-instance `teardownRegistry` WeakMap keyed by `ctx.global` (D14).
+   * its own `state` (kernel 1.6 passes `{ global, config, state }`; D14).
    */
   throttleHandle: ReturnType<typeof setInterval> | number | null;
   /**
@@ -136,7 +136,7 @@ export type State = {
    * `api` builds it. Held HERE (not a module-level `let`) for the same per-app reason as `throttleHandle`.
    * Building once and sharing is mandatory for correctness: the engine owns the per-namespace `subscribe`
    * callback registry (a closure `Map`), so consumer subscriptions and inbound-frame application MUST hit
-   * the SAME engine or callbacks never fire. `onStop` reaches it via the `teardownRegistry` entry.
+   * the SAME engine or callbacks never fire. `onStop` reaches it via its own `state`.
    */
   engine: SyncEngine | null;
 };
@@ -324,7 +324,7 @@ export type Api = {
 
   /**
    * Stops the host broadcast throttle loop and clears the timer (host only). Idempotent. Called by
-   * `onStop` (which reaches `state.throttleHandle` via the per-app `teardownRegistry` WeakMap);
+   * `onStop` (which reaches `state.throttleHandle` through its own `state`);
    * `clearInterval`/`cancelAnimationFrame`s the handle, nulls it, sets `broadcasting = false`. Does NOT
    * clear the snapshot (a subsequent `startBroadcast` resumes).
    *
@@ -512,7 +512,7 @@ export type SyncEngine = {
 
   /**
    * Stops the host throttle loop and clears `state.throttleHandle` (delegated from `Api.stopBroadcast`).
-   * Idempotent; reached by `onStop` through the `teardownRegistry` entry.
+   * Idempotent; reached by `onStop` through its own `state`.
    *
    * @example
    * ```ts
@@ -537,7 +537,7 @@ export type SyncEngine = {
 
   /**
    * Stops the not-ready baseline retry loop and clears its timer. Idempotent; called by `markReady` (the
-   * loop's goal is met) and by `onStop` through the `teardownRegistry` entry.
+   * loop's goal is met) and by `onStop` through its own `state`.
    *
    * @example
    * ```ts

@@ -293,14 +293,13 @@ export function readReentryRecord(deps: SessionDeps): HostReentryRecord | null {
  * and removes the `visibilitychange` listener (`persistHandle.dispose()`), nulls `recovery.timer`, and
  * clears any in-flight join timeout + settles its pending resolver (so a `joinRoom` interrupted by
  * `stop()` leaves neither a dangling 10s timer nor a hung promise — finding #3).
- * Takes the per-app `SessionState` (recovered from the `teardownRegistry` WeakMap) — NEVER a
- * module-level singleton — so it needs no `state`/`require`/`emit` (the `{ global }`-only context).
+ * Takes the per-app `SessionState` (the plugin's own state, passed to `onStop`) — NEVER a
+ * module-level singleton — so it needs no `require`/`emit` (absent from the teardown context).
  *
- * @param state - This app's `SessionState`, looked up via `teardownRegistry.get(ctx.global)`.
+ * @param state - This app's `SessionState`.
  * @example
  * ```ts
- * const s = teardownRegistry.get(ctx.global);
- * if (s) teardownSession(s);
+ * onStop: ({ state }) => teardownSession(state)
  * ```
  */
 export function teardownSession(state: SessionState): void {
