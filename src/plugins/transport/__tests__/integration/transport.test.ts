@@ -151,7 +151,7 @@ describe("transport integration (inMemory)", () => {
     await host.stop();
 
     // The controller instance is untouched: its peer roster is intact, proving onStop
-    // recovered host state via teardownRegistry.get(ctx.global), not a shared singleton.
+    // tore down the host app's own state, not a shared singleton.
     expect(ctrl.transport.peers()).toEqual(ctrlPeersBefore);
     expect(ctrl.transport.peers()).toContain("host_root");
 

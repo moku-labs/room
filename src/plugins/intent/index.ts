@@ -7,7 +7,7 @@
  * host and retransmitted (bounded) by the controller's delivery tracker — plus the reconnect
  * intent-buffer that `sessionPlugin` flushes. Declares ONE event (`room:intent-undeliverable`, the
  * terminal retransmit-budget verdict) via the register-callback pattern (spec/14 §2). Owns ONE resource:
- * the delivery tracker's retransmit timer, torn down via the D14 per-instance registry (the `Wire.on`
+ * the delivery tracker's retransmit timer, stopped in `onStop` through this app's own state (the `Wire.on`
  * callback itself is still subsumed by `transport.onStop`). Depends on transport + session. No explicit
  * generics — Config/State/Api all infer from this spec object (R1). The extracted factories take
  * destructured per-app pieces; `@moku-labs/web` infers `ctx` inline here, so `api`/`onInit` bind the
@@ -21,15 +21,6 @@ import { createIntentApi } from "./api";
 import { DEFAULT_INTENT_CONFIG } from "./config";
 import { attachIntentReceive } from "./receive";
 import { createIntentState } from "./state";
-import type { IntentState } from "./types";
-
-// D14 per-instance teardown registry — module-level `const` (NOT a `let` holding an instance). Maps each
-// app's own frozen `ctx.global` config to that app's mutable `IntentState` (and through it the shared
-// `state.delivery` tracker), so `onStop` — which gets `{ global }` only (no `require`, no `ctx.state`) —
-// can reach EXACTLY this app's delivery tracker to clear its retransmit timer. Room composes multiple
-// app instances in one process, so a singleton `let` would be overwritten by the next createApp and
-// `app1.stop()` would clear `app2`'s timer. Auto-GC.
-const teardownRegistry = new WeakMap<object, IntentState>();
 
 /* eslint-disable jsdoc/require-jsdoc -- structural wiring callbacks (events/api/onInit/onStart/onStop); domain JSDoc lives in the extracted state/api/delivery/receive modules */
 /**
@@ -62,14 +53,10 @@ export const intentPlugin = createPlugin("intent", {
       payload => ctx.emit("room:intent-undeliverable", payload)
     ),
   onInit: ctx => attachIntentReceive(ctx.state, ctx.require(transportPlugin).wire()),
-  // @no-resource-check — onStart/onStop pair tears down the delivery tracker's retransmit timer via the
-  // D14 per-instance registry (onStop gets `{ global }` only — no `ctx.state`). contracts section 4.3.
-  onStart: ctx => {
-    teardownRegistry.set(ctx.global, ctx.state);
-  },
-  onStop: ctx => {
-    teardownRegistry.get(ctx.global)?.delivery?.stop();
-    teardownRegistry.delete(ctx.global);
+  // @no-resource-check — onStop clears the delivery tracker's retransmit timer through THIS app's own
+  // state (D14): since kernel 1.6 onStop gets `{ global, config, state }`. contracts section 4.3.
+  onStop: ({ state }) => {
+    state.delivery?.stop();
   }
 });
 /* eslint-enable jsdoc/require-jsdoc */

@@ -3,7 +3,7 @@
  * `00-contracts.md`, and never crossing the §2 wire. `TimerHandle` mirrors `setTimeout`'s return;
  * `PersistHandle` is the debounced-persistence driver's control surface (with `PersistHandleInternal`
  * adding the package-internal `_update`). All are stored inside `ctx.state.recovery` and reached by
- * `onStop` via the `teardownRegistry` WeakMap (D14).
+ * `onStop` through the plugin's own state (D14).
  * @see ../README.md
  */
 
@@ -15,7 +15,7 @@ export type TimerHandle = ReturnType<typeof setTimeout>;
 /**
  * Control surface for the debounced host-snapshot persistence driver (IndexedDB + the synchronous
  * `localStorage`-on-`visibilitychange` write). Stored in `ctx.state.recovery.persistHandle`; `onStop`
- * calls `flushNow()` then `dispose()` after looking it up in the `teardownRegistry` WeakMap (D14).
+ * calls `flushNow()` then `dispose()` through the plugin's own state (D14).
  */
 export type PersistHandle = {
   /** Synchronously writes the latest `HostReentryRecord` to localStorage (the `visibilitychange`/`onStop` path). */

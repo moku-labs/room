@@ -198,7 +198,7 @@ export type IntentDelivery = {
   retire(): readonly IntentFrame[];
 
   /**
-   * Teardown (called from the plugin's `onStop` via the per-instance registry): cancels the retransmit
+   * Teardown (called from the plugin's `onStop` through its own state): cancels the retransmit
    * timer and drops all tracked frames SILENTLY (no terminal events at app stop). Idempotent.
    */
   stop(): void;

@@ -89,6 +89,6 @@ re-exposes which methods — nothing is role-flagged at construction.
 
 ## Resources
 
-`onStart`/`onStop` exist for exactly one resource: the delivery tracker's retransmit timer, torn down via
-the D14 per-instance `WeakMap` registry (mirroring `syncPlugin`'s throttle-loop teardown). The `Wire.on`
+`onStop` exists for exactly one resource: the delivery tracker's retransmit timer, stopped through the
+plugin's own state (mirroring `syncPlugin`'s throttle-loop teardown). The `Wire.on`
 callback itself is still subsumed by `transport.onStop`.

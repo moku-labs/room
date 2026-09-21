@@ -206,7 +206,7 @@ export function createSyncEngine(
 
   /**
    * Stops the not-ready baseline retry loop and clears its timer. Idempotent. Called by `markReady` (the
-   * first authoritative frame applied) and by `onStop` via the teardown registry.
+   * first authoritative frame applied) and by `onStop` through the plugin's own state.
    *
    * @example
    * ```ts
