@@ -1,0 +1,12 @@
+version: 2
+updates:
+  - package-ecosystem: "bun"
+    directory: "/"
+    schedule:
+      interval: "daily"
+    allow:
+      - dependency-name: "@moku-labs/*"
+    groups:
+      moku:
+        patterns:
+          - "@moku-labs/*"
