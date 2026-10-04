@@ -14,7 +14,7 @@
         "@biomejs/biome": "2.4.16",
         "@cloudflare/workers-types": "4.20260621.1",
         "@moku-labs/ci": "1.2.6",
-        "@moku-labs/common": "0.3.3",
+        "@moku-labs/common": "0.3.4",
         "@moku-labs/core": "1.7.1",
         "@moku-labs/worker": "0.20.2",
         "@playwright/test": "1.61.0",
@@ -37,7 +37,7 @@
         "wrangler": "4.103.0",
       },
       "peerDependencies": {
-        "@moku-labs/common": "^0.3.3",
+        "@moku-labs/common": "^0.3.4",
         "@moku-labs/core": "^1.7.1",
         "@moku-labs/worker": ">=0.15.0 <1.0.0",
       },
@@ -281,7 +281,7 @@
 
     "@moku-labs/ci": ["@moku-labs/ci@1.2.6", "", { "bin": { "moku-release": "dist/release.mjs" } }, "sha512-KIUvh3Sk+CvGM5v/r6pYNlJmbmpv5KxvNDzcMUjsfdUCcb8liSv+jAQ3JbZfBtQUKPMqXhAuOqf0BHe6aMHmGQ=="],
 
-    "@moku-labs/common": ["@moku-labs/common@0.3.3", "", { "dependencies": { "@moku-labs/core": "1.7.0" } }, "sha512-lNge2Cfk+2VJGr5bo3OI3VmtI4/XnMZCU+HfxPbKhAgafBM2QOK/kaxshxVuAGU0XtWxzjiJtudUIqnSiRfAJg=="],
+    "@moku-labs/common": ["@moku-labs/common@0.3.4", "", { "peerDependencies": { "@moku-labs/core": "^1.7.1" } }, "sha512-2LibomdCP6FjZoWVhYdj4RYeFYa6bkggEB/KnV+lnUoZ715FJvUzOuCbscU4FxFn4/zAS1nyp5FVhrOa9vmfhw=="],
 
     "@moku-labs/core": ["@moku-labs/core@1.7.1", "", {}, "sha512-QBlI5U2yKNhxCgszQWdu5iRFkDLJik37tAfNqNbG2AGDwo5J/7t3vK8lLWSwH9gduXORladUEgd7Fcc+cIiQMQ=="],
 
@@ -982,8 +982,6 @@
     "@eslint-community/eslint-utils/eslint-visitor-keys": ["eslint-visitor-keys@3.4.3", "", {}, "sha512-wpc+LXeiyiisxPlEkUzU6svyS1frIO3Mgxj1fdy7Pm8Ygzguax2N3Fa/D/ag1WqbOprdI+uY6wMUl8/a2G+iag=="],
 
     "@eslint/eslintrc/globals": ["globals@14.0.0", "", {}, "sha512-oahGvuMGQlPw/ivIYBjVSrWAfWLBeku5tpPE2fOPLi+WHffIWbuh2tCjhyQhTBPMf5E9jDEH4FOmTYgYwbKwtQ=="],
-
-    "@moku-labs/common/@moku-labs/core": ["@moku-labs/core@1.7.0", "", {}, "sha512-h6n+tBvUT8zrgqH0Rh/toOXyiGQKVti7efVQQwDynHcwN+2aapMchFfesIFCNByc0e6ap7QrB3FtbwmtcX3qDA=="],
 
     "@moku-labs/worker/@moku-labs/common": ["@moku-labs/common@0.3.2", "", { "dependencies": { "@moku-labs/core": "1.6.0" } }, "sha512-pAYvFDk+g4m4dkUNKyk94FrR1Qov7nMdIryE+FHc8L5JTCMXRofI7xRs5vaq9VsXFSp2MrjH/W2T73oD3K6xuw=="],
 
