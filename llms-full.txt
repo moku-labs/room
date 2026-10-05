@@ -30,8 +30,8 @@ rendering/game engine or a game server.
 
 Package facts (`package.json`):
 
-- `name`: `@moku-labs/room`, `type`: `module`, `version`: `0.1.0` (a placeholder — the published version comes from
-  the release git tag).
+- Version: 0.8.3.
+- `name`: `@moku-labs/room`, `type`: `module`.
 - `dependencies` (bundled): `trystero` `~0.25.2` (default public-rendezvous signaling), `qrcode` `^1.5.4` (join QR).
 - `peerDependencies`: `@moku-labs/core` `^1.7.1` + `@moku-labs/common` `^0.3.4` (REQUIRED — the kernel and
   `ctx.log`/`ctx.env`), `@moku-labs/worker` `>=0.15.0 <1.0.0` (OPTIONAL via `peerDependenciesMeta` — only the opt-in
