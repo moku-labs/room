@@ -18,8 +18,8 @@ rendering/game engine or a game server.
   plugins from `@moku-labs/common`); the CLIENT core (`src/index.ts`) calls `createCore` and EXPORTS the bound
   `createApp` + `createPlugin`. The framework never calls `createApp` itself — Layer-3 apps do. (The opt-in server
   tier, §3.1/§6.7, is NOT a core — it exports just `{ hubPlugin, Hub }`.)
-- It depends on **`@moku-labs/core`** + **`@moku-labs/common`** as **bundled** dependencies (NOT peers); `common`
-  supplies `ctx.log` + `ctx.env`. Room does NOT depend on `@moku-labs/web`. The opt-in server tier composes into a
+- It depends on **`@moku-labs/core`** + **`@moku-labs/common`** as required **peer** dependencies (the consumer
+  installs them next to Room); `common` supplies `ctx.log` + `ctx.env`. Room does NOT depend on `@moku-labs/web`. The opt-in server tier composes into a
   `@moku-labs/worker` app, so `@moku-labs/worker` is an OPTIONAL peer dependency (only the server tier needs it).
 - Integration model: a consumer `createApp`s from `@moku-labs/room` and adds a role facade (`stagePlugin` host /
   `controllerPlugin` phone) + its game plugin. The four engines are core DEFAULTS — there are no role arrays.
@@ -30,10 +30,12 @@ rendering/game engine or a game server.
 
 Package facts (`package.json`):
 
-- `name`: `@moku-labs/room`, `type`: `module`, `version`: `0.2.0`.
-- `dependencies` (bundled): `@moku-labs/core` `1.5.0`, `@moku-labs/common` `0.2.1`, `trystero` `~0.25.2` (default
-  public-rendezvous signaling), `qrcode` `^1.5.4` (join QR). `peerDependencies`: `@moku-labs/worker` (OPTIONAL — only
-  the opt-in server tier needs it; the client core installs nothing extra).
+- Version: 0.8.3.
+- `name`: `@moku-labs/room`, `type`: `module`.
+- `dependencies` (bundled): `trystero` `~0.25.2` (default public-rendezvous signaling), `qrcode` `^1.5.4` (join QR).
+- `peerDependencies`: `@moku-labs/core` `^1.7.1` + `@moku-labs/common` `^0.3.4` (REQUIRED — the kernel and
+  `ctx.log`/`ctx.env`), `@moku-labs/worker` `>=0.15.0 <1.0.0` (OPTIONAL via `peerDependenciesMeta` — only the opt-in
+  server tier needs it).
 - `engines`: Node `>=24.0.0`, bun `>=1.3.14`.
 - `exports`: `.` (the client core, `import`/`require` → `dist/index.*`), `./server` (`import` → `dist/server.mjs`;
   JS-only, no `.d.ts`).
@@ -45,7 +47,7 @@ Package facts (`package.json`):
 Install (bun only):
 
 ```bash
-bun add @moku-labs/room   # client core: that's all — createApp/createPlugin come from Room itself
+bun add @moku-labs/room @moku-labs/core @moku-labs/common   # client core + its required peers
 # the opt-in server tier additionally needs `bun add @moku-labs/worker` (an optional peer dependency)
 ```
 
