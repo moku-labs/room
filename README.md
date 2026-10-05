@@ -33,13 +33,14 @@ engine, and **not** a game server: gameplay is strictly peer-to-peer, with no re
 ## Install
 
 ```sh
-bun add @moku-labs/room
+bun add @moku-labs/room @moku-labs/core @moku-labs/common
 ```
 
 > [!NOTE]
-> **Status: `0.x` — early.** Room is a standalone Moku framework on `@moku-labs/core` (bundled, with `@moku-labs/common`
-> supplying `ctx.log` / `ctx.env`); `trystero` (signaling) and `qrcode` (join QR) come bundled too. The **client core**
-> needs **no peer dependency** — `createApp` / `createPlugin` come from Room itself. The opt-in
+> **Status: `0.x` — early.** Room is a standalone Moku framework on `@moku-labs/core`, with `@moku-labs/common`
+> supplying `ctx.log` / `ctx.env`. Both are **peer dependencies** (`@moku-labs/core ^1.7.1`, `@moku-labs/common ^0.3.4`)
+> you install next to Room; `trystero` (signaling) and `qrcode` (join QR) come bundled. `createApp` / `createPlugin`
+> come from Room itself. The opt-in
 > [server tier](#server-tier-moku-labsroomserver) exports `hubPlugin` to compose into your own
 > [`@moku-labs/worker`](https://github.com/moku-labs/worker) app on Cloudflare Workers — an **optional peer dependency**
 > you provide.
@@ -353,7 +354,7 @@ bun run sandbox:worker     # serve the worker sandbox over wrangler dev (server 
 
 - **Node `>= 24`** and **Bun `>= 1.3.14`** — use `bun` exclusively (never npm/yarn/pnpm).
 - **TypeScript** in strict mode, with `exactOptionalPropertyTypes` and `noUncheckedIndexedAccess`.
-- **Built on [`@moku-labs/core`](https://github.com/moku-labs/core) + [`@moku-labs/common`](https://github.com/moku-labs/common)** — bundled dependencies (not peers); they supply the kernel and `ctx.log` / `ctx.env`.
+- **Built on [`@moku-labs/core`](https://github.com/moku-labs/core) + [`@moku-labs/common`](https://github.com/moku-labs/common)** — required **peer dependencies** (`^1.7.1` / `^0.3.4`); they supply the kernel and `ctx.log` / `ctx.env`.
 - **The server tier** runs on **Cloudflare Workers** (Durable Objects + KV) — compose `hubPlugin` into your own [`@moku-labs/worker`](https://github.com/moku-labs/worker) app (an **optional peer dependency**), which generates your `wrangler` config; you just supply a Cloudflare account.
 
 ## Docs

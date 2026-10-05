@@ -6,15 +6,15 @@
 Room is its OWN `@moku-labs/core` framework — a sibling to `@moku-labs/web`/`@moku-labs/worker`, NOT built on them.
 It defines one `createCoreConfig` (in `src/config.ts`), wires the four engines as core defaults, and EXPORTS the
 bound `createApp` + `createPlugin`; the framework never calls `createApp` — Layer-3 apps do. `@moku-labs/core` and
-`@moku-labs/common` (which supplies `ctx.log`/`ctx.env`) are BUNDLED dependencies, not peers — there is nothing extra
-to install. A consumer adds a role facade (`stagePlugin` host / `controllerPlugin` phone) + its game plugin; there
+`@moku-labs/common` (which supplies `ctx.log`/`ctx.env`) are PEER dependencies — the consumer installs them next to
+Room. A consumer adds a role facade (`stagePlugin` host / `controllerPlugin` phone) + its game plugin; there
 are no role arrays.
 
-- Package: `@moku-labs/room` (bundled deps `@moku-labs/core 1.5.0`, `@moku-labs/common 0.2.1`, `trystero ~0.25.2`,
-  `qrcode ^1.5.4`). The client core has **no peer dependencies**; the opt-in server tier needs `@moku-labs/worker`
-  (an OPTIONAL peer dependency). Engines: node ≥24, bun ≥1.3.14.
-- Install: `bun add @moku-labs/room` (the client core needs nothing else — `createApp`/`createPlugin` come from Room
-  itself; the opt-in server tier also needs `@moku-labs/worker`).
+- Package: `@moku-labs/room` (bundled deps `trystero ~0.25.2`, `qrcode ^1.5.4`). Required peer dependencies:
+  `@moku-labs/core ^1.7.1`, `@moku-labs/common ^0.3.4`. The opt-in server tier also needs `@moku-labs/worker`
+  (`>=0.15.0 <1.0.0`, an OPTIONAL peer dependency). Engines: node ≥24, bun ≥1.3.14.
+- Install: `bun add @moku-labs/room @moku-labs/core @moku-labs/common` (`createApp`/`createPlugin` come from Room
+  itself; the opt-in server tier also needs `bun add @moku-labs/worker`).
 - Entries: `@moku-labs/room` (`.`, the CLIENT core — `createApp` for the browser game; also runs node tests, so there
   is no separate browser entry) · `@moku-labs/room/server` (`./server`, the OPT-IN server tier — exports `hubPlugin`
   (a `@moku-labs/worker` plugin) + the `Hub` Durable Object to compose into your own `@moku-labs/worker` app).
