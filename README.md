@@ -244,11 +244,11 @@ control** of its worker composition + config, exactly like any other `@moku-labs
 
 ```ts
 // your-app/src/server.ts — ONE @moku-labs/worker app, composing room's hubPlugin.
-import { cliPlugin, createApp, deployPlugin, durableObjectsPlugin, kvPlugin } from "@moku-labs/worker";
+import { cliPlugin, createApp, d1Plugin, deployPlugin, durableObjectsPlugin, kvPlugin, queuesPlugin, storagePlugin } from "@moku-labs/worker";
 import { hubPlugin } from "@moku-labs/room/server";
 
 export const server = createApp({
-  plugins: [kvPlugin, durableObjectsPlugin, hubPlugin, deployPlugin, cliPlugin],
+  plugins: [storagePlugin, kvPlugin, d1Plugin, queuesPlugin, durableObjectsPlugin, hubPlugin, deployPlugin, cliPlugin],
   pluginConfigs: {
     durableObjects: { hub: { binding: "ROOM_HUB", className: "Hub" } },
     kv: { rateLimit: { name: "ratelimit", binding: "RATE_LIMIT" } }
