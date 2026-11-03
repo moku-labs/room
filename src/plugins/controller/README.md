@@ -26,8 +26,8 @@ a config flag, so there is nothing to default.
 
 Joins the room identified by `code` as a PASSIVE peer (the controller waits to be offered to by the host
 — star topology, contracts §6). Delegates to `session.joinRoom(code)`, which runs the contracts §1
-rendezvous handshake, persists the phone-side `reconnectToken` (contracts §6), and stays joined until
-the channel is `connected`. The passive (controller-role) flag is set INTERNALLY by `sessionPlugin` — it
+rendezvous handshake, saves this tab's `selfId` per room in `sessionStorage` (contracts §6), and stays joined
+until the channel is `connected`. The passive (controller-role) flag is set INTERNALLY by `sessionPlugin` — it
 is never a caller argument. Maps `session`'s discriminated `JoinResult` to this contract: resolves once
 the host admits this phone (its first `roster` frame; an open channel alone settles nothing, because a full
 host opens the channel too), or **throws** an `Error` whose message is the `reason`
@@ -96,7 +96,7 @@ emit to the consumer (D19). Coarse lifecycle only — no gameplay payload ever f
 | Plugin | Role | Reason |
 |--------|------|--------|
 | `transportPlugin` | visibility-only | Listed in `depends` solely so `transport`'s `room:network-warning` is mergeable for re-declaration (WARN-2). No method is ever `require`d. |
-| `sessionPlugin` | delegation target | `joinRoom()` delegates here; owns the rendezvous join + passive flag + reconnect-token slot (contracts §1, §6) + recovery (§5); source of `room:peer-joined`/`-left`/`host-reconnecting`. |
+| `sessionPlugin` | delegation target | `joinRoom()` delegates here; owns the rendezvous join + passive flag + saved `selfId` (contracts §1, §6) + recovery (§5); source of `room:peer-joined`/`-left`/`host-reconnecting`. |
 | `intentPlugin` | delegation target | `intent()` delegates here; owns the `IntentFrame` wire send, `cSeq` stamping, and host-absence buffering (contracts §4.3, §5.3). |
 | `syncPlugin` | delegation target | `read()` / `on()` delegate here; owns the read-only replica (contracts §4); source of `room:sync-ready`. |
 

@@ -9,7 +9,9 @@ planes:
 2. **The typed `Wire` channel** — per-frame JSON serialization, chunking (~14 KiB) + reassembly,
    `bufferedAmount` backpressure (~64 KiB), a MANDATORY app-layer heartbeat (~2 s ping / ~6 s dead —
    WebKit bug 303052: `onclose` does not fire on iOS), and a ~3 s DataChannel-open timeout that retries
-   the handshake (the iOS-Safari to Sony-Bravia interop mitigation).
+   the handshake (the iOS-Safari to Sony-Bravia interop mitigation). A peer that arrives with a known id
+   replaces its old record silently: timer, channel, pc, warn keys and send backlog go, and `onPeerLost` does
+   not fire. A controller on the real path replaces nothing: the host's offer drives its answerer.
 3. **The general `Signaling` seam** — a DOM-free `adapter.ts` contract plus three adapters:
    `publicRendezvous()` (DEFAULT — Trystero v0.25.x, lazy-loaded), `inMemory()` (tests), and
    `serverSignaling(url)` (opt-in worker-backed, lazy-loaded). The server adapter opens one persistent
@@ -34,7 +36,7 @@ refusal of one join, and `sessionPlugin` consumes it.
 | `close()` | Closes all peers, stops the heartbeat, leaves the signaling session. |
 | `reclaimToken()` | The DO-issued host re-entry token from the active `serverSignaling` session, or `null` for `publicRendezvous`/`inMemory` (no Durable Object). Read by `sessionPlugin` to persist the host-reload reclaim credential (§1.3/§5.1, D25). |
 | `onPeerConnected(cb)` | Registers the consumer fired when a peer's gameplay channel opens (host: a controller connected; controller: the host connected). Latest registration wins; returns an unsubscribe. Used by `sessionPlugin` to emit `room:peer-joined`. |
-| `onPeerLost(cb)` | Registers the consumer fired when an established peer is lost via the heartbeat dead-peer path (§2.4 — NOT on clean teardown/`close()`/`disconnect()`). Latest registration wins; returns an unsubscribe. Used by `sessionPlugin` to emit `room:peer-left`. |
+| `onPeerLost(cb)` | Registers the consumer fired when an established peer is lost via the heartbeat dead-peer path (§2.4), or, on the host, when a handshake dies: past the retry cap, or the peer left signaling. A peer that never connected is reported too. NOT on clean teardown/`close()`/`disconnect()`, or when a known id is replaced. Latest registration wins; returns an unsubscribe. Used by `sessionPlugin` to emit `room:peer-left`, which ignores an id not in the roster. |
 
 ## Config
 

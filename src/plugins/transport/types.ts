@@ -211,8 +211,10 @@ export type TransportState = {
    */
   peerConnectedCb: ((peerId: PeerId) => void) | null;
   /**
-   * Single consumer notified when an ESTABLISHED peer is lost via the heartbeat dead-peer path (§2.4).
-   * NOT fired on teardown/close/explicit disconnect. Set by session via `onPeerLost`; `null` when unset.
+   * Single consumer notified when a peer is lost: an ESTABLISHED one via the heartbeat dead-peer path (§2.4), or,
+   * on the host, a handshake that died (past the retry cap, or the peer left signaling). A peer that never
+   * connected is reported too. NOT fired on teardown/close/explicit disconnect or when a known id is replaced.
+   * Set by session via `onPeerLost`; `null` when unset.
    * Single-slot — only `sessionPlugin` registers it (unlike `frameConsumers`, which fans out), so latest registration wins.
    */
   peerLostCb: ((peerId: PeerId) => void) | null;

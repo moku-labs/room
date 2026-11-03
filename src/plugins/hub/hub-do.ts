@@ -269,9 +269,10 @@ export class Hub {
   }
 
   /**
-   * Handles a `join`: enforces the join-window guard (1008) and controller cap (`full`), binds
-   * `{peerId, role}` onto the socket, persists the roster row + a minted reclaim token (output-gate),
-   * replies `join-ack` with the star-correct existing peers, and announces `peer-arrived` to that subset.
+   * Handles a `join`: enforces the join-window guard (1008), retires an older socket that still holds this id,
+   * enforces the controller cap (`full`), binds `{peerId, role}` onto the socket, persists the roster row + a
+   * minted reclaim token (output-gate), replies `join-ack` with the star-correct existing peers, and announces
+   * `peer-arrived` to that subset.
    *
    * @param ws - The joining socket.
    * @param env - The `join` envelope.
@@ -290,6 +291,8 @@ export class Hub {
       ws.close(1008, "join-window");
       return;
     }
+    // Before the cap, so a reload whose old socket is still open does not count twice.
+    this.retireOlderSocket(env.selfId, env.role);
     // Cap (controllers only): the host plus up to MAX_CONTROLLERS controllers (D11).
     if (env.role === "controller" && this.countControllers() >= MAX_CONTROLLERS) {
       sendEnvelope(ws, { kind: "full" });
@@ -356,6 +359,32 @@ export class Hub {
     const target = this.findSocket(env.to);
     if (target) sendEnvelope(target, { kind: "relay", from: att.peerId, msg: env.msg });
     recordRelay(this.ctx.storage.sql, att.peerId, env.msg);
+  }
+
+  /**
+   * Retires an older socket that still holds `peerId` in the same role: a phone reloaded before its old socket
+   * closed. The socket loses its identity first, so relays and the cap skip it even while it lingers in
+   * `getWebSockets()`, and its later `webSocketClose` deletes no row and announces no `peer-left`. A different
+   * role is left alone: an id a controller can read must not let it close the host.
+   *
+   * @param peerId - The id the new socket is joining with.
+   * @param role - The role the new socket is joining as.
+   * @example
+   * ```ts
+   * this.retireOlderSocket("p_ab12", "controller");
+   * ```
+   */
+  private retireOlderSocket(peerId: PeerId, role: Role): void {
+    const older = this.findSocket(peerId);
+    const att = older && readAttachment(older);
+    if (!older || att?.role !== role) return;
+    const retired: Attachment = { peerId: null, role: null, openedAt: att.openedAt };
+    older.serializeAttachment(retired);
+    try {
+      older.close(1000, "replaced");
+    } catch {
+      // Already closing: it holds no identity now, so this join goes on.
+    }
   }
 
   /**

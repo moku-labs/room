@@ -185,8 +185,6 @@ type PeerId = string;
 type RosterEntry = {
   /** Stable per-controller id. */
   readonly id: PeerId;
-  /** Phone-persisted token that re-binds a reloaded controller to the same roster slot. */
-  readonly reconnectToken: string;
   /** Optional human-facing display name the controller supplied (game-defined, JSON). */
   readonly name?: string;
   /** Epoch-ms timestamp the entry last had a live channel / heartbeat. */
@@ -444,7 +442,7 @@ these events.
 
 | Event | Payload | Emitted by | Meaning |
 |---|---|---|---|
-| `room:peer-joined` | `{ peerId: PeerId }` | session | Controller channel reached `connected`, added to roster. |
+| `room:peer-joined` | `{ peerId: PeerId }` | session | Controller channel reached `connected`, added to roster. A known id coming back fires it again, with its entry kept. |
 | `room:peer-left` | `{ peerId: PeerId }` | session | Controller left or heartbeat-declared dead; removed from roster. |
 | `room:host-reconnecting` | `Record<string, never>` (`{}`) | session | The host is away. On a controller: its channel was lost, or a different host appeared; intents buffer. On the host: this tab reloaded. |
 | `room:host-back` | `Record<string, never>` (`{}`) | session | A controller adopted the host after an absence; its buffered intents are on their way. |
@@ -463,6 +461,13 @@ any `onInit`, so a plugin's hook hears it. The host's `recoveryPhase()` stays `"
 
 **The reload path, on a phone:** `room:host-reconnecting` fires when the heartbeat declares the host dead, or when a
 different host appears first. `room:host-back` fires when the phone adopts the host. `intent` follows both by itself.
+
+**A phone reload:** `joinRoom` keeps this tab's selfId in sessionStorage, per room. `leave()` and a `full` result remove
+it. Where the adapter carries that id, `inMemory` and `serverSignaling`, a reload in the same tab keeps the roster entry,
+with no `room:peer-left`, and `room:peer-joined` fires again, so the new replica gets its baseline. A duplicated tab
+copies sessionStorage, so both tabs hold one id and the host sees one player. On the default `publicRendezvous` a reloaded phone never gets its old slot: peers are keyed by
+Trystero's id, new on every page load. It can take a new slot only while the host is in signaling, and the host leaves
+signaling once a phone's channel connects: after that its join ends `unreachable`.
 
 ---
 
@@ -527,16 +532,16 @@ type SessionApi = {
    *  lazy-imported host-only). null when generateQr is false or no room is open. Encodes the join URL ONLY,
    *  never SDP/ICE. (createRoom is sync so RoomDescriptor.qr is always null — get the matrix here.) */
   qr: () => Promise<QrMatrix | null>;
-  /** CONTROLLER. Loads/creates the phone reconnectToken, joins signaling as passive. Resolves on the host's verdict:
+  /** CONTROLLER. Loads or mints this tab's selfId for the code (sessionStorage), joins signaling as passive. Resolves on the host's verdict:
    *  its first roster frame admits, its room-full frame refuses; an open channel alone settles nothing. `{ ok:false,
    *  reason }` on failure, and the device is then in no room (role "none", code "", transport closed), so joinRoom
    *  can be called again. A lost room-full frame ends as "unreachable". (passive:true set internally — caller passes
    *  code only.) */
   joinRoom: (code: string) => Promise<JoinResult>;
   /** Leaves the room (closes channels, clears roster/detaches, disarms recovery) and deletes the host's re-entry
-   *  record, so the next load starts with no room. createRoom() then opens a new room on the same app. Idempotent. */
+   *  record and this tab's saved selfId, so the next load starts with no room. createRoom() then opens a new room on the same app. Idempotent. */
   leave: () => Promise<void>;
-  /** CONTROLLER re-entry helper for the iOS "rescan QR" degrade path; re-uses the persisted reconnectToken. A failure
+  /** CONTROLLER re-entry helper for the iOS "rescan QR" degrade path; joins again with the same selfId. A failure
    *  keeps the room, so it can be repeated and a host that comes back later is still adopted. */
   rejoin: () => Promise<JoinResult>;
   /** Roster snapshot (defensive copy, ordered by joinedAt). Host = authoritative; controller mirrors the host. */
@@ -899,7 +904,7 @@ verified "couch" profile.
 | `reconnectTimeoutMs` | `number` | `10000` | How long a controller waits for a reloaded host before degrading. |
 | `intentBufferMax` | `number` | `256` | Ring-buffer cap for intents buffered during host absence (oldest dropped). |
 | `intentBufferMaxAgeMs` | `number` | `8000` | Max age of a buffered intent before discard on flush. |
-| `storageKeyPrefix` | `string` | `"moku.room"` | localStorage key prefix for the phone reconnectToken + re-entry record. |
+| `storageKeyPrefix` | `string` | `"moku.room"` | Key prefix for this tab's saved selfId (sessionStorage, per room) + the host re-entry record (localStorage). |
 | `reentryMaxAgeMs` | `number` | `1800000` | Oldest host re-entry record a reload may restore (the same as the hub's `roomTtlMs`). An older record is removed on load. |
 | `codeLength` | `number` | `6` (`ROOM_CODE_LENGTH`) | Generated room-code length. `serverSignaling` deployments SHOULD set `8` (~57 bits) to resist room-code enumeration of the public WS endpoint (D24). |
 

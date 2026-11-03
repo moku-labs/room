@@ -116,6 +116,103 @@ describe("Hub DO — join", () => {
   });
 });
 
+describe("Hub DO — a join with an id an open socket holds", () => {
+  it("at the cap: not full, the relay goes to the new socket, and the old close leaves the row with no peer-left", async () => {
+    const fake = makeFakeRoom();
+    const host = fake.addSocket();
+    await join(fake.room, host, "host_root", "host");
+    const old = fake.addSocket();
+    await join(fake.room, old, "p_0", "controller");
+    for (let index = 1; index < MAX_CONTROLLERS; index += 1) {
+      await join(fake.room, fake.addSocket(), `p_${index}`, "controller");
+    }
+
+    const fresh = fake.addSocket();
+    await join(fake.room, fresh, "p_0", "controller");
+
+    expect(fresh.lastSent()?.kind).toBe("join-ack");
+    expect(fresh.closed).toBeNull();
+    expect(old.closed).not.toBeNull();
+
+    const offer = { kind: "offer" as const, sdp: "v=0...offer" };
+    const relay = JSON.stringify({ kind: "relay", to: "p_0", msg: offer });
+    await fake.room.webSocketMessage(asWs(host), relay);
+    expect(fresh.sent).toContainEqual({ kind: "relay", from: "host_root", msg: offer });
+    expect(old.sent).not.toContainEqual({ kind: "relay", from: "host_root", msg: offer });
+
+    await fake.room.webSocketClose(asWs(old));
+    expect(fake.sql.rows.has("p_0")).toBe(true);
+    expect(host.sent.some(envelope => envelope.kind === "peer-left")).toBe(false);
+  });
+
+  it("counts the id once at the cap: a new id is still refused", async () => {
+    const fake = makeFakeRoom();
+    await join(fake.room, fake.addSocket(), "host_root", "host");
+    for (let index = 0; index < MAX_CONTROLLERS; index += 1) {
+      await join(fake.room, fake.addSocket(), `p_${index}`, "controller");
+    }
+    await join(fake.room, fake.addSocket(), "p_0", "controller");
+
+    const overflow = fake.addSocket();
+    await join(fake.room, overflow, "p_overflow", "controller");
+
+    expect(overflow.lastSent()?.kind).toBe("full");
+  });
+
+  it("the retired socket's frames go nowhere", async () => {
+    const fake = makeFakeRoom();
+    const host = fake.addSocket();
+    await join(fake.room, host, "host_root", "host");
+    const old = fake.addSocket();
+    await join(fake.room, old, "p_0", "controller");
+    await join(fake.room, fake.addSocket(), "p_0", "controller");
+
+    await fake.room.webSocketMessage(
+      asWs(old),
+      JSON.stringify({ kind: "relay", to: "host_root", msg: { kind: "answer", sdp: "stale" } })
+    );
+
+    expect(host.sent.some(envelope => envelope.kind === "relay")).toBe(false);
+  });
+
+  it("a close that throws does not stop the join", async () => {
+    const fake = makeFakeRoom();
+    await join(fake.room, fake.addSocket(), "host_root", "host");
+    const old = fake.addSocket();
+    await join(fake.room, old, "p_0", "controller");
+    old.close = () => {
+      throw new Error("already closed");
+    };
+
+    const fresh = fake.addSocket();
+    await join(fake.room, fresh, "p_0", "controller");
+
+    expect(fresh.lastSent()?.kind).toBe("join-ack");
+  });
+
+  it("a controller claiming the host's id does not retire the host", async () => {
+    const fake = makeFakeRoom();
+    const host = fake.addSocket();
+    await join(fake.room, host, "host_root", "host");
+
+    await join(fake.room, fake.addSocket(), "host_root", "controller");
+
+    expect(host.closed).toBeNull();
+  });
+
+  it("a join past the window retires nothing: the guard comes first", async () => {
+    const fake = makeFakeRoom();
+    const seated = fake.addSocket();
+    await join(fake.room, seated, "p_0", "controller");
+
+    const late = fake.addSocket(Date.now() - 20_000);
+    await join(fake.room, late, "p_0", "controller");
+
+    expect(late.closed?.code).toBe(1008);
+    expect(seated.closed).toBeNull();
+  });
+});
+
 describe("Hub DO — relay (opaque, no gameplay path)", () => {
   it("delivers a relay to the target and persists the in-flight SDP", async () => {
     const fake = makeFakeRoom();

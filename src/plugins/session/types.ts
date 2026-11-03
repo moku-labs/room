@@ -84,8 +84,8 @@ export type SessionConfig = {
    */
   readonly intentBufferMaxAgeMs: number;
   /**
-   * localStorage key prefix for the phone-persisted `reconnectToken` (§6.1) and the host re-entry
-   * record. The room code is appended so multiple rooms on one device never collide. Default
+   * Key prefix for this tab's saved `selfId` in `sessionStorage` (§6.1) and the host re-entry record in
+   * `localStorage`. The room code is appended so multiple rooms on one device never collide. Default
    * `"moku.room"`.
    */
   readonly storageKeyPrefix: string;
@@ -153,7 +153,7 @@ export type RecoverySubState = {
  *   selfId: "a1b2c3d4",
  *   roomCode: "G7K2QF",
  *   hostToken: "f81d4fae-7dec-11d0-a765-00a0c91e6bf6",
- *   roster: { "p-1": { id: "p-1", reconnectToken: "rt-1", name: "Ann", joinedAt: 1718600000000 } },
+ *   roster: { "p-1": { id: "p-1", name: "Ann", joinedAt: 1718600000000 } },
  *   sSeqAtSnapshot: 42,
  *   recovery: { phase: "stable", buffer: [], reconnectDeadline: 0, timer: null, persistHandle: null }
  * }
@@ -162,7 +162,7 @@ export type RecoverySubState = {
 export type SessionState = {
   /** This device's role. Set by `createRoom` (-> `"host"`) / `joinRoom` (-> `"controller"`). Starts `"none"`. */
   role: Role;
-  /** This device's stable signaling/wire id (§6, `PeerId`). Minted on first `createRoom`/`joinRoom`. Empty until then. */
+  /** This device's stable signaling/wire id (§6, `PeerId`). Minted on `createRoom`, saved per room by `joinRoom`, emptied by `leave`. Empty until then. */
   selfId: PeerId;
   /** The active 6-char room code (§6.2), or `""` when not in a room. Set by `createRoom`/`joinRoom`, cleared by `leave`. */
   roomCode: string;
@@ -417,9 +417,10 @@ export type SessionApi = {
   qr: () => Promise<QrMatrix | null>;
 
   /**
-   * CONTROLLER entry point. Loads/creates the phone-persisted `reconnectToken` (§6.1), mints/reuses
-   * `selfId`, and tells `transport` to join the signaling room as a passive answerer (`passive:true`,
-   * §1.1). Resolves once the host's verdict arrives: its first `roster` frame admits this device, its
+   * CONTROLLER entry point. Loads this tab's `selfId` for `code` from `sessionStorage`, or mints and saves
+   * one (§6.1), and tells `transport` to join the signaling room as a passive answerer (`passive:true`,
+   * §1.1). A reload in the same tab is the same player where the adapter carries `selfId`: see the session
+   * README, "A phone reload". `leave()` and a `full` result remove the saved id. Resolves once the host's verdict arrives: its first `roster` frame admits this device, its
    * `room-full` frame refuses it. An open channel alone settles nothing, because a full host opens the channel
    * too. On any failure the device is left with no room (`role` is `"none"`, `roomCode` is
    * `""`, transport closed), so calling `joinRoom` again retries on the same app. The `passive:true` flag is
@@ -452,13 +453,13 @@ export type SessionApi = {
 
   /**
    * CONTROLLER re-entry helper for the iOS "rescan QR" degradation path (§5.4): re-runs the join handshake
-   * against the stored `roomCode` after a degrade, re-using the phone-persisted `reconnectToken` so the
-   * controller re-binds to the same roster slot. Non-iOS controllers normally auto-rejoin without this. A
+   * against the stored `roomCode` after a degrade, with the same `selfId`, so the controller re-binds to
+   * the same roster slot. Non-iOS controllers normally auto-rejoin without this. A
    * failed rejoin keeps the room (`role`, `roomCode`, transport), so it can be repeated and a host that comes
    * back later is still adopted.
    *
    * @returns Same shape as {@link SessionApi.joinRoom}.
-   * @throws {Error} If there is no prior room to rejoin (no stored `reconnectToken`).
+   * @throws {Error} If there is no prior room to rejoin (no stored `roomCode`).
    * @example
    * ```ts
    * if (app.session.recoveryPhase() === "degraded") await app.session.rejoin();

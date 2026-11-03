@@ -260,7 +260,7 @@ describe("recovery/timeout", () => {
     onPeerConnected("host-peer");
     onFrame?.("host-peer", {
       t: "roster",
-      roster: { me: { id: "me", reconnectToken: "", joinedAt: 1 } }
+      roster: { me: { id: "me", joinedAt: 1 } }
     });
 
     await decision;

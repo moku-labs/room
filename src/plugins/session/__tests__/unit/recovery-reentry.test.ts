@@ -86,7 +86,7 @@ function runtime(deps: SessionDeps): SessionStateWithRuntime {
 function deliverRoster(selfId: string): void {
   wireOnCb?.("host-1", {
     t: "roster",
-    roster: { [selfId]: { id: selfId, reconnectToken: "", joinedAt: 1 } }
+    roster: { [selfId]: { id: selfId, joinedAt: 1 } }
   });
 }
 

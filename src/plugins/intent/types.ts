@@ -224,7 +224,7 @@ export type IntentDelivery = {
 export type IntentState = {
   /** Host-only: registered intent kinds keyed by `name`. Filled by `register()`, read on every inbound frame. Starts empty. */
   registry: Map<string, IntentRegistration>;
-  /** Host-only: highest applied `cSeq` per controller `PeerId` — the idempotence high-water mark (D4). Starts empty. */
+  /** Host-only: highest applied `cSeq` per controller `PeerId` — the idempotence high-water mark (D4). Starts empty. `room:peer-joined` clears a peer's mark. */
   lastApplied: Map<PeerId, number>;
   /** Controller-only: the next `cSeq` to stamp on an outbound `IntentFrame`; monotonic, increments per `intent()`. Starts `0`. */
   nextCSeq: number;

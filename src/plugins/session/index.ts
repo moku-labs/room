@@ -1,8 +1,8 @@
 /**
  * session — Complex tier.
  *
- * Room lifecycle (createRoom/joinRoom/leave/rejoin), presence/roster (stable PeerId + phone-persisted
- * reconnectToken, 8-cap, star-topology enforcement), and the full CLIENT-SIDE host-reload recovery state
+ * Room lifecycle (createRoom/joinRoom/leave/rejoin), presence/roster (a tab-persisted stable PeerId,
+ * 8-cap, star-topology enforcement), and the full CLIENT-SIDE host-reload recovery state
  * machine (D11): hostToken mint/verify peer-side, debounced IndexedDB + synchronous localStorage on
  * visibilitychange, rejoin-same-room, intent-buffer flush + reconcile, ~10s timeout, iOS "rescan QR"
  * degrade. Emits room:peer-joined, room:peer-left, room:host-reconnecting, room:host-back. Depends on

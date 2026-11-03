@@ -34,15 +34,12 @@ export type Namespace = string;
 export type PeerId = string;
 
 /**
- * A roster entry for one connected controller. The `id` is stable for the whole session; the
- * `reconnectToken` is persisted ON THE PHONE (localStorage) so a controller reload re-attaches to
- * the same logical slot. Plain-JSON (spec/11 §1.7) so it rides §2 and persists cleanly.
+ * A roster entry for one connected controller. The `id` is stable for the whole session. Plain-JSON
+ * (spec/11 §1.7) so it rides §2 and persists cleanly.
  */
 export type RosterEntry = {
   /** Stable per-controller id (see {@link PeerId}). */
   readonly id: PeerId;
-  /** Phone-persisted token that re-binds a reloaded controller to the same roster slot. */
-  readonly reconnectToken: string;
   /** Optional human-facing display name the controller supplied (game-defined, JSON). */
   readonly name?: string;
   /** Epoch-ms timestamp the entry last had a live channel / heartbeat (§2.4). */
@@ -405,7 +402,7 @@ export type RecoveryHelloFrame = {
   readonly t: "recovery-hello";
   /** The `hostToken` the controller last saw, echoed back for peer-side verification (§5.2). */
   readonly hostToken: string;
-  /** This controller's stable id + reconnect token (§6). */
+  /** This controller's stable id (§6). */
   readonly peerId: PeerId;
 };
 

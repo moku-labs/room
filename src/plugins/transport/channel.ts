@@ -170,13 +170,18 @@ function asWireChannel(channel: PeerConnection["channel"]): WireChannel | null {
  *
  * @param peer - The target peer connection record.
  * @param message - The already-serialized string to send (a `Frame` or `ChunkEnvelope`).
- * @param queue - Per-peer send queue, keyed by `peerId`, used during backpressure pauses.
+ * @param queue - Send queues used during backpressure pauses, keyed by the peer RECORD: a queue dies with its
+ *   channel, so a same-id peer back on a new channel never waits behind the old one's backlog.
  * @example
  * ```ts
  * writeToPeer(peer, JSON.stringify(frame), queues);
  * ```
  */
-function writeToPeer(peer: PeerConnection, message: string, queue: Map<PeerId, string[]>): void {
+function writeToPeer(
+  peer: PeerConnection,
+  message: string,
+  queue: WeakMap<PeerConnection, string[]>
+): void {
   const channel = asWireChannel(peer.channel);
   // No channel yet: discard.
   if (!channel) return;
@@ -184,11 +189,11 @@ function writeToPeer(peer: PeerConnection, message: string, queue: Map<PeerId, s
   if (channel.readyState !== "open") return;
 
   // Already paused/queued: append and wait.
-  const pending = queue.get(peer.peerId);
+  const pending = queue.get(peer);
   if (peer.paused || (pending && pending.length > 0)) {
     const buffer = pending ?? [];
     buffer.push(message);
-    queue.set(peer.peerId, buffer);
+    queue.set(peer, buffer);
     return;
   }
 
@@ -196,7 +201,7 @@ function writeToPeer(peer: PeerConnection, message: string, queue: Map<PeerId, s
   if (channel.bufferedAmount > BACKPRESSURE_THRESHOLD_BYTES) {
     peer.paused = true;
     channel.bufferedAmountLowThreshold = BACKPRESSURE_THRESHOLD_BYTES / 2;
-    queue.set(peer.peerId, [message]);
+    queue.set(peer, [message]);
     /**
      * Drains the per-peer send queue once the channel's `bufferedamountlow` event fires.
      *
@@ -208,8 +213,8 @@ function writeToPeer(peer: PeerConnection, message: string, queue: Map<PeerId, s
     const resume = (): void => {
       peer.paused = false;
       channel.removeEventListener("bufferedamountlow", resume);
-      const drained = queue.get(peer.peerId) ?? [];
-      queue.delete(peer.peerId);
+      const drained = queue.get(peer) ?? [];
+      queue.delete(peer);
       for (const queued of drained) writeToPeer(peer, queued, queue);
     };
     channel.addEventListener("bufferedamountlow", resume);
@@ -227,7 +232,7 @@ function writeToPeer(peer: PeerConnection, message: string, queue: Map<PeerId, s
  * @param peer - The target peer connection record.
  * @param frame - The frame to serialize and send.
  * @param cfg - The transport config supplying `maxMessageBytes`.
- * @param queue - Per-peer send queue passed through to `writeToPeer` for backpressure handling.
+ * @param queue - The send queues passed through to `writeToPeer` for backpressure handling.
  * @example
  * ```ts
  * sendFrame(peer, { t: "ping", ts: Date.now() }, cfg, queues);
@@ -237,7 +242,7 @@ function sendFrame(
   peer: PeerConnection,
   frame: Frame,
   cfg: Readonly<TransportConfig>,
-  queue: Map<PeerId, string[]>
+  queue: WeakMap<PeerConnection, string[]>
 ): void {
   const serialized = JSON.stringify(frame);
   if (byteLength(serialized) <= cfg.maxMessageBytes) {
@@ -362,7 +367,7 @@ function deliver(state: TransportState, peer: PeerConnection, frame: Frame): voi
  * ```
  */
 export function createWire(state: TransportState, cfg: Readonly<TransportConfig>): Wire {
-  const queues = new Map<PeerId, string[]>();
+  const queues = new WeakMap<PeerConnection, string[]>();
   return {
     /** @inheritdoc */
     send(peerId, frame) {
@@ -437,7 +442,7 @@ export function startHeartbeat(
   emitWarning: (reason: "channel-closed") => void
 ): void {
   if (state.heartbeatTimer !== null) return;
-  const queues = new Map<PeerId, string[]>();
+  const queues = new WeakMap<PeerConnection, string[]>();
   state.heartbeatTimer = setInterval(() => {
     const now = Date.now();
     for (const peer of state.peers.values()) {

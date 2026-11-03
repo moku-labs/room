@@ -53,8 +53,13 @@ export const intentPlugin = createPlugin("intent", {
       () => ctx.require(sessionPlugin).hostId(),
       payload => ctx.emit("room:intent-undeliverable", payload)
     ),
-  hooks: ctx =>
-    createRecoveryHooks(ctx.state, ctx.config, () => ctx.require(sessionPlugin).self().role),
+  hooks: ctx => ({
+    ...createRecoveryHooks(ctx.state, ctx.config, () => ctx.require(sessionPlugin).self().role),
+    // A phone back on a known id is a new app whose cSeq starts at 0 again: the old mark would drop its intents.
+    "room:peer-joined": payload => {
+      ctx.state.lastApplied.delete(payload.peerId);
+    }
+  }),
   onInit: ctx => {
     attachIntentReceive(ctx.state, ctx.require(transportPlugin).wire());
     ctx.require(sessionPlugin).onRoomEnded(() => endRoom(ctx.state, ctx.config));

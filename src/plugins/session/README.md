@@ -12,8 +12,8 @@
    lazy-imported so it stays out of the controller bundle), `joinRoom(code)` (controller, passive),
    `leave()`, `rejoin()`. Delegates the SDP/ICE handshake to `transport` (the `Signaling` seam) — never
    touches `RTCPeerConnection` directly.
-2. **Presence / roster** (`lifecycle/`) — stable `PeerId`, phone-persisted `reconnectToken`
-   (localStorage), the 8-controller cap (`MAX_CONTROLLERS`), and STAR-TOPOLOGY enforcement (host is the
+2. **Presence / roster** (`lifecycle/`) — a stable `PeerId` saved per tab and room in `sessionStorage` (see
+   "A phone reload"), the 8-controller cap (`MAX_CONTROLLERS`), and STAR-TOPOLOGY enforcement (host is the
    sole hub; controller<->controller channels are rejected).
 3. **Host-reload recovery** (`recovery/`) — the full CLIENT-SIDE state machine: `hostToken` minted on
    `createRoom` and verified PEER-SIDE (no server validator, D6); a debounced IndexedDB snapshot
@@ -29,9 +29,9 @@
 |---|---|---|
 | `createRoom` | `() => RoomDescriptor` | HOST. Returns `{ code, joinUrl, qr, hostToken }` SYNCHRONOUSLY (no `Promise`). `qr` is ALWAYS `null` here (QR generation is async) — use `qr()`. After a host reload the first call returns the restored room, with no second `connect`. Throws if already in a room. |
 | `qr` | `() => Promise<QrMatrix \| null>` | HOST. Async companion to `createRoom` — builds the join-QR matrix for the open room (the `qrcode` encoder is lazy-imported host-only). `null` when `generateQr` is `false` or no room is open. Encodes the join URL ONLY — never SDP/ICE. |
-| `joinRoom` | `(code: string) => Promise<JoinResult>` | CONTROLLER (passive set internally). Settles on the host's verdict, not on the open channel. `{ ok:false, reason:"full"\|"not-found"\|"unreachable" }` on failure, and the device is then in no room. See "How a join ends". |
-| `leave` | `() => Promise<void>` | Ends the room: deletes the host's re-entry record. `createRoom()` then opens a new room on the same app. Idempotent. |
-| `rejoin` | `() => Promise<JoinResult>` | iOS "rescan QR" path; re-uses the persisted `reconnectToken`. A failure keeps the room, so it can be repeated. |
+| `joinRoom` | `(code: string) => Promise<JoinResult>` | CONTROLLER (passive set internally). Loads or mints this tab's `selfId` for `code`. Settles on the host's verdict, not on the open channel. `{ ok:false, reason:"full"\|"not-found"\|"unreachable" }` on failure, and the device is then in no room. See "How a join ends". |
+| `leave` | `() => Promise<void>` | Ends the room: deletes the host's re-entry record and this tab's saved `selfId`. `createRoom()` then opens a new room on the same app. Idempotent. |
+| `rejoin` | `() => Promise<JoinResult>` | iOS "rescan QR" path; joins again with the same `selfId`. A failure keeps the room, so it can be repeated. |
 | `roster` | `() => readonly RosterEntry[]` | Sorted defensive copy (by `joinedAt`). |
 | `self` | `() => SelfInfo` | `{ selfId, role, roomCode }`. |
 | `hostId` | `() => PeerId` | The host's stable peer id (the star hub). On the HOST equals `self().selfId`; on a CONTROLLER it is the resolved host id (the `IntentFrame` target), `""` until the host channel is established. Used by `intentPlugin` to address the host. |
@@ -73,8 +73,9 @@ An open channel settles nothing, because a full host opens the channel too. `set
   wiring, so calling `joinRoom` again on the same app retries.
 - **A lost `room-full` frame** ends as `unreachable` at the timeout. The state after it is the same. On
   `serverSignaling` at the default cap the hub refuses first, so no frame is needed.
-- **A retry inside the delay** finds the host still holding the old channel, and can end as `unreachable` at
-  the timeout. A retry after the delay gets a fresh answer.
+- **A retry inside the delay** gets `full` at once. The `full` result removed the saved id, so the retry is a new
+  peer. A reload that beat the frame comes back with the same id: the host replaces the record it still holds and
+  refuses again.
 - **A failed `rejoin`** (and the auto-rejoin of §5.4) keeps the room: `role`, `roomCode` and transport stay, so
   it can be repeated and a host that comes back later is still adopted.
 - **Host re-entry** has no join pending, so the open channel is enough: the controller adopts the connecting
@@ -122,6 +123,40 @@ The re-entry record is what makes a reload resume the room. Three things decide 
 Only a broadcast writes a record: `sync` calls `persistSnapshot` after it broadcasts a dirty slice. A host
 that never broadcast has nothing to resume.
 
+## A phone reload
+
+`joinRoom` keeps this tab's `selfId` in `sessionStorage`, key `<storageKeyPrefix>.self.<code>`. A reload in the same
+tab loads it back. A second tab has its own. A duplicated tab copies `sessionStorage`, so both tabs hold one id and
+the host sees one player: each join replaces the other. `leave()` and a `full` result remove it, and `app.stop()` keeps
+it. With no usable `sessionStorage` the id lives as long as the app, so a reload is a new player.
+
+When that id reaches the host again, it is a known id:
+
+- `transport` replaces the old record silently: timer, channel, pc and warn keys go, and `onPeerLost` does not fire.
+  There is no `room:peer-left`.
+- `session` keeps the roster entry, `joinedAt` included, and admits it at the cap.
+- `room:peer-joined` fires again, with no `room:peer-left` before it. `sync` sends the new replica its baseline on
+  that event. A game that counts players on it must treat a known id as known.
+- `intent` clears its `lastApplied` mark for the id on that event, because a new app counts `cSeq` from 0.
+- A phone away longer than `heartbeatTimeoutMs` was declared dead first: `room:peer-left` fired and the entry is gone.
+  The same id then joins as a new entry, or gets `full`.
+- A replacement whose handshake dies, past the retry cap or by leaving signaling, reports the peer lost: the entry goes,
+  with one `room:peer-left`. An id that never reached the roster causes no event.
+
+**The adapter decides whether the id reaches the host.**
+
+| Adapter | A reloaded phone |
+|---|---|
+| `inMemory` | Same id, same slot. |
+| `serverSignaling` | Same id, same slot. An older socket still open for the id is retired by the hub. |
+| `publicRendezvous` (default) | Never the old slot. |
+
+`publicRendezvous` never sends `selfId`. The roster is keyed by Trystero's peer id, and Trystero mints that id per
+page load, so a reloaded phone is a new peer. If it reaches the host it takes a new slot. The old entry stays until the
+heartbeat declares it dead, and a full room answers `full` until then. It reaches the host only while the host is in
+signaling, and the host leaves signaling once a phone's channel connects (`transport/handlers.ts`). A phone that
+reloads after that finds no host, and its join ends `unreachable`.
+
 ## Lossy intent buffering (acceptable for v1)
 
 While the host is absent, `intent` buffers timestamped intents: its hooks follow `room:host-reconnecting` and
@@ -160,7 +195,7 @@ session/
   config.ts             # typed default config + the three room:* event descriptions
   state.ts              # createSessionState (pure, minimal context)
   api.ts                # makeSessionDeps + createSessionApi (delegates to lifecycle/* + recovery/*)
-  lifecycle/            # code.ts, qr.ts, roster.ts, join.ts (settleJoin)
+  lifecycle/            # code.ts, qr.ts, roster.ts, join.ts (settleJoin), self-id.ts
   recovery/             # types.ts, persistence.ts, hosttoken.ts, reentry.ts, buffer.ts, timeout.ts
   handlers.ts           # wire/peer-event handler factories (thin dispatchers)
   __tests__/            # unit/ + integration/ (inMemory adapter)

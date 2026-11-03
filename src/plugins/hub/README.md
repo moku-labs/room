@@ -23,7 +23,9 @@ every path is testable before deploy.
 2. **`Hub` Durable Object** (`hub-do.ts`, a plain Cloudflare DO class — co-located, NOT a
    plugin, D6/I3) — Hibernation accept; a discriminated `ClientEnvelope.kind` switch
    (`join` / `reclaim` / `relay` — **no gameplay-relay case**); star-topology enforcement
-   (passive↔passive never announced); the **join-window guard** (late `join` → close `1008`); the
+   (passive↔passive never announced); the **join-window guard** (late `join` → close `1008`); **one socket per
+   id** (a `join` with an id an open socket holds in the same role retires that socket first: relays and the cap
+   skip it, and its later close deletes no row and sends no `peer-left`); the
    controller **cap** (`{kind:"full"}` + close); the host-reload **reclaim** handshake; and a
    safe-guarded **Alarm TTL** (reschedules while sockets live, `deleteAll()` only at zero).
 3. **SQLite heavy state** (`sqlite.ts`) — the `sessions` roster (peer id + role + reclaim token + in-flight

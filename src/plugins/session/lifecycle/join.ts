@@ -6,6 +6,7 @@
  */
 
 import type { JoinResult, SessionDeps, SessionState } from "../types";
+import { forgetSelfId } from "./self-id";
 
 /**
  * Runs the `onRoomEnded` callbacks: this device's room is over.
@@ -27,7 +28,7 @@ export function notifyRoomEnded(state: SessionState): void {
  * transport closed. The promise resolves only after the close finished, so a retry made on the result never
  * races the teardown; `close()` keeps the wiring, so that retry is heard by the same consumers. That is also the
  * end of the room, so the `onRoomEnded` callbacks run. A failed re-entry (`rejoin`) keeps the room, and the
- * transport stays open for the host to come back on.
+ * transport stays open for the host to come back on. A `full` result, on either path, forgets this tab's saved id.
  *
  * @param deps - This app's destructured per-instance pieces.
  * @param result - The join's outcome.
@@ -46,6 +47,9 @@ export function settleJoin(deps: SessionDeps, result: JoinResult): void {
     clearTimeout(state._joinTimeout);
     state._joinTimeout = null;
   }
+
+  // Read before the reset below clears the code. The check above keeps a stray frame from forgetting a seated id.
+  if (!result.ok && result.reason === "full") forgetSelfId(deps, state.roomCode);
 
   if (result.ok || state._pendingJoinKeepsRoom) {
     resolve(result);
