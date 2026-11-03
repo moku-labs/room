@@ -6,6 +6,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { serverSignaling } from "../../adapters/server";
 import type { ClientEnvelope, ServerEnvelope, SignalMsg } from "../../protocol";
+import { RoomFullError } from "../../protocol";
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Mock WebSocket — uses addEventListener so the impl can use addEventListener.
@@ -280,6 +281,21 @@ describe("serverSignaling — reclaim (host reload)", () => {
     const onPeer = vi.fn();
     session.onPeer(onPeer);
     expect(onPeer).toHaveBeenCalledWith("p_ab12");
+  });
+});
+
+describe("serverSignaling — full → RoomFullError", () => {
+  it("rejects the join with RoomFullError when the hub answers full", async () => {
+    const sig = serverSignaling("wss://r.example.com");
+    const joinPromise = sig.join("K7M2QX", { selfId: "p_ab12", passive: true });
+
+    await vi.waitFor(() => expect(MockWebSocket.instances).toHaveLength(1));
+    const ws = MockWebSocket.instances[0];
+    if (!ws) throw new Error("missing ws");
+    ws.open();
+    ws.receiveFromServer({ kind: "full" });
+
+    await expect(joinPromise).rejects.toBeInstanceOf(RoomFullError);
   });
 });
 

@@ -7,12 +7,14 @@
  * @see ../README.md
  */
 
+import { RoomFullError } from "../../transport/protocol";
 import {
   handleHostChannelLost,
   handlePeerConnected,
   handlePeerLost,
   handleRecoveryFrame
 } from "../handlers";
+import { settleJoin } from "../lifecycle/join";
 import type { JoinResult, SessionDeps, SessionState } from "../types";
 import { mintHostToken } from "./hosttoken";
 import { armPersistence, readReentryRecord } from "./persistence";
@@ -24,11 +26,11 @@ import { armPersistence, readReentryRecord } from "./persistence";
  * correct per-app state. Opens NO connections (those are lazy, on `createRoom`/`joinRoom`).
  *
  * D18 wiring — role-discriminated:
- * - `onPeerConnected`: host → upsert roster + `room:peer-joined`; controller → record host id + resolve
- *   pending joinRoom promise.
+ * - `onPeerConnected`: host → upsert roster or refuse + `room:peer-joined`; controller → record host id.
+ *   A pending joinRoom stays pending: the host's `roster` or `room-full` frame settles it.
  * - `onPeerLost`: host → remove roster + `room:peer-left`; controller + lost peer IS host → enter
  *   `host-absent` + arm reconnect timeout.
- * - `wire().on(handleRecoveryFrame(deps))` — dispatches inbound recovery frames.
+ * - `wire().on(handleRecoveryFrame(deps))` — dispatches inbound recovery, roster and room-full frames.
  *
  * @param deps - This app's destructured per-instance pieces.
  * @example
@@ -60,19 +62,12 @@ export function registerTransportBindings(deps: SessionDeps): void {
         rt._pendingJoinResolve !== null || deps.state.recovery.phase !== "stable";
       if (rt._hostId !== null && !expectingHost) return;
 
-      // Adopt the connecting peer as the host and mark recovery stable.
+      // Adopt the connecting peer as the host and mark recovery stable. That is all the recovery path
+      // needs. A pending join stays pending: a full host opens the channel too, so only its `roster` or
+      // `room-full` frame can settle the join (`handleRecoveryFrame`).
       deps.state.selfId = deps.state.selfId || peerId; // keep our own id if already set
       deps.state.recovery.phase = "stable";
-
-      // Settle any pending joinRoom resolver, recording this peer as the host id either way.
-      const resolver = rt._pendingJoinResolve;
-      if (resolver) {
-        rt._pendingJoinResolve = null;
-        rt._hostId = peerId;
-        resolver({ ok: true, selfId: deps.state.selfId });
-      } else {
-        rt._hostId = peerId;
-      }
+      rt._hostId = peerId;
     }
   });
 
@@ -176,8 +171,9 @@ export type SessionStateWithRuntime = SessionState;
 
 /**
  * Internal join-room implementation used by both `joinRoom` and `rejoinSameRoom`.
- * Calls `transport.connect` with the controller role and waits for `onPeerConnected` to
- * fire (signalling the host channel is open), with a timeout fallback.
+ * Calls `transport.connect` with the controller role and waits for the host's verdict: the first `roster`
+ * frame admits it, a `room-full` frame refuses it (`handleRecoveryFrame`). A rejected connect settles it as `full` ({@link RoomFullError}) or `not-found`, and the timeout as `unreachable`.
+ * A device already in the room is re-entering it: a failure keeps the room (see `settleJoin`).
  *
  * @param deps - This app's destructured per-instance pieces.
  * @param code - The room code to join.
@@ -197,15 +193,15 @@ export function doJoinRoom(deps: SessionDeps, code: string): Promise<JoinResult>
       stateRuntime._joinTimeout = null;
     }
 
-    // Park the resolver so onPeerConnected can settle it.
+    // Park the resolver so the host's frame can settle it.
+    stateRuntime._pendingJoinKeepsRoom = deps.state.role === "controller";
     stateRuntime._pendingJoinResolve = resolve;
 
-    // Arm the unreachable-host timeout.
+    // Arm the unreachable-host timeout. It also ends a join whose `room-full` frame was lost on the way.
     stateRuntime._joinTimeout = setTimeout(() => {
       stateRuntime._joinTimeout = null;
       if (stateRuntime._pendingJoinResolve === resolve) {
-        stateRuntime._pendingJoinResolve = null;
-        resolve({ ok: false, reason: "unreachable" });
+        settleJoin(deps, { ok: false, reason: "unreachable" });
       }
     }, deps.config.reconnectTimeoutMs);
 
@@ -219,14 +215,10 @@ export function doJoinRoom(deps: SessionDeps, code: string): Promise<JoinResult>
         selfId: deps.state.selfId,
         code
       })
-      .catch(() => {
+      .catch((error: unknown) => {
         if (stateRuntime._pendingJoinResolve === resolve) {
-          stateRuntime._pendingJoinResolve = null;
-          if (stateRuntime._joinTimeout) {
-            clearTimeout(stateRuntime._joinTimeout);
-            stateRuntime._joinTimeout = null;
-          }
-          resolve({ ok: false, reason: "not-found" });
+          const reason = error instanceof RoomFullError ? "full" : "not-found";
+          settleJoin(deps, { ok: false, reason });
         }
       });
   });

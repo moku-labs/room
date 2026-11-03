@@ -13,6 +13,7 @@ import {
   handleRecoveryFrame,
   handleStarTopologyViolation
 } from "../../handlers";
+import { teardownSession } from "../../recovery/persistence";
 import { createSessionState } from "../../state";
 import type { SessionDeps } from "../../types";
 
@@ -64,6 +65,18 @@ function makeDeps(overrides?: Partial<SessionDeps>): SessionDeps {
   };
 }
 
+/**
+ * Fills a room with a cap of one, so the next peer is refused.
+ *
+ * @returns Deps for a host whose only seat is taken by `p-1`.
+ */
+function fullRoom(): SessionDeps {
+  const base = makeDeps();
+  const deps: SessionDeps = { ...base, config: { ...base.config, maxControllers: 1 } };
+  handlePeerConnected(deps)("p-1", makeRosterEntry("p-1"));
+  return deps;
+}
+
 describe("handlers", () => {
   it("handlePeerConnected: upserts roster + emits room:peer-joined", () => {
     const deps = makeDeps();
@@ -78,21 +91,101 @@ describe("handlers", () => {
   });
 
   it("handlePeerConnected: rejects the 9th controller without emitting", () => {
-    const deps = makeDeps();
-    // Fill to cap.
-    for (let i = 1; i <= 8; i++) {
-      handlePeerConnected(deps)(`p-${i}`, makeRosterEntry(`p-${i}`, i * 1000));
+    vi.useFakeTimers();
+    try {
+      const deps = makeDeps();
+      // Fill to cap.
+      for (let i = 1; i <= 8; i++) {
+        handlePeerConnected(deps)(`p-${i}`, makeRosterEntry(`p-${i}`, i * 1000));
+      }
+      vi.mocked(deps.emit.peerJoined).mockClear();
+
+      // 9th controller.
+      handlePeerConnected(deps)("p-9", makeRosterEntry("p-9", 9000));
+
+      expect(deps.emit.peerJoined).not.toHaveBeenCalled();
+      expect(deps.state.roster["p-9"]).toBeUndefined();
+      // Verify disconnect was called on the rejected peer, once its close delay ended.
+      vi.runOnlyPendingTimers();
+      const transport = deps.requireTransport();
+      expect(vi.mocked(transport.disconnect)).toHaveBeenCalledWith("p-9");
+    } finally {
+      vi.useRealTimers();
     }
-    vi.mocked(deps.emit.peerJoined).mockClear();
+  });
 
-    // 9th controller.
-    handlePeerConnected(deps)("p-9", makeRosterEntry("p-9", 9000));
+  describe("the close delay of a refused peer", () => {
+    it("sends room-full at once, stays connected until the delay, then disconnects", () => {
+      vi.useFakeTimers();
+      try {
+        const deps = fullRoom();
+        const transport = deps.requireTransport();
 
-    expect(deps.emit.peerJoined).not.toHaveBeenCalled();
-    expect(deps.state.roster["p-9"]).toBeUndefined();
-    // Verify disconnect was called on the rejected peer.
-    const transport = deps.requireTransport();
-    expect(vi.mocked(transport.disconnect)).toHaveBeenCalledWith("p-9");
+        handlePeerConnected(deps)("p-2", makeRosterEntry("p-2"));
+
+        expect(vi.mocked(transport.wire().send)).toHaveBeenCalledWith("p-2", { t: "room-full" });
+        vi.advanceTimersByTime(249);
+        expect(vi.mocked(transport.disconnect)).not.toHaveBeenCalled();
+
+        vi.advanceTimersByTime(1);
+        expect(vi.mocked(transport.disconnect)).toHaveBeenCalledWith("p-2");
+        expect(vi.getTimerCount()).toBe(0);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it("teardown inside the delay leaves no timer and no late disconnect", () => {
+      vi.useFakeTimers();
+      try {
+        const deps = fullRoom();
+        handlePeerConnected(deps)("p-2", makeRosterEntry("p-2"));
+        expect(vi.getTimerCount()).toBe(1);
+
+        teardownSession(deps.state);
+
+        expect(vi.getTimerCount()).toBe(0);
+        vi.advanceTimersByTime(1000);
+        expect(vi.mocked(deps.requireTransport().disconnect)).not.toHaveBeenCalled();
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it("a refused peer that retries and gets a seat inside the delay is not disconnected", () => {
+      vi.useFakeTimers();
+      try {
+        const deps = fullRoom();
+        handlePeerConnected(deps)("p-2", makeRosterEntry("p-2"));
+
+        handlePeerLost(deps)("p-1");
+        handlePeerConnected(deps)("p-2", makeRosterEntry("p-2"));
+        vi.advanceTimersByTime(1000);
+
+        expect(deps.state.roster["p-2"]).toBeDefined();
+        expect(vi.mocked(deps.requireTransport().disconnect)).not.toHaveBeenCalled();
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it("a second refusal inside the delay restarts it, so its frame gets the full delay too", () => {
+      vi.useFakeTimers();
+      try {
+        const deps = fullRoom();
+        handlePeerConnected(deps)("p-2", makeRosterEntry("p-2"));
+        vi.advanceTimersByTime(200);
+
+        handlePeerConnected(deps)("p-2", makeRosterEntry("p-2"));
+        vi.advanceTimersByTime(249);
+        expect(vi.mocked(deps.requireTransport().disconnect)).not.toHaveBeenCalled();
+
+        vi.advanceTimersByTime(1);
+        expect(vi.mocked(deps.requireTransport().disconnect)).toHaveBeenCalledOnce();
+      } finally {
+        vi.useRealTimers();
+      }
+    });
   });
 
   it("handlePeerLost: removes from roster + emits room:peer-left", () => {
@@ -209,6 +302,30 @@ describe("handlers", () => {
     handler("host-id", frame);
 
     expect(deps.state.roster).toEqual(roster);
+  });
+
+  it("handleRecoveryFrame: a roster frame after a failed join (role none) writes no mirror", () => {
+    const deps = makeDeps();
+    deps.state.role = "none";
+
+    handleRecoveryFrame(deps)("host-id", {
+      t: "roster",
+      roster: { "p-7": makeRosterEntry("p-7") }
+    });
+
+    expect(deps.state.roster).toEqual({});
+  });
+
+  it("handleRecoveryFrame: a room-full frame with no join pending changes nothing", () => {
+    const deps = makeDeps();
+    deps.state.role = "controller";
+    deps.state.roomCode = "TEST01";
+
+    handleRecoveryFrame(deps)("host-id", { t: "room-full" });
+
+    expect(deps.state.role).toBe("controller");
+    expect(deps.state.roomCode).toBe("TEST01");
+    expect(vi.mocked(deps.requireTransport().close)).not.toHaveBeenCalled();
   });
 
   it("handleRecoveryFrame: a roster frame is ignored on the host (authoritative roster preserved)", () => {

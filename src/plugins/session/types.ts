@@ -185,18 +185,25 @@ export type SessionState = {
   /** Live recovery sub-state (§5). See {@link RecoverySubState}. */
   recovery: RecoverySubState;
   /**
-   * Runtime-only controller-join handle: resolves the in-flight `joinRoom` promise when the host channel
-   * opens. NEVER serialized (a peer of `recovery.timer`/`persistHandle`); optional/absent until a join is
+   * Runtime-only controller-join handle: resolves the in-flight `joinRoom` promise when the host's verdict
+   * arrives (a `roster` frame admits, a `room-full` frame refuses) or the join fails. NEVER serialized (a peer of `recovery.timer`/`persistHandle`); optional/absent until a join is
    * in flight, accessed only inside `sessionPlugin`, never across the wire. Kept at the state root for
    * access convenience (§5.2).
    */
   _pendingJoinResolve?: ((result: JoinResult) => void) | null;
   /** Runtime-only: rejects the in-flight `joinRoom` promise (paired with {@link SessionState._pendingJoinResolve}). */
   _pendingJoinReject?: ((reason: unknown) => void) | null;
+  /**
+   * Runtime-only: the in-flight join re-enters a room this device is already in (`rejoin`, the auto-rejoin of
+   * §5.4), so a failure keeps the room and the host can still come back. A first join has no room to keep.
+   */
+  _pendingJoinKeepsRoom?: boolean;
   /** Runtime-only: the resolved host `PeerId` on a controller (the single star hub); `null`/absent until known. */
   _hostId?: string | null;
   /** Runtime-only: the in-flight `joinRoom` unreachable-timeout handle. */
   _joinTimeout?: ReturnType<typeof setTimeout> | null;
+  /** Runtime-only (host): the pending close timer of each refused peer. `teardownSession` clears them all. */
+  _refuseTimers?: Map<PeerId, ReturnType<typeof setTimeout>>;
   /** Runtime-only (host): the persisted re-entry record retained for re-broadcast on controller reconnect. */
   _reentryRecord?: HostReentryRecord | null;
   /** Runtime-only (host): `createRoom` already returned the restored room, so the next call throws. */
@@ -406,8 +413,11 @@ export type SessionApi = {
   /**
    * CONTROLLER entry point. Loads/creates the phone-persisted `reconnectToken` (§6.1), mints/reuses
    * `selfId`, and tells `transport` to join the signaling room as a passive answerer (`passive:true`,
-   * §1.1). Resolves once the DataChannel to the host is `connected`. The `passive:true` flag is set
-   * INTERNALLY (§1.1) — callers pass `code` only.
+   * §1.1). Resolves once the host's verdict arrives: its first `roster` frame admits this device, its
+   * `room-full` frame refuses it. An open channel alone settles nothing, because a full host opens the channel
+   * too. On any failure the device is left with no room (`role` is `"none"`, `roomCode` is
+   * `""`, transport closed), so calling `joinRoom` again retries on the same app. The `passive:true` flag is
+   * set INTERNALLY (§1.1) — callers pass `code` only.
    *
    * @param code - The 6-char room code from the scanned QR / manual entry (§6.2).
    * @returns `{ ok: true, selfId }` on success, or `{ ok: false, reason }` for `"full"` | `"not-found"` | `"unreachable"`.
@@ -437,7 +447,9 @@ export type SessionApi = {
   /**
    * CONTROLLER re-entry helper for the iOS "rescan QR" degradation path (§5.4): re-runs the join handshake
    * against the stored `roomCode` after a degrade, re-using the phone-persisted `reconnectToken` so the
-   * controller re-binds to the same roster slot. Non-iOS controllers normally auto-rejoin without this.
+   * controller re-binds to the same roster slot. Non-iOS controllers normally auto-rejoin without this. A
+   * failed rejoin keeps the room (`role`, `roomCode`, transport), so it can be repeated and a host that comes
+   * back later is still adopted.
    *
    * @returns Same shape as {@link SessionApi.joinRoom}.
    * @throws {Error} If there is no prior room to rejoin (no stored `reconnectToken`).

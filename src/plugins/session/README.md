@@ -29,9 +29,9 @@
 |---|---|---|
 | `createRoom` | `() => RoomDescriptor` | HOST. Returns `{ code, joinUrl, qr, hostToken }` SYNCHRONOUSLY (no `Promise`). `qr` is ALWAYS `null` here (QR generation is async) — use `qr()`. After a host reload the first call returns the restored room, with no second `connect`. Throws if already in a room. |
 | `qr` | `() => Promise<QrMatrix \| null>` | HOST. Async companion to `createRoom` — builds the join-QR matrix for the open room (the `qrcode` encoder is lazy-imported host-only). `null` when `generateQr` is `false` or no room is open. Encodes the join URL ONLY — never SDP/ICE. |
-| `joinRoom` | `(code: string) => Promise<JoinResult>` | CONTROLLER (passive set internally). `{ ok:false, reason:"full"\|"not-found"\|"unreachable" }` on failure. |
+| `joinRoom` | `(code: string) => Promise<JoinResult>` | CONTROLLER (passive set internally). Settles on the host's verdict, not on the open channel. `{ ok:false, reason:"full"\|"not-found"\|"unreachable" }` on failure, and the device is then in no room. See "How a join ends". |
 | `leave` | `() => Promise<void>` | Ends the room: deletes the host's re-entry record. `createRoom()` then opens a new room on the same app. Idempotent. |
-| `rejoin` | `() => Promise<JoinResult>` | iOS "rescan QR" path; re-uses the persisted `reconnectToken`. |
+| `rejoin` | `() => Promise<JoinResult>` | iOS "rescan QR" path; re-uses the persisted `reconnectToken`. A failure keeps the room, so it can be repeated. |
 | `roster` | `() => readonly RosterEntry[]` | Sorted defensive copy (by `joinedAt`). |
 | `self` | `() => SelfInfo` | `{ selfId, role, roomCode }`. |
 | `hostId` | `() => PeerId` | The host's stable peer id (the star hub). On the HOST equals `self().selfId`; on a CONTROLLER it is the resolved host id (the `IntentFrame` target), `""` until the host channel is established. Used by `intentPlugin` to address the host. |
@@ -46,6 +46,40 @@ Declares + emits THREE of the five `room:*` events: `room:peer-joined`, `room:pe
 
 **No wire/DataChannel traffic flows through `emit`.** Recovery frames + roster broadcasts ride
 `transport`'s `Wire`; `emit` carries only the three coarse `room:*` events.
+
+## How a join ends
+
+An open channel settles nothing, because a full host opens the channel too. `settleJoin`
+(`lifecycle/join.ts`) is the one place a pending join ends:
+
+| What the controller gets | `JoinResult` |
+|---|---|
+| The host's first `roster` frame | `{ ok: true, selfId }` |
+| The host's `room-full` frame | `{ ok: false, reason: "full" }` |
+| `transport.connect` rejects with `RoomFullError` (the hub's `full` envelope) | `{ ok: false, reason: "full" }` |
+| `transport.connect` rejects with anything else | `{ ok: false, reason: "not-found" }` |
+| Nothing within `reconnectTimeoutMs` | `{ ok: false, reason: "unreachable" }` |
+
+- **Over the cap, the host** sends `room-full` to that peer and disconnects it 250 ms later
+  (`REFUSE_CLOSE_DELAY_MS`): a close in the same tick lost the frame in real Chromium. The roster and
+  `room:peer-joined` do not change. The peer holds no seat during the delay, and a roster frame that reaches
+  it then does nothing: `room-full` went first and settled the join. `teardownSession` clears the timer, so
+  none survives `stop()` or `leave()`.
+- **A failed `joinRoom`** leaves no room: `role` is `"none"`, `roomCode` is `""`, `hostId()` is `""`, recovery
+  is `"stable"`, transport is closed. The promise resolves after the close finished, and `close()` keeps the
+  wiring, so calling `joinRoom` again on the same app retries.
+- **A lost `room-full` frame** ends as `unreachable` at the timeout. The state after it is the same. On
+  `serverSignaling` at the default cap the hub refuses first, so no frame is needed.
+- **A retry inside the delay** finds the host still holding the old channel, and can end as `unreachable` at
+  the timeout. A retry after the delay gets a fresh answer.
+- **A failed `rejoin`** (and the auto-rejoin of §5.4) keeps the room: `role`, `roomCode` and transport stay, so
+  it can be repeated and a host that comes back later is still adopted.
+- **Host re-entry** has no join pending, so the open channel is enough: the controller adopts the connecting
+  host and goes back to `"stable"`.
+
+The `roster` frame's arrival is the admission, whatever it holds: the host sends it only to devices it
+admitted. `publicRendezvous` keys the roster by Trystero's peer id, so a device cannot find its own `selfId`
+in it there.
 
 ## Reload-path timing — consumers MUST poll, not await the event
 
@@ -104,7 +138,7 @@ session/
   config.ts             # typed default config + the three room:* event descriptions
   state.ts              # createSessionState (pure, minimal context)
   api.ts                # makeSessionDeps + createSessionApi (delegates to lifecycle/* + recovery/*)
-  lifecycle/            # code.ts, qr.ts, roster.ts
+  lifecycle/            # code.ts, qr.ts, roster.ts, join.ts (settleJoin)
   recovery/             # types.ts, persistence.ts, hosttoken.ts, reentry.ts, buffer.ts, timeout.ts
   handlers.ts           # wire/peer-event handler factories (thin dispatchers)
   __tests__/            # unit/ + integration/ (inMemory adapter)

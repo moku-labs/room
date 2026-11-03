@@ -1,12 +1,13 @@
 /**
  * @file Unit tests for `recovery/reentry.ts`: the `onInit` transport wiring + host-reload re-entry.
  * Covers `registerTransportBindings` (role-discriminated onPeerConnected/onPeerLost callbacks + the
- * finding-#1 stable-host guard + the Wire.on recovery router), `doJoinRoom` (success / timeout /
+ * finding-#1 stable-host guard + the Wire.on recovery router), `doJoinRoom` (roster admission / timeout /
  * connect-reject / pre-existing-timeout clear), `rejoinSameRoom` (throws without a stored code), and
  * `detectHostReload` (no-record no-op + the full record-hit restore path with `persistence` mocked).
  */
 
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { RoomFullError } from "../../../transport/protocol";
 import * as persistence from "../../recovery/persistence";
 import type { SessionStateWithRuntime } from "../../recovery/reentry";
 import {
@@ -80,6 +81,21 @@ function runtime(deps: SessionDeps): SessionStateWithRuntime {
   return deps.state as unknown as SessionStateWithRuntime;
 }
 
+/** The host's roster broadcast that admits `selfId`, as the session's `Wire.on` router receives it. */
+function deliverRoster(selfId: string): void {
+  wireOnCb?.("host-1", {
+    t: "roster",
+    roster: { [selfId]: { id: selfId, reconnectToken: "", joinedAt: 1 } }
+  });
+}
+
+/** A fresh state for a controller whose id is already minted, as `joinRoom` leaves it. */
+function stateWithSelfId(): ReturnType<typeof createSessionState> {
+  const state = createSessionState();
+  state.selfId = "me";
+  return state;
+}
+
 describe("recovery/reentry", () => {
   afterEach(() => {
     vi.restoreAllMocks();
@@ -101,9 +117,8 @@ describe("recovery/reentry", () => {
       expect(deps.emit.peerJoined).toHaveBeenCalledWith({ peerId: "p-1" });
     });
 
-    it("controller branch with a pending join: resolves the promise, sets _hostId, phase becomes stable", async () => {
-      const state = createSessionState();
-      const deps = makeDeps(state);
+    it("controller branch with a pending join: records the host, phase stable, stays pending until the roster frame", async () => {
+      const deps = makeDeps(stateWithSelfId());
 
       registerTransportBindings(deps);
 
@@ -112,10 +127,14 @@ describe("recovery/reentry", () => {
 
       onPeerConnectedCb?.("host-1");
 
-      const result = await joinPromise;
-      expect(result).toEqual({ ok: true, selfId: "host-1" });
+      // The open channel records the host, and settles nothing: a full host opens the channel too.
       expect(runtime(deps)._hostId).toBe("host-1");
       expect(deps.state.recovery.phase).toBe("stable");
+      expect(runtime(deps)._pendingJoinResolve).not.toBeNull();
+
+      deliverRoster("me");
+
+      await expect(joinPromise).resolves.toEqual({ ok: true, selfId: "me" });
       expect(runtime(deps)._pendingJoinResolve).toBeNull();
     });
 
@@ -253,8 +272,8 @@ describe("recovery/reentry", () => {
   });
 
   describe("doJoinRoom", () => {
-    it("SUCCESS: resolves { ok: true, selfId } when a host connects", async () => {
-      const deps = makeDeps();
+    it("SUCCESS: resolves { ok: true, selfId } when the host's roster frame admits this device", async () => {
+      const deps = makeDeps(stateWithSelfId());
       registerTransportBindings(deps);
 
       const joinPromise = doJoinRoom(deps, "TEST01");
@@ -262,8 +281,9 @@ describe("recovery/reentry", () => {
       expect(deps.state.role).toBe("controller");
 
       onPeerConnectedCb?.("host-1");
+      deliverRoster("me");
 
-      await expect(joinPromise).resolves.toEqual({ ok: true, selfId: "host-1" });
+      await expect(joinPromise).resolves.toEqual({ ok: true, selfId: "me" });
     });
 
     it("TIMEOUT: resolves { ok: false, reason: unreachable } after reconnectTimeoutMs", async () => {
@@ -277,6 +297,123 @@ describe("recovery/reentry", () => {
         await expect(joinPromise).resolves.toEqual({ ok: false, reason: "unreachable" });
         expect(runtime(deps)._pendingJoinResolve).toBeNull();
         expect(runtime(deps)._joinTimeout).toBeNull();
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it("room-full settles first: a roster frame after it does nothing", async () => {
+      const deps = makeDeps(stateWithSelfId());
+      registerTransportBindings(deps);
+
+      const joinPromise = doJoinRoom(deps, "TEST01");
+      wireOnCb?.("host-1", { t: "room-full" });
+      deliverRoster("me");
+
+      await expect(joinPromise).resolves.toEqual({ ok: false, reason: "full" });
+      expect(deps.state.role).toBe("none");
+      expect(deps.state.roster).toEqual({});
+      expect(vi.mocked(deps.requireTransport().close)).toHaveBeenCalledOnce();
+    });
+
+    it("a roster frame keyed by another id admits too: publicRendezvous keys it by Trystero's id", async () => {
+      const deps = makeDeps(stateWithSelfId());
+      registerTransportBindings(deps);
+
+      const joinPromise = doJoinRoom(deps, "TEST01");
+      deliverRoster("trystero-peer-id");
+
+      await expect(joinPromise).resolves.toEqual({ ok: true, selfId: "me" });
+    });
+
+    it("CONNECT REJECTS with RoomFullError: resolves full and resets the room state", async () => {
+      const deps = makeDeps(stateWithSelfId(), () => Promise.reject(new RoomFullError()));
+
+      const result = await doJoinRoom(deps, "TEST01");
+
+      expect(result).toEqual({ ok: false, reason: "full" });
+      expect(deps.state.role).toBe("none");
+      expect(deps.state.roomCode).toBe("");
+      expect(vi.mocked(deps.requireTransport().close)).toHaveBeenCalledOnce();
+    });
+
+    it("LOST room-full frame: the channel opens, no frame comes, ends unreachable with nothing stale", async () => {
+      vi.useFakeTimers();
+      try {
+        const deps = makeDeps(stateWithSelfId());
+        registerTransportBindings(deps);
+
+        const joinPromise = doJoinRoom(deps, "TEST01");
+        onPeerConnectedCb?.("host-1");
+        expect(runtime(deps)._hostId).toBe("host-1");
+
+        // The host disconnected this device, so the heartbeat declares it dead before the join times out.
+        onPeerLostCb?.("host-1");
+        expect(deps.state.recovery.phase).toBe("host-absent");
+
+        await vi.advanceTimersByTimeAsync(testConfig.reconnectTimeoutMs + 10);
+
+        await expect(joinPromise).resolves.toEqual({ ok: false, reason: "unreachable" });
+        expect(deps.state.role).toBe("none");
+        expect(deps.state.roomCode).toBe("");
+        expect(runtime(deps)._hostId).toBeNull();
+        expect(deps.state.recovery.phase).toBe("stable");
+        expect(deps.state.recovery.timer).toBeNull();
+        expect(vi.mocked(deps.requireTransport().close)).toHaveBeenCalledOnce();
+
+        // No auto-rejoin fires later on behalf of the failed join.
+        await vi.advanceTimersByTimeAsync(testConfig.reconnectTimeoutMs * 2);
+        expect(vi.mocked(deps.requireTransport().connect)).toHaveBeenCalledOnce();
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it("a failed join resolves only after the close finished, so a retry cannot race the teardown", async () => {
+      const deps = makeDeps(stateWithSelfId(), () => Promise.reject(new Error("boom")));
+      let finishClose: (() => void) | undefined;
+      vi.mocked(deps.requireTransport().close).mockImplementation(
+        () =>
+          new Promise<void>(resolve => {
+            finishClose = resolve;
+          })
+      );
+      const settled = vi.fn();
+
+      const joinPromise = doJoinRoom(deps, "TEST01").then(settled);
+      await vi.waitFor(() => {
+        expect(vi.mocked(deps.requireTransport().close)).toHaveBeenCalledOnce();
+      });
+      expect(settled).not.toHaveBeenCalled();
+
+      finishClose?.();
+      await joinPromise;
+
+      expect(settled).toHaveBeenCalledWith({ ok: false, reason: "not-found" });
+    });
+
+    it("a failed rejoin keeps the room: the host that comes back later is still adopted", async () => {
+      vi.useFakeTimers();
+      try {
+        const state = stateWithSelfId();
+        state.role = "controller";
+        state.roomCode = "TEST01";
+        state.recovery.phase = "host-absent";
+        const deps = makeDeps(state);
+        registerTransportBindings(deps);
+
+        const rejoining = rejoinSameRoom(deps);
+        await vi.advanceTimersByTimeAsync(testConfig.reconnectTimeoutMs + 10);
+
+        await expect(rejoining).resolves.toEqual({ ok: false, reason: "unreachable" });
+        expect(deps.state.role).toBe("controller");
+        expect(deps.state.roomCode).toBe("TEST01");
+        expect(vi.mocked(deps.requireTransport().close)).not.toHaveBeenCalled();
+
+        onPeerConnectedCb?.("host-back");
+
+        expect(runtime(deps)._hostId).toBe("host-back");
+        expect(deps.state.recovery.phase).toBe("stable");
       } finally {
         vi.useRealTimers();
       }
@@ -301,21 +438,22 @@ describe("recovery/reentry", () => {
     it("timeout firing AFTER a successful resolve is a no-op (defensive double-resolve guard)", async () => {
       vi.useFakeTimers();
       try {
-        const deps = makeDeps();
+        const deps = makeDeps(stateWithSelfId());
         registerTransportBindings(deps);
 
         const joinPromise = doJoinRoom(deps, "TEST01");
 
-        // Resolve via the host connecting — this nulls _pendingJoinResolve.
-        onPeerConnectedCb?.("host-1");
-        await expect(joinPromise).resolves.toEqual({ ok: true, selfId: "host-1" });
+        // Resolve via the roster frame — this nulls _pendingJoinResolve.
+        deliverRoster("me");
+        await expect(joinPromise).resolves.toEqual({ ok: true, selfId: "me" });
 
-        // Now let the original timeout elapse. Its `_pendingJoinResolve === resolve` guard is now
-        // false, so it must NOT re-resolve / overwrite the result.
+        // Now let the original timeout elapse. It was cleared on settle, so it must NOT re-resolve /
+        // overwrite the result.
         await vi.advanceTimersByTimeAsync(testConfig.reconnectTimeoutMs + 10);
 
         // No second resolution occurred (promise already settled to ok:true) and state is clean.
-        await expect(joinPromise).resolves.toEqual({ ok: true, selfId: "host-1" });
+        await expect(joinPromise).resolves.toEqual({ ok: true, selfId: "me" });
+        expect(deps.state.role).toBe("controller");
         expect(runtime(deps)._pendingJoinResolve).toBeNull();
       } finally {
         vi.useRealTimers();
@@ -325,10 +463,10 @@ describe("recovery/reentry", () => {
     it("connect rejecting AFTER a successful resolve is a no-op (resolver no longer matches)", async () => {
       vi.useFakeTimers();
       try {
-        // A connect whose rejection we control, so it lands AFTER the peer-connected resolve.
+        // A connect whose rejection we control, so it lands AFTER the roster-frame resolve.
         let rejectConnect: ((reason: unknown) => void) | undefined;
         const deps = makeDeps(
-          createSessionState(),
+          stateWithSelfId(),
           () =>
             new Promise<void>((_resolve, reject) => {
               rejectConnect = reject;
@@ -338,17 +476,18 @@ describe("recovery/reentry", () => {
 
         const joinPromise = doJoinRoom(deps, "TEST01");
 
-        // Resolve first via the host connecting.
-        onPeerConnectedCb?.("host-1");
-        await expect(joinPromise).resolves.toEqual({ ok: true, selfId: "host-1" });
+        // Resolve first via the roster frame.
+        deliverRoster("me");
+        await expect(joinPromise).resolves.toEqual({ ok: true, selfId: "me" });
 
-        // Now reject connect — the catch() guard `_pendingJoinResolve === resolve` is false, so the
-        // "not-found" path is skipped (no overwrite of the already-resolved ok:true result).
+        // Now reject connect — nothing is pending any more, so the "not-found" path is skipped (no
+        // overwrite of the already-resolved ok:true result, no reset of the joined state).
         rejectConnect?.(new Error("late reject"));
         await Promise.resolve();
         await Promise.resolve();
 
-        await expect(joinPromise).resolves.toEqual({ ok: true, selfId: "host-1" });
+        await expect(joinPromise).resolves.toEqual({ ok: true, selfId: "me" });
+        expect(deps.state.role).toBe("controller");
       } finally {
         vi.useRealTimers();
       }
@@ -358,7 +497,7 @@ describe("recovery/reentry", () => {
       vi.useFakeTimers();
       const clearSpy = vi.spyOn(globalThis, "clearTimeout");
       try {
-        const deps = makeDeps();
+        const deps = makeDeps(stateWithSelfId());
         registerTransportBindings(deps);
 
         // First join arms a timeout; capture the handle before it fires.
@@ -372,11 +511,11 @@ describe("recovery/reentry", () => {
         expect(secondTimeout).not.toBe(firstTimeout);
         expect(clearSpy).toHaveBeenCalledWith(firstTimeout);
 
-        // The second join owns the live resolver — settle BOTH promises via the peer-connected
-        // path (it resolves whichever resolver is currently pending), then drain the now-cleared
-        // first timeout so nothing dangles.
-        onPeerConnectedCb?.("host-1");
-        await expect(secondPromise).resolves.toEqual({ ok: true, selfId: "host-1" });
+        // The second join owns the live resolver — settle it via the roster frame (it resolves
+        // whichever resolver is currently pending), then drain the now-cleared first timeout so
+        // nothing dangles.
+        deliverRoster("me");
+        await expect(secondPromise).resolves.toEqual({ ok: true, selfId: "me" });
 
         // The first resolver was overwritten before it ever ran; its promise never settles, and its
         // timeout was cleared above so it cannot fire. Attach a no-op catch so the floating promise

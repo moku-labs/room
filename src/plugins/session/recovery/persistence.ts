@@ -395,9 +395,9 @@ export function readReentryRecord(deps: SessionDeps): HostReentryRecord | null {
 /**
  * `onStop` teardown for the recovery sub-domain (D14): does the final SYNCHRONOUS snapshot persist FIRST
  * (`persistHandle.flushNow()` — the same `localStorage` path as `visibilitychange`), THEN clears timers
- * and removes the `visibilitychange` listener (`persistHandle.dispose()`), nulls `recovery.timer`, and
- * clears any in-flight join timeout + settles its pending resolver (so a `joinRoom` interrupted by
- * `stop()` leaves neither a dangling 10s timer nor a hung promise — finding #3).
+ * and removes the `visibilitychange` listener (`persistHandle.dispose()`), nulls `recovery.timer`, clears the
+ * pending close timers of refused peers, and clears any in-flight join timeout + settles its pending resolver
+ * (so a `joinRoom` interrupted by `stop()` leaves neither a dangling 10s timer nor a hung promise — finding #3).
  * Takes the per-app `SessionState` (the plugin's own state, passed to `onStop`) — NEVER a
  * module-level singleton — so it needs no `require`/`emit` (absent from the teardown context).
  *
@@ -418,6 +418,9 @@ export function teardownSession(state: SessionState): void {
     clearTimeout(state.recovery.timer);
     state.recovery.timer = null;
   }
+  // A refused peer's close timer dies here: the transport teardown closes that peer anyway.
+  for (const timer of state._refuseTimers?.values() ?? []) clearTimeout(timer);
+  state._refuseTimers?.clear();
   // A joinRoom() in flight when the app stops must not leave its reconnect timer dangling (it would
   // fire post-teardown → stale promise resolution) nor leave an awaiting joinRoom() hung forever.
   const runtime = state;

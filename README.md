@@ -180,7 +180,8 @@ const pad = createPlugin("pad", {
 const app = createApp({ plugins: [controllerPlugin, pad] });
 await app.start();
 
-// Join with the code scanned from the stage's QR. Throws on "full" | "not-found" | "unreachable".
+// Join with the code scanned from the stage's QR. Resolves when the host admits this phone.
+// Throws on "full" | "not-found" | "unreachable". The phone is then in no room: call joinRoom again to retry.
 await app.controller.joinRoom("K7P2Q9");
 await app.controller.requestWakeLock(); // keep the phone screen awake for the session (iOS)
 
@@ -377,7 +378,7 @@ Per-plugin READMEs carry the full API shapes, config fields, and usage:
 - [hub](src/plugins/hub/README.md) — the **server tier**'s signaling plugin (`@moku-labs/room/server`), a
   `@moku-labs/worker` plugin: the `Hub` Durable Object + WS-Hibernation protocol + deployment.
 
-The wire/signaling protocol (`Signaling`, `Wire`, every `Frame`, `Snapshot`, `Op`, `RosterEntry`, `MAX_CONTROLLERS`,
+The wire/signaling protocol (`Signaling`, `Wire`, every `Frame`, `RoomFullError`, `Snapshot`, `Op`, `RosterEntry`, `MAX_CONTROLLERS`,
 `ROOM_CODE_LENGTH`, …) lives in [`src/plugins/transport/protocol.ts`](src/plugins/transport/protocol.ts), and the
 `RoomEvents` contract in [`src/config.ts`](src/config.ts).
 

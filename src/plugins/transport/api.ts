@@ -13,7 +13,8 @@ import type { RoomEvents } from "../../config";
 import { createWire, disconnectPeer, startHeartbeat, tearDownConnections } from "./channel";
 import { handlePeerArrival, handlePeerLeave, handleSignal } from "./handlers";
 import { primeIceServers } from "./ice";
-import type { SignalingJoinOpts, Wire } from "./protocol";
+import type { SignalingJoinOpts, SignalingSession, Wire } from "./protocol";
+import { RoomFullError } from "./protocol";
 import type { ConnectOpts, TransportApi, TransportConfig, TransportState } from "./types";
 
 /**
@@ -53,6 +54,7 @@ export function createTransportApi(
       state.role = opts.role;
       state.selfId = opts.selfId;
       state.iceEpoch += 1;
+      const epoch = state.iceEpoch;
       primeIceServers(state, cfg);
 
       // Idempotent: a prior live session is released before rejoining so it cannot leak (contracts §1.2).
@@ -75,13 +77,23 @@ export function createTransportApi(
               reclaimToken: opts.reclaimToken
             };
 
-      // Join the signaling room; failure surfaces the rendezvous-unreachable warning and rethrows.
-      let session: TransportState["session"];
+      // Join the signaling room; failure surfaces the rendezvous-unreachable warning and rethrows. A full
+      // room rethrows with no warning: fullness is a join result, not a connectivity event (contracts §6.2).
+      let session: SignalingSession;
       try {
         session = await cfg.signaling.join(opts.code, joinOpts);
       } catch (error) {
-        emitWarning("rendezvous-unreachable");
+        if (!(error instanceof RoomFullError)) emitWarning("rendezvous-unreachable");
         throw error;
+      }
+
+      // A close() or a newer connect() landed during the join (a join that timed out, say): nobody is
+      // waiting for this session, and left live it would hold a seat on the host. Release it.
+      if (state.iceEpoch !== epoch) {
+        await session.leave().catch(() => {
+          // a stale session's leave() is best-effort, like the one above
+        });
+        return;
       }
 
       // Wire the live session's handshake glue and start the heartbeat loop.

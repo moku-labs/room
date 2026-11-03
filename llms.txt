@@ -113,7 +113,8 @@ plugin: `ctx.require(stagePlugin)` / `ctx.require(controllerPlugin)`.
 - `roster(): readonly RosterEntry[]` — connected controllers.
 
 **ControllerApi (`app.controller`, phone):**
-- `joinRoom(code): Promise<void>` — passive join; THROWS `Error("full"|"not-found"|"unreachable")` on failure.
+- `joinRoom(code): Promise<void>` — passive join; resolves when the host admits this phone; THROWS
+  `Error("full"|"not-found"|"unreachable")` on failure. The phone is then in no room: call it again to retry.
 - `read(ns): Readonly<Record<string, JsonValue>> | undefined` — read the replica.
 - `on(ns, cb): () => void` — subscribe to one namespace.
 - `intent(name, payload): void` — send a typed input over the Wire (never emit). Fire-and-forget surface (returns
@@ -198,6 +199,7 @@ export default {
   `SyncResyncFrame`, `HeartbeatPingFrame`, `HeartbeatPongFrame`, `RecoveryHelloFrame`, `RecoveryWelcomeFrame`,
   `RecoveryFlushFrame`, `PeerId`, `RosterEntry`, `Snapshot`, `Op`, `JsonValue`, `Namespace`.
 - Contract consts: `MAX_CONTROLLERS` (8), `ROOM_CODE_LENGTH` (6).
+- Contract error: `RoomFullError`, what a `Signaling.join` rejects with when the room is full.
 - Event contract: `RoomEvents` (from `src/config.ts`).
 - Plugin-owned public types: `RoomDescriptor`, `JoinResult`, `QrMatrix` (session); `StageApi` (stage); `ControllerApi`
   (controller).

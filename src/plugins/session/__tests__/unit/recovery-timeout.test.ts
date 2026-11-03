@@ -5,7 +5,7 @@
  */
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { PeerId } from "../../../transport/protocol";
+import type { Frame, PeerId } from "../../../transport/protocol";
 import type { SessionStateWithRuntime } from "../../recovery/reentry";
 import { registerTransportBindings } from "../../recovery/reentry";
 import { armReconnectTimeout, degradeOrRejoin } from "../../recovery/timeout";
@@ -205,12 +205,20 @@ describe("recovery/timeout", () => {
 
     const state = createSessionState();
     state.role = "controller";
+    state.selfId = "me";
     state.recovery.phase = "host-absent";
     state.roomCode = "TEST01";
 
-    // A transport whose onPeerConnected registration we can replay to simulate a successful connect.
+    // A transport whose onPeerConnected and Wire.on registrations we can replay to simulate a rejoin.
     const onPeerConnected = vi.fn<(peerId: PeerId) => void>();
-    const wire = { send: vi.fn(), broadcast: vi.fn(), on: vi.fn() };
+    let onFrame: ((peerId: PeerId, frame: Frame) => void) | undefined;
+    const wire = {
+      send: vi.fn(),
+      broadcast: vi.fn(),
+      on: vi.fn((cb: (peerId: PeerId, frame: Frame) => void) => {
+        onFrame = cb;
+      })
+    };
     const transport = {
       connect: vi.fn().mockResolvedValue(undefined),
       wire: vi.fn().mockReturnValue(wire),
@@ -235,16 +243,20 @@ describe("recovery/timeout", () => {
     registerTransportBindings(deps);
     expect(transport.onPeerConnected).toHaveBeenCalledOnce();
 
-    // Kick off the rejoin (do NOT await — it resolves once the host connects).
+    // Kick off the rejoin (do NOT await — it resolves once the host's roster frame admits it).
     const decision = degradeOrRejoin(deps);
 
     // Let the connect() promise + pending-resolver wiring settle.
     await vi.advanceTimersByTimeAsync(0);
 
-    // Simulate the host channel opening → resolves the pending join with { ok: true }.
+    // Simulate the host channel opening, then the host's roster frame → resolves the pending join.
     const rt = deps.state as unknown as SessionStateWithRuntime;
     expect(rt._pendingJoinResolve).not.toBeNull();
     onPeerConnected("host-peer");
+    onFrame?.("host-peer", {
+      t: "roster",
+      roster: { me: { id: "me", reconnectToken: "", joinedAt: 1 } }
+    });
 
     await decision;
 
