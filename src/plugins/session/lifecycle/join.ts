@@ -5,15 +5,29 @@
  * @see ../README.md
  */
 
-import type { JoinResult, SessionDeps } from "../types";
+import type { JoinResult, SessionDeps, SessionState } from "../types";
+
+/**
+ * Runs the `onRoomEnded` callbacks: this device's room is over.
+ *
+ * @param state - This app's session state, which holds the callbacks.
+ * @example
+ * ```ts
+ * notifyRoomEnded(deps.state); // the last line of leave()
+ * ```
+ */
+export function notifyRoomEnded(state: SessionState): void {
+  for (const callback of state._roomEndedCallbacks ?? []) callback();
+}
 
 /**
  * Settles the pending join with `result`. A no-op when none is pending, so a stray frame changes nothing. A
  * failed first join leaves no room behind: `role` `"none"`, `roomCode` `""`, no host id, no recovery running
  * (a refused device whose `room-full` frame was lost sees its host die on the heartbeat before the timeout),
  * transport closed. The promise resolves only after the close finished, so a retry made on the result never
- * races the teardown; `close()` keeps the wiring, so that retry is heard by the same consumers. A failed
- * re-entry (`rejoin`) keeps the room, and the transport stays open for the host to come back on.
+ * races the teardown; `close()` keeps the wiring, so that retry is heard by the same consumers. That is also the
+ * end of the room, so the `onRoomEnded` callbacks run. A failed re-entry (`rejoin`) keeps the room, and the
+ * transport stays open for the host to come back on.
  *
  * @param deps - This app's destructured per-instance pieces.
  * @param result - The join's outcome.
@@ -53,5 +67,9 @@ export function settleJoin(deps: SessionDeps, result: JoinResult): void {
     .catch(() => {
       // A failed teardown is best-effort: the caller still gets the join's result.
     })
-    .finally(() => resolve(result));
+    .finally(() => {
+      resolve(result);
+      // Same tick: the caller's continuation runs after this, so a retry made on the result finds it done.
+      notifyRoomEnded(state);
+    });
 }

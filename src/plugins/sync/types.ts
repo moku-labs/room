@@ -158,7 +158,9 @@ export type Api = {
   /**
    * Registers a namespaced typed slice with its initial value (host; D4). Call ONCE per namespace before
    * the first broadcast. Idempotent re-register with the same initial is a no-op; a different initial
-   * throws. The first `registerSlice` makes the host's snapshot readable.
+   * throws. The first `registerSlice` makes the host's snapshot readable. After a host reload the first
+   * call for a restored namespace keeps the saved cells, whatever `initial` holds, and never throws, so the
+   * boot code stays the same on every load.
    *
    * @param ns - The namespace key (contracts section 4.1 `Namespace`).
    * @param initial - The slice's initial plain-JSON cells (every leaf a `JsonValue`, contracts section 4.1).
@@ -167,6 +169,7 @@ export type Api = {
    * ```ts
    * sync.registerSlice("scores", { p1: 0, p2: 0 });
    * sync.registerSlice("round", { n: 1, phase: "lobby" });
+   * sync.read("scores"); // { p1: 0, p2: 0 } on a first load, the saved scores after a reload
    * ```
    */
   registerSlice(ns: Namespace, initial: Cells): void;
@@ -297,8 +300,8 @@ export type Api = {
   /**
    * Restores authoritative state from a persisted snapshot on host re-entry (contracts section 5.2/5.3).
    * Replaces the engine snapshot, sets `sSeq` to the restored value, marks every restored namespace
-   * registered, and flips `ready`. Used ONLY by `sessionPlugin`'s recovery path — not a gameplay method.
-   * After import the host re-broadcasts a fresh baseline snapshot to reconnecting controllers.
+   * registered, and flips `ready`. Runs in `onInit` when `session.reentryRecord()` holds a record — not a
+   * gameplay method. Each controller that connects after it gets a baseline snapshot of the restored state.
    *
    * @param snapshot - The persisted `Snapshot` (contracts section 4.1).
    * @param sSeq - The persisted host sequence to resume from (contracts section 4.3).

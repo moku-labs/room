@@ -8,6 +8,7 @@
 
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { RoomFullError } from "../../../transport/protocol";
+import { createSessionApi } from "../../api";
 import * as persistence from "../../recovery/persistence";
 import type { SessionStateWithRuntime } from "../../recovery/reentry";
 import {
@@ -71,7 +72,7 @@ function makeDeps(state = createSessionState(), connectImpl?: () => Promise<void
   return {
     state,
     config: testConfig,
-    emit: { peerJoined: vi.fn(), peerLeft: vi.fn(), hostReconnecting: vi.fn() },
+    emit: { peerJoined: vi.fn(), peerLeft: vi.fn(), hostReconnecting: vi.fn(), hostBack: vi.fn() },
     log: { warn: vi.fn() },
     requireTransport: vi.fn().mockReturnValue(mockTransport)
   };
@@ -149,11 +150,81 @@ describe("recovery/reentry", () => {
       const rt = runtime(deps);
       rt._hostId = "host-original";
       rt._pendingJoinResolve = null;
+      vi.mocked(deps.requireTransport().peers).mockReturnValue(["host-original"]);
 
       // A DIFFERENT peer surfaces while stable — must be ignored (not a second host).
       onPeerConnectedCb?.("controller-2");
 
       expect(rt._hostId).toBe("host-original");
+      expect(deps.emit.hostReconnecting).not.toHaveBeenCalled();
+      expect(deps.emit.hostBack).not.toHaveBeenCalled();
+    });
+
+    it("stable, and the known host is no longer connected: a new peer runs the host-absent entry, then back", () => {
+      vi.useFakeTimers();
+      try {
+        const state = createSessionState();
+        state.role = "controller";
+        const deps = makeDeps(state);
+        registerTransportBindings(deps);
+        const rt = runtime(deps);
+        rt._hostId = "host-old";
+        vi.mocked(deps.requireTransport().peers).mockReturnValue(["host-new"]);
+
+        onPeerConnectedCb?.("host-new");
+
+        expect(rt._hostId).toBe("host-new");
+        expect(deps.state.recovery.phase).toBe("stable");
+        expect(deps.emit.hostReconnecting).toHaveBeenCalledOnce();
+        expect(deps.emit.hostBack).toHaveBeenCalledOnce();
+        expect(deps.state.recovery.timer).toBeNull();
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it("a first join after an old room's leave() fires neither recovery event, whatever _hostId still holds", async () => {
+      const deps = makeDeps(stateWithSelfId());
+      registerTransportBindings(deps);
+      runtime(deps)._hostId = "host-of-the-old-room";
+
+      const joinPromise = doJoinRoom(deps, "TEST01");
+      onPeerConnectedCb?.("host-1");
+      deliverRoster("me");
+      await joinPromise;
+
+      expect(runtime(deps)._hostId).toBe("host-1");
+      expect(deps.emit.hostReconnecting).not.toHaveBeenCalled();
+      expect(deps.emit.hostBack).not.toHaveBeenCalled();
+    });
+
+    it("the host comes back in time: back fires once, and the reconnect timer never rejoins behind it", async () => {
+      vi.useFakeTimers();
+      try {
+        const state = createSessionState();
+        state.role = "controller";
+        state.roomCode = "TEST01";
+        const deps = makeDeps(state);
+        registerTransportBindings(deps);
+        const rt = runtime(deps);
+        rt._hostId = "host-old";
+
+        onPeerLostCb?.("host-old");
+        expect(deps.state.recovery.phase).toBe("host-absent");
+        expect(deps.emit.hostBack).not.toHaveBeenCalled();
+
+        onPeerConnectedCb?.("host-new");
+
+        expect(deps.emit.hostBack).toHaveBeenCalledOnce();
+        expect(deps.state.recovery.timer).toBeNull();
+        expect(deps.state.recovery.reconnectDeadline).toBe(0);
+
+        await vi.advanceTimersByTimeAsync(testConfig.reconnectTimeoutMs * 2);
+        expect(vi.mocked(deps.requireTransport().connect)).not.toHaveBeenCalled();
+        expect(deps.state.recovery.phase).toBe("stable");
+      } finally {
+        vi.useRealTimers();
+      }
     });
 
     it("controller branch during recovery (host-absent): a new host id updates _hostId + phase stable", () => {
@@ -390,6 +461,44 @@ describe("recovery/reentry", () => {
       await joinPromise;
 
       expect(settled).toHaveBeenCalledWith({ ok: false, reason: "not-found" });
+    });
+
+    it("a failed first join calls onRoomEnded in the stable phase too, once, by the time the caller has the result", async () => {
+      const deps = makeDeps(stateWithSelfId(), () => Promise.reject(new Error("boom")));
+      const ended = vi.fn();
+      createSessionApi(deps).onRoomEnded(ended);
+
+      const calledByResult = await doJoinRoom(deps, "TEST01").then(() => ended.mock.calls.length);
+
+      expect(calledByResult).toBe(1);
+      expect(deps.emit.hostBack).not.toHaveBeenCalled();
+    });
+
+    it("a successful join does not call onRoomEnded", async () => {
+      const deps = makeDeps(stateWithSelfId());
+      registerTransportBindings(deps);
+      const ended = vi.fn();
+      createSessionApi(deps).onRoomEnded(ended);
+
+      const joining = doJoinRoom(deps, "TEST01");
+      onPeerConnectedCb?.("host-1");
+      deliverRoster("me");
+      await joining;
+
+      expect(ended).not.toHaveBeenCalled();
+    });
+
+    it("a failed rejoin keeps the room, so it does not call onRoomEnded", async () => {
+      const state = stateWithSelfId();
+      state.role = "controller";
+      state.roomCode = "TEST01";
+      const deps = makeDeps(state, () => Promise.reject(new Error("boom")));
+      const ended = vi.fn();
+      createSessionApi(deps).onRoomEnded(ended);
+
+      await expect(rejoinSameRoom(deps)).resolves.toEqual({ ok: false, reason: "not-found" });
+
+      expect(ended).not.toHaveBeenCalled();
     });
 
     it("a failed rejoin keeps the room: the host that comes back later is still adopted", async () => {

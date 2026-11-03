@@ -208,6 +208,8 @@ export type SessionState = {
   _reentryRecord?: HostReentryRecord | null;
   /** Runtime-only (host): `createRoom` already returned the restored room, so the next call throws. */
   _reentryClaimed?: boolean;
+  /** Runtime-only: the `onRoomEnded` callbacks. A leave keeps them, for the next room. `stopSession` clears them. */
+  _roomEndedCallbacks?: Set<() => void>;
 };
 
 /**
@@ -277,7 +279,7 @@ export type SelfInfo = {
 };
 
 /**
- * The narrowed `emit` closures `sessionPlugin` binds to `ctx.emit` for its THREE owned `room:*` events
+ * The narrowed `emit` closures `sessionPlugin` binds to `ctx.emit` for its FOUR owned `room:*` events
  * (§3). The wiring harness (`index.ts`) builds these inline so the extracted modules never touch `ctx`
  * (mirrors `transport`'s `emitWarning` closure). No wire/DataChannel traffic ever flows through these —
  * only the coarse lifecycle events do.
@@ -287,8 +289,10 @@ export type SessionEmit = {
   peerJoined: (payload: RoomEvents["room:peer-joined"]) => void;
   /** Emits `room:peer-left` — a controller left or was declared dead and removed from the roster. */
   peerLeft: (payload: RoomEvents["room:peer-left"]) => void;
-  /** Emits `room:host-reconnecting` — the host tab reloaded and client-side recovery is in flight. */
+  /** Emits `room:host-reconnecting` — the host is away (controller), or this host tab reloaded. */
   hostReconnecting: (payload: RoomEvents["room:host-reconnecting"]) => void;
+  /** Emits `room:host-back` — a controller in a non-stable phase adopted the host. */
+  hostBack: (payload: RoomEvents["room:host-back"]) => void;
 };
 
 /**
@@ -320,7 +324,8 @@ export type SessionLog = {
  *     emit: {
  *       peerJoined: (p) => ctx.emit("room:peer-joined", p),
  *       peerLeft: (p) => ctx.emit("room:peer-left", p),
- *       hostReconnecting: (p) => ctx.emit("room:host-reconnecting", p)
+ *       hostReconnecting: (p) => ctx.emit("room:host-reconnecting", p),
+ *       hostBack: (p) => ctx.emit("room:host-back", p)
  *     },
  *     requireTransport: () => ctx.require(transportPlugin)
  *   });
@@ -331,7 +336,7 @@ export type SessionDeps = {
   readonly state: SessionState;
   /** This app's frozen, resolved config. */
   readonly config: Readonly<SessionConfig>;
-  /** The narrowed `emit` closures for the three owned `room:*` events (§3). */
+  /** The narrowed `emit` closures for the four owned `room:*` events (§3). */
   readonly emit: SessionEmit;
   /** The injected `ctx.log` warning surface (the defensive star-topology rejection logs here). */
   readonly log: SessionLog;
@@ -344,7 +349,7 @@ export type SessionDeps = {
  * NOT `PluginContext` (web does not export it, D1). The rich `ctx` `@moku-labs/web` infers for
  * `createPlugin` is structurally assignable to this, so the builder lives in `api.ts` while the `index.ts`
  * harness stays a tiny `createSessionApi(makeSessionDeps(ctx))` wiring (≤30 lines). Carries only the
- * members the builder touches: `state`, `config`, the typed `emit` overload for the three owned `room:*`
+ * members the builder touches: `state`, `config`, the typed `emit` overload for the four owned `room:*`
  * events, and `require` resolving `transportPlugin` to its {@link TransportApi}.
  */
 export type SessionContextShape = {
@@ -352,11 +357,12 @@ export type SessionContextShape = {
   readonly state: SessionState;
   /** Per-app frozen, resolved config. */
   readonly config: Readonly<SessionConfig>;
-  /** The kernel's typed `emit`, narrowed to the three owned `room:*` events. */
+  /** The kernel's typed `emit`, narrowed to the four owned `room:*` events. */
   readonly emit: {
     (name: "room:peer-joined", payload: RoomEvents["room:peer-joined"]): void;
     (name: "room:peer-left", payload: RoomEvents["room:peer-left"]): void;
     (name: "room:host-reconnecting", payload: RoomEvents["room:host-reconnecting"]): void;
+    (name: "room:host-back", payload: RoomEvents["room:host-back"]): void;
   };
   /** The kernel's injected logger (`ctx.log`), narrowed to the `warn` surface this plugin uses. */
   readonly log: SessionLog;
@@ -514,7 +520,8 @@ export type SessionApi = {
 
   /**
    * Returns the current recovery phase (§5) so a facade/consumer can render reconnect UX without
-   * subscribing to internals. Pairs with the `room:host-reconnecting` event for the host-side signal.
+   * subscribing to internals. A controller's phase pairs with the `room:host-reconnecting` and
+   * `room:host-back` events. A host's phase stays `"stable"`, also on a reload.
    *
    * @returns The live recovery phase.
    * @example
@@ -523,4 +530,35 @@ export type SessionApi = {
    * ```
    */
   recoveryPhase: () => RecoveryPhase;
+
+  /**
+   * Reads the re-entry record this load restored (§5.2), so `sync` can seed its state. `session` inits first,
+   * so the record is there by the time `sync` runs its `onInit`. `null` on a first load, on a controller and
+   * after `leave()`.
+   *
+   * @returns The restored record, or `null` when this load restored none.
+   * @example
+   * ```ts
+   * // sync's onInit:
+   * const record = ctx.require(sessionPlugin).reentryRecord();
+   * if (record) ctx.state.engine?.importSnapshot(record.snapshot, record.sSeq);
+   * ```
+   */
+  reentryRecord: () => HostReentryRecord | null;
+
+  /**
+   * Registers a callback for the end of this device's room: it runs when `leave()` finishes and when a failed
+   * first join is settled, whatever the recovery phase, and before the caller of either sees the result. Not on
+   * a failed `rejoin`, which keeps the room. No event fires on these paths: `room:host-back` means the host is
+   * back. One registration lasts through any number of rooms, until `app.stop()`.
+   *
+   * @param cb - Called once each time a room ends.
+   * @returns A function that removes this callback.
+   * @example
+   * ```ts
+   * // intent's onInit: a phone that left during an absence must not buffer in its next room.
+   * ctx.require(sessionPlugin).onRoomEnded(() => endRoom(ctx.state, ctx.config));
+   * ```
+   */
+  onRoomEnded: (cb: () => void) => () => void;
 };

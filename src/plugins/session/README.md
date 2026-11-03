@@ -18,10 +18,10 @@
 3. **Host-reload recovery** (`recovery/`) — the full CLIENT-SIDE state machine: `hostToken` minted on
    `createRoom` and verified PEER-SIDE (no server validator, D6); a debounced IndexedDB snapshot
    (~500 ms) plus a SYNCHRONOUS `localStorage` write on `visibilitychange`; re-entry by rejoining the
-   SAME room code; controller intent buffering + flush/reconcile; a ~10 s reconnect timeout; the iOS
-   "rescan the QR to rejoin" degradation.
+   SAME room code; the phone's `room:host-reconnecting` and `room:host-back`, which `intent` buffers and
+   flushes on; a ~10 s reconnect timeout; the iOS "rescan the QR to rejoin" degradation.
 4. **Transport event handling** (`handlers.ts`) — translates transport peer/wire signals into roster
-   mutations, the three `room:*` emissions, and recovery-frame processing.
+   mutations, the four `room:*` emissions, and recovery-frame processing.
 
 ## Public API (`app.session`)
 
@@ -36,16 +36,19 @@
 | `self` | `() => SelfInfo` | `{ selfId, role, roomCode }`. |
 | `hostId` | `() => PeerId` | The host's stable peer id (the star hub). On the HOST equals `self().selfId`; on a CONTROLLER it is the resolved host id (the `IntentFrame` target), `""` until the host channel is established. Used by `intentPlugin` to address the host. |
 | `persistSnapshot` | `(snapshot: Snapshot, sSeq: number) => void` | HOST-ONLY seam called by `sync`; payload is opaque. |
-| `recoveryPhase` | `() => RecoveryPhase` | Poll this on the reload path (see below). |
+| `recoveryPhase` | `() => RecoveryPhase` | A controller's phase, for reconnect UX. A host's phase stays `"stable"`, also on a reload. |
+| `reentryRecord` | `() => HostReentryRecord \| null` | The record this load restored. `sync` reads it in `onInit`. `null` on a first load, on a controller and after `leave()`. |
+| `onRoomEnded` | `(cb: () => void) => () => void` | `cb` runs when `leave()` finishes and when a failed first join is settled, whatever the phase. Not on a failed `rejoin`, which keeps the room. No event fires on these paths. `intent` registers once in `onInit`: buffering off, buffer dropped. The list survives a `leave()`, and `app.stop()` clears it. |
 
 ## Events (Moku `emit` plane — coarse lifecycle ONLY)
 
-Declares + emits THREE of the five `room:*` events: `room:peer-joined`, `room:peer-left`,
-`room:host-reconnecting`. It does NOT declare `room:sync-ready` (owned by `sync`) or
-`room:network-warning` (owned by `transport`) — the `stage`/`controller` facades re-declare all six.
+Declares + emits FOUR of the seven `room:*` events: `room:peer-joined`, `room:peer-left`,
+`room:host-reconnecting`, `room:host-back`. It does NOT declare `room:sync-ready` (owned by `sync`),
+`room:intent-undeliverable` (owned by `intent`) or `room:network-warning` (owned by `transport`) — the
+`stage`/`controller` facades re-declare all seven.
 
 **No wire/DataChannel traffic flows through `emit`.** Recovery frames + roster broadcasts ride
-`transport`'s `Wire`; `emit` carries only the three coarse `room:*` events.
+`transport`'s `Wire`; `emit` carries only the four coarse `room:*` events.
 
 ## How a join ends
 
@@ -81,14 +84,30 @@ The `roster` frame's arrival is the admission, whatever it holds: the host sends
 admitted. `publicRendezvous` keys the roster by Trystero's peer id, so a device cannot find its own `selfId`
 in it there.
 
-## Reload-path timing — consumers MUST poll, not await the event
+## The reload path
 
-`room:host-reconnecting` is emitted during `session` `onInit` (plugin #2), which runs synchronously
-during `createApp` BEFORE downstream consumer handlers are registered.
-On the reload path the event therefore fires into a hook surface that does not yet exist. Consumers on
-the reload path MUST poll `app.session.recoveryPhase()` in their own `onInit`/`onStart` (a non-`"stable"`
-phase means recovery is in flight) rather than rely on the event. The event remains useful for the
-steady-state (non-reload) host-reload detection.
+**On the host.** `detectHostReload` runs during `session` `onInit`: it restores the room and emits
+`room:host-reconnecting`. Hooks register before any `onInit`, so a plugin's hook hears it. The host's
+`recoveryPhase()` stays `"stable"`. `reentryRecord()` then hands the record to `sync`, whose `onInit` comes next.
+
+**On a phone.**
+
+| What happens | Phase | Event |
+|---|---|---|
+| The heartbeat declares the host dead | `"host-absent"`, the reconnect timer starts | `room:host-reconnecting` |
+| A peer connects while the phase is not stable | `"stable"`, the reconnect timer stops | `room:host-back` |
+| A peer connects while stable, and the known host is no longer connected | Through `"host-absent"` to `"stable"` | Both, once each |
+| A `roster` frame comes from a peer that is not the known host | Through `"host-absent"` to `"stable"` | Both, once each |
+| A first join connects | Stays `"stable"` | None |
+
+The `roster` row is the usual case: a reload is faster than the heartbeat. `transport.peers()` still lists the
+old host until the heartbeat expires, so the connect callback cannot tell this peer is the host. Only a host
+sends `roster`, so that frame can. When the heartbeat then declares the old host dead, it is not the known host
+any more and nothing fires.
+
+**On `publicRendezvous`.** A phone leaves signaling once it is connected, so it cannot see the reloaded host
+arrive. It finds it through its own rejoin: after `heartbeatTimeoutMs` plus `reconnectTimeoutMs`, 16 s at the
+defaults. An intent older than `intent.bufferMaxAgeMs`, 10 s at the default, is dropped by then.
 
 ## Reload vs leave
 
@@ -105,10 +124,13 @@ that never broadcast has nothing to resume.
 
 ## Lossy intent buffering (acceptable for v1)
 
-While the host is absent, controllers buffer timestamped intents. The buffer is a ring (cap
-`intentBufferMax`, oldest dropped first) and entries older than `intentBufferMaxAgeMs` are discarded on
-flush. This is LOSSY by design for high-frequency analog intents — acceptable for the v1 party-game
-target. Do NOT assume exactly-once intent delivery across a host reload.
+While the host is absent, `intent` buffers timestamped intents: its hooks follow `room:host-reconnecting` and
+`room:host-back`. The cap is `intent.bufferCap` (oldest dropped first) and entries older than
+`intent.bufferMaxAgeMs` are discarded on flush. This is LOSSY by design for high-frequency analog intents —
+acceptable for the v1 party-game target. Do NOT assume exactly-once intent delivery across a host reload: a
+restarted host has an empty `lastApplied`, so a frame the old host applied but never acked applies twice.
+
+`recovery/buffer.ts`, the `recovery-*` frames and the `intentBufferMax*` config are not on this path.
 
 ## Host crash vs reload
 

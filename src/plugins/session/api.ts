@@ -14,6 +14,7 @@
 
 import { transportPlugin } from "../transport";
 import { generateRoomCode } from "./lifecycle/code";
+import { notifyRoomEnded } from "./lifecycle/join";
 import { buildJoinUrl, buildQrMatrix } from "./lifecycle/qr";
 import { readRoster } from "./lifecycle/roster";
 import { mintHostToken } from "./recovery/hosttoken";
@@ -23,7 +24,7 @@ import type { SessionApi, SessionContextShape, SessionDeps } from "./types";
 
 /**
  * Narrows the inferred plugin `ctx` into the destructured {@link SessionDeps} bundle (D14): the per-app
- * `state` + frozen `config`, the three narrowed `room:*` `emit` closures, and a `requireTransport` closure
+ * `state` + frozen `config`, the four narrowed `room:*` `emit` closures, and a `requireTransport` closure
  * over `ctx.require(transportPlugin)`. Called inline by the `index.ts` wiring harness for both `api` and
  * `onInit`, so every extracted module stays `ctx`-free (and never imports the web-unavailable
  * `PluginContext`).
@@ -43,7 +44,8 @@ export function makeSessionDeps(ctx: SessionContextShape): SessionDeps {
     emit: {
       peerJoined: payload => ctx.emit("room:peer-joined", payload),
       peerLeft: payload => ctx.emit("room:peer-left", payload),
-      hostReconnecting: payload => ctx.emit("room:host-reconnecting", payload)
+      hostReconnecting: payload => ctx.emit("room:host-reconnecting", payload),
+      hostBack: payload => ctx.emit("room:host-back", payload)
     },
     log: ctx.log,
     requireTransport: () => ctx.require(transportPlugin)
@@ -158,6 +160,8 @@ export function createSessionApi(deps: SessionDeps): SessionApi {
       deps.state.recovery.reconnectDeadline = 0;
       deps.state._reentryRecord = null;
       deps.state._reentryClaimed = false;
+
+      notifyRoomEnded(deps.state);
     },
 
     /** @inheritdoc */
@@ -205,6 +209,21 @@ export function createSessionApi(deps: SessionDeps): SessionApi {
     /** @inheritdoc */
     recoveryPhase(): import("./types").RecoveryPhase {
       return deps.state.recovery.phase;
+    },
+
+    /** @inheritdoc */
+    reentryRecord(): import("./types").HostReentryRecord | null {
+      return deps.state._reentryRecord ?? null;
+    },
+
+    /** @inheritdoc */
+    onRoomEnded(cb: () => void): () => void {
+      const callbacks = deps.state._roomEndedCallbacks ?? new Set<() => void>();
+      deps.state._roomEndedCallbacks = callbacks;
+      callbacks.add(cb);
+      return () => {
+        callbacks.delete(cb);
+      };
     }
   };
 }

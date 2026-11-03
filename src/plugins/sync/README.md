@@ -37,7 +37,7 @@ Framework-level overrides live in Web's `pluginConfigs.sync`; consumer apps over
 ## API
 
 The surface is role-agnostic (D4/D5): host methods write/broadcast authoritative state, controller
-methods read/apply the replica, and the recovery methods are the persistence seam `sessionPlugin` calls
+methods read/apply the replica, and the recovery methods are the persistence seam with `sessionPlugin`
 (contracts section 5). Frame I/O rides `transport` (contracts section 2) — never Moku `emit`.
 
 **Host**
@@ -47,6 +47,10 @@ methods read/apply the replica, and the recovery methods are the persistence sea
 Registers a namespaced typed slice with its initial value (D4). Call ONCE per namespace, host-side,
 before the first broadcast. Idempotent re-register with the same initial is a no-op; a different initial
 throws. The first `registerSlice` makes the host's snapshot readable.
+
+After a host reload, the first call for a restored namespace keeps the saved cells, whatever `initial` holds,
+and does not throw, so the boot code stays the same on every load. A second call follows the rules above,
+against the `initial` of that first call. A namespace the record does not hold starts from `initial` as usual.
 
 ### `mutate(ns: Namespace, recipe: (draft: { readonly [key: string]: JsonValue }) => { readonly [key: string]: JsonValue }): void`
 
@@ -110,8 +114,9 @@ bytes `sessionPlugin` persists for host-reload recovery (contracts section 5.1).
 
 Restores authoritative state from a persisted snapshot on host re-entry (contracts section 5.2/5.3).
 Replaces the engine snapshot, sets `sSeq`, marks every restored namespace registered, and flips `ready`.
-Used ONLY by `sessionPlugin`'s recovery path. After import the host re-broadcasts a fresh baseline
-snapshot.
+`onInit` calls it when `session.reentryRecord()` holds a record (`session` inits first). `read` then gives the
+saved cells at once. Each controller that connects later gets a baseline snapshot of the restored state, and
+the next delta continues from the restored `sSeq`.
 
 ### `startBroadcast(): void`
 
@@ -141,7 +146,7 @@ section 2.7).
 | Plugin | Role | Reason |
 |--------|------|--------|
 | `transportPlugin` | required engine | Broadcasting frames + receiving inbound sync frames. `ctx.require(transportPlugin).wire()` yields the contracts section 2 `Wire`, whose `broadcast(frame)`, `send(peerId, frame)`, and `on(handler)` carry ALL sync wire I/O (host deltas, single-peer snapshots, inbound routing). Never `emit`. |
-| `sessionPlugin` | required engine | Roster / `PeerId` access for single-peer baseline snapshots on join/late-join (contracts section 6), the `room:peer-joined` hook that triggers a baseline snapshot for a new peer, and the recovery seam (`session` calls `exportSnapshot()` / `importSnapshot()` on the persist cadence and on re-entry, contracts section 5). |
+| `sessionPlugin` | required engine | Roster / `PeerId` access for single-peer baseline snapshots on join/late-join (contracts section 6), the `room:peer-joined` hook that triggers a baseline snapshot for a new peer, and the recovery seam (`sync` hands each broadcast to `session.persistSnapshot()`, and reads `session.reentryRecord()` in `onInit`, contracts section 5). |
 
 `intentPlugin` is **not** a dependency: the host applies a `mutate` as a result of a game-defined
 `onIntent` handler, but that call originates in the game plugin, not in `sync` (the two are parallel in

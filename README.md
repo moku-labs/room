@@ -116,14 +116,14 @@ the client.
 | # | Plugin | Tier | Wiring | Role / key surface |
 |---|---|---|---|---|
 | 1 | [`transportPlugin`](src/plugins/transport/README.md) | Complex | client default | WebRTC DataChannels: signaling handshake, chunking/backpressure, mandatory heartbeat, capped ICE recovery. Owns the typed `Wire`. Emits `room:network-warning`. |
-| 2 | [`sessionPlugin`](src/plugins/session/README.md) | Complex | client default | Room code + QR + roster; star topology (`hostId()`); client-side host-reload recovery. Emits `room:peer-joined`, `room:peer-left`, `room:host-reconnecting`. |
+| 2 | [`sessionPlugin`](src/plugins/session/README.md) | Complex | client default | Room code + QR + roster; star topology (`hostId()`); client-side host-reload recovery. Emits `room:peer-joined`, `room:peer-left`, `room:host-reconnecting`, `room:host-back`. |
 | 3 | [`intentPlugin`](src/plugins/intent/README.md) | Standard | client default | Controller→host typed inputs (`IntentFrame`, per-controller `cSeq` idempotent de-dup) with at-least-once delivery (wire-level `intent-ack` + bounded retransmit). Emits `room:intent-undeliverable`. |
 | 4 | [`syncPlugin`](src/plugins/sync/README.md) | Complex | client default | Host→controller authoritative state: full snapshot + throttled op-list deltas. Emits `room:sync-ready`. |
-| 5 | [`stagePlugin`](src/plugins/stage/README.md) | Standard (facade) | app-added (host) | **Host-role facade** → `StageApi` (`app.stage`). Re-declares all six `room:*` events. |
-| 6 | [`controllerPlugin`](src/plugins/controller/README.md) | Standard (facade) | app-added (controller) | **Controller-role facade** → `ControllerApi` (`app.controller`). Re-declares all six `room:*` events. |
+| 5 | [`stagePlugin`](src/plugins/stage/README.md) | Standard (facade) | app-added (host) | **Host-role facade** → `StageApi` (`app.stage`). Re-declares all seven `room:*` events. |
+| 6 | [`controllerPlugin`](src/plugins/controller/README.md) | Standard (facade) | app-added (controller) | **Controller-role facade** → `ControllerApi` (`app.controller`). Re-declares all seven `room:*` events. |
 | 7 | [`hubPlugin`](src/plugins/hub/README.md) | Standard | app-added (worker) | The `@moku-labs/room/server` signaling tier — a `@moku-labs/worker` plugin composed into your own worker app. WS-Hibernation DO-per-room over the native Cloudflare `env` (DO + KV): handshake broker + in-band discovery + host-reload reclaim (no gameplay relay, D2). |
 
-The facade **re-declares** all six `room:*` events for *compile-time visibility only* — a downstream game plugin
+The facade **re-declares** all seven `room:*` events for *compile-time visibility only* — a downstream game plugin
 (`depends: [stagePlugin]` / `[controllerPlugin]`) then sees the complete typed hook surface in one edge. It installs no
 forwarding hooks, because Moku's event bus is global and the engines' `emit("room:*")` already reaches every hook
 regardless of `depends`.
@@ -135,7 +135,7 @@ regardless of `depends`.
 ```ts
 import { createApp, createPlugin, stagePlugin } from "@moku-labs/room";
 
-// Your game logic — depends on the facade so the six room:* events are visible.
+// Your game logic — depends on the facade so the seven room:* events are visible.
 const game = createPlugin("game", {
   depends: [stagePlugin],
   hooks: ctx => ({
@@ -176,7 +176,8 @@ const pad = createPlugin("pad", {
   depends: [controllerPlugin],
   hooks: ctx => ({
     "room:sync-ready": () => ctx.log.info("replica is readable"),
-    "room:host-reconnecting": () => ctx.log.info("host reloading — show reconnecting UX")
+    "room:host-reconnecting": () => ctx.log.info("host away — show reconnecting UX, intents buffer"),
+    "room:host-back": () => ctx.log.info("host back — hide it, the buffered intents are on their way")
   })
 });
 
@@ -304,15 +305,26 @@ The `room:*` plane is **coarse lifecycle only**. All gameplay rides the `Wire` (
 |---|---|---|---|
 | `room:peer-joined` | `{ peerId }` | session | A controller's channel reached `connected` and was added to the roster. |
 | `room:peer-left` | `{ peerId }` | session | A controller left or was declared dead by the heartbeat; removed from roster. |
-| `room:host-reconnecting` | `{}` | session | Host tab reloaded; client-side recovery in flight — show "reconnecting" UX. |
+| `room:host-reconnecting` | `{}` | session | The host is away. On a phone: its channel was lost, or a different host appeared. Show "reconnecting" UX; intents buffer. On the host: this tab reloaded. |
+| `room:host-back` | `{}` | session | A phone adopted the host after an absence. Its buffered intents are on their way. |
 | `room:sync-ready` | `{}` | sync | First full snapshot applied; the synced replica is now readable. |
 | `room:intent-undeliverable` | `{ name, cSeq }` | intent | A live intent exhausted its bounded retransmit budget with no wire-level receipt — the wire is dead for this controller's intent stream; surface retry UX. |
 | `room:network-warning` | `{ reason: "ice-failed" \| "rendezvous-unreachable" \| "channel-closed" \| "room-evicted" }` | transport | A connectivity hard-failure surfaced for failure UX (D2). `room-evicted` is server-tier only — the `serverSignaling` DO's idle Alarm tore the room down. |
 
 > [!NOTE]
-> **Reload-path timing.** `room:host-reconnecting` is emitted during `session` init, before downstream consumer hooks
-> register. On the reload path, poll `app.session.recoveryPhase()` in your own init/start (a non-`"stable"` phase means
-> recovery is in flight) rather than relying on the event. The event remains useful for steady-state detection.
+> **The reload path, on the host.** `session` restores the room during init, and `sync` restores the saved slices and
+> `sSeq` right after it. `app.sync.read(ns)` gives the saved cells from then on, and `registerSlice` on a restored slice
+> keeps them, whatever its initial, so the boot code stays the same on every load. Hooks register before any init, so a
+> plugin's hook hears the host's `room:host-reconnecting`. The host's `recoveryPhase()` stays `"stable"`.
+>
+> **The reload path, on a phone.** The phone hears `room:host-reconnecting` when the host channel is lost, or when a
+> different host appears before the heartbeat saw the old one die. `intent` buffers from then on: there is nothing to
+> call. When the phone adopts the host it hears `room:host-back`, and the buffer goes out in `cSeq` order. An intent older
+> than `bufferMaxAgeMs` is dropped.
+>
+> **Two limits.** A restarted host has an empty `lastApplied`, so a frame the old host applied but never acked applies
+> twice. And a phone flushes as soon as the channel opens, while a host acks and drops an intent kind it has not
+> registered: register your intents before anything slow in the boot code.
 
 > [!NOTE]
 > **Reload vs leave.** `app.stop()` and a hidden page keep the host's record, so the next load resumes the same room:

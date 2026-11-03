@@ -15,7 +15,7 @@
  */
 import type { IntentFrame, PeerId, Wire } from "../transport/protocol";
 import { createIntentDelivery } from "./delivery";
-import type { IntentApi, IntentConfig, IntentHandler, IntentState } from "./types";
+import type { BufferedIntent, IntentApi, IntentConfig, IntentHandler, IntentState } from "./types";
 
 /**
  * No-op handler used as a placeholder when a schema is registered before an `onIntent` subscriber.
@@ -65,6 +65,50 @@ function enqueueBuffered(
 }
 
 /**
+ * Turns buffering on or off. Turning it ON (known host absence) retires the live delivery window — the
+ * in-flight unacked frame plus everything queued behind it — into the reconnect buffer in cSeq order, so the
+ * §5 recovery owns the unacked tail instead of retransmits burning into a dead wire.
+ *
+ * @param state - The per-app intent state.
+ * @param cfg - The frozen intent config (`bufferCap` + `bufferMaxAgeMs`).
+ * @param on - `true` to buffer subsequent intents; `false` to resume live sends.
+ * @example
+ * ```ts
+ * setBuffering(state, cfg, true);
+ * ```
+ */
+export function setBuffering(state: IntentState, cfg: Readonly<IntentConfig>, on: boolean): void {
+  if (on && !state.buffering) {
+    const now = Date.now();
+    for (const frame of state.delivery?.retire() ?? []) {
+      enqueueBuffered(state, cfg, frame, now);
+    }
+  }
+  state.buffering = on;
+}
+
+/**
+ * Returns the buffered intents, without those older than `bufferMaxAgeMs`, and empties the buffer.
+ *
+ * @param state - The per-app intent state.
+ * @param cfg - The frozen intent config (`bufferMaxAgeMs`).
+ * @returns The fresh entries, ordered by capture time.
+ * @example
+ * ```ts
+ * const buffered = drainBuffer(state, cfg);
+ * ```
+ */
+export function drainBuffer(
+  state: IntentState,
+  cfg: Readonly<IntentConfig>
+): readonly BufferedIntent[] {
+  const cutoff = Date.now() - cfg.bufferMaxAgeMs;
+  const fresh = state.buffer.filter(entry => entry.ts >= cutoff).toSorted((a, b) => a.ts - b.ts);
+  state.buffer = [];
+  return fresh;
+}
+
+/**
  * Builds the per-app {@link IntentApi} from this app's `state`, frozen `config`, the resolved transport
  * `wire`, a `getHostId` resolver, and the narrowed `room:intent-undeliverable` emit. Runs in the `api`
  * lifecycle phase (before `onInit`). Constructs the ONE per-app at-least-once delivery tracker and
@@ -73,9 +117,9 @@ function enqueueBuffered(
  * over `state` (registry, `lastApplied`, `nextCSeq`, buffer) and the bound transport/session deps; it
  * is the only consumer-visible handle to the plugin and is never cached at module scope. `register` /
  * `onIntent` are host-authoritative; `intent` hands a controller frame to the delivery tracker (live)
- * or buffers it; `setBuffering` / `drainBuffer` / `bufferedCount` are the recovery seam `sessionPlugin`
- * drives — buffering ON retires the live window into the reconnect buffer (the §5 recovery contract
- * subsumes the §4.3 retransmit contract during a known host absence).
+ * or buffers it; `setBuffering` / `drainBuffer` / `bufferedCount` are the recovery seam the `room:host-*`
+ * hooks drive ({@link ./recovery}) — buffering ON retires the live window into the reconnect buffer (the §5
+ * recovery contract subsumes the §4.3 retransmit contract during a known host absence).
  *
  * @param state - The per-app intent state (registry, `lastApplied`, `nextCSeq`, buffering flag, buffer).
  * @param cfg - The frozen per-app intent config (buffer window + retransmit budget).
@@ -150,27 +194,11 @@ export function createIntentApi(
     },
 
     setBuffering(on) {
-      // Buffering turns ON (known host absence): retire the live delivery window — the in-flight
-      // unacked frame plus everything queued behind it — into the reconnect buffer in cSeq order, so
-      // the §5 recovery flush owns the unacked tail instead of retransmits burning into a dead wire.
-      if (on && !state.buffering) {
-        const now = Date.now();
-        for (const frame of delivery.retire()) {
-          enqueueBuffered(state, cfg, frame, now);
-        }
-      }
-      state.buffering = on;
+      setBuffering(state, cfg, on);
     },
 
     drainBuffer() {
-      const now = Date.now();
-      const cutoff = now - cfg.bufferMaxAgeMs;
-      // Prune stale entries before returning; clear the buffer atomically
-      const result = state.buffer
-        .filter(entry => entry.ts >= cutoff)
-        .toSorted((a, b) => a.ts - b.ts);
-      state.buffer = [];
-      return result;
+      return drainBuffer(state, cfg);
     },
 
     bufferedCount() {

@@ -57,7 +57,8 @@ function makeDeps(overrides?: Partial<SessionDeps>): SessionDeps {
     emit: {
       peerJoined: vi.fn(),
       peerLeft: vi.fn(),
-      hostReconnecting: vi.fn()
+      hostReconnecting: vi.fn(),
+      hostBack: vi.fn()
     },
     log: { warn: vi.fn() },
     requireTransport: vi.fn().mockReturnValue(mockTransport),
@@ -302,6 +303,34 @@ describe("handlers", () => {
     handler("host-id", frame);
 
     expect(deps.state.roster).toEqual(roster);
+  });
+
+  it("handleRecoveryFrame: a roster frame from a peer that is not the known host adopts it, while the old host still looks alive", () => {
+    vi.useFakeTimers();
+    const deps = makeDeps();
+    deps.state.role = "controller";
+    deps.state._hostId = "host-old";
+
+    handleRecoveryFrame(deps)("host-new", { t: "roster", roster: {} });
+
+    expect(deps.state._hostId).toBe("host-new");
+    expect(deps.state.recovery.phase).toBe("stable");
+    expect(deps.emit.hostReconnecting).toHaveBeenCalledOnce();
+    expect(deps.emit.hostBack).toHaveBeenCalledOnce();
+    expect(deps.state.recovery.timer).toBeNull();
+    vi.useRealTimers();
+  });
+
+  it("handleRecoveryFrame: a roster frame from the known host fires no recovery event", () => {
+    const deps = makeDeps();
+    deps.state.role = "controller";
+    deps.state._hostId = "host-1";
+
+    handleRecoveryFrame(deps)("host-1", { t: "roster", roster: {} });
+
+    expect(deps.state._hostId).toBe("host-1");
+    expect(deps.emit.hostReconnecting).not.toHaveBeenCalled();
+    expect(deps.emit.hostBack).not.toHaveBeenCalled();
   });
 
   it("handleRecoveryFrame: a roster frame after a failed join (role none) writes no mirror", () => {

@@ -189,7 +189,8 @@ function makeDeps(): SessionDeps {
     emit: {
       peerJoined: vi.fn(),
       peerLeft: vi.fn(),
-      hostReconnecting: vi.fn()
+      hostReconnecting: vi.fn(),
+      hostBack: vi.fn()
     },
     log: { warn: vi.fn() },
     requireTransport: vi.fn()

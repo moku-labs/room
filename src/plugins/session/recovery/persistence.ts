@@ -3,7 +3,7 @@
  * during normal play PLUS a SYNCHRONOUS `localStorage` write on `visibilitychange` (the only reliable
  * last-moment hook on iOS/Android-TV — `beforeunload`/`pagehide` are unreliable there). Produces a
  * `PersistHandle`. DOM/storage access is DOM-guarded (`typeof window`/`indexedDB`) so the
- * `inMemory`/headless path degrades gracefully. `teardownSession` is the `onStop` entry point (takes
+ * `inMemory`/headless path degrades gracefully. `stopSession` is the `onStop` entry point (takes
  * `SessionState`, NOT a singleton).
  * @see ../README.md
  */
@@ -393,7 +393,22 @@ export function readReentryRecord(deps: SessionDeps): HostReentryRecord | null {
 }
 
 /**
- * `onStop` teardown for the recovery sub-domain (D14): does the final SYNCHRONOUS snapshot persist FIRST
+ * `onStop` entry point: the {@link teardownSession} a `leave()` also runs, plus the `onRoomEnded` callbacks. Those
+ * live until the app stops, because `intent` registers once in `onInit` and must survive a `leave()`.
+ *
+ * @param state - This app's `SessionState`.
+ * @example
+ * ```ts
+ * onStop: ({ state }) => stopSession(state)
+ * ```
+ */
+export function stopSession(state: SessionState): void {
+  teardownSession(state);
+  state._roomEndedCallbacks?.clear();
+}
+
+/**
+ * Teardown for the recovery sub-domain (D14), on `leave()` and on stop: does the final SYNCHRONOUS snapshot persist FIRST
  * (`persistHandle.flushNow()` — the same `localStorage` path as `visibilitychange`), THEN clears timers
  * and removes the `visibilitychange` listener (`persistHandle.dispose()`), nulls `recovery.timer`, clears the
  * pending close timers of refused peers, and clears any in-flight join timeout + settles its pending resolver
@@ -404,7 +419,7 @@ export function readReentryRecord(deps: SessionDeps): HostReentryRecord | null {
  * @param state - This app's `SessionState`.
  * @example
  * ```ts
- * onStop: ({ state }) => teardownSession(state)
+ * teardownSession(deps.state); // in leave()
  * ```
  */
 export function teardownSession(state: SessionState): void {

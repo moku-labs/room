@@ -11,7 +11,7 @@ import { createStageApi } from "./api";
  * Stage plugin — Standard tier (HOST-role facade).
  *
  * A thin host surface over Room's four engines (transport, session, intent, sync): every API method
- * delegates via `ctx.require(...)`, the facade owns no state and runs no resource. Re-declares all six
+ * delegates via `ctx.require(...)`, the facade owns no state and runs no resource. Re-declares all seven
  * `room:*` lifecycle events (contracts §3) so a game plugin with `depends: [stagePlugin]` gets the
  * complete, typed hook surface in one edge (WARN-2 — event visibility is not transitive at the TYPE
  * level: spec/07 §5, spec/14 §7). It does NOT re-emit (forward) them: Moku's runtime event bus is
@@ -27,7 +27,7 @@ export const stagePlugin = createPlugin("stage", {
   // `transportPlugin` is kept in `depends` for dependency-graph/presence completeness (it is the engine
   // that owns the §2 wire + `room:network-warning`); the facade resolves only session/intent/sync via
   // `ctx.require` below. Event visibility does NOT rely on this edge — the facade's own
-  // `register.map<RoomEvents>` re-declaration already exposes all six `room:*` to a `depends:[stagePlugin]`
+  // `register.map<RoomEvents>` re-declaration already exposes all seven `room:*` to a `depends:[stagePlugin]`
   // consumer (WARN-2 is closed by THAT re-declaration, not by the transport edge).
   depends: [transportPlugin, sessionPlugin, intentPlugin, syncPlugin],
   events: register =>
@@ -38,6 +38,7 @@ export const stagePlugin = createPlugin("stage", {
         "A controller left or was declared dead by the heartbeat and left the roster (contracts §3).",
       "room:host-reconnecting":
         "Host tab reloaded; client-side recovery is in flight (contracts §5).",
+      "room:host-back": "A controller adopted the host after an absence (contracts §5).",
       "room:sync-ready":
         "First full snapshot applied; the synced replica is now readable (contracts §4).",
       "room:network-warning":
