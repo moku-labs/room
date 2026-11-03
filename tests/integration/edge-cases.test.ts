@@ -12,8 +12,9 @@
  * unchanged — the same pattern the controller suite's `off()` test uses.
  */
 import { describe, expect, it, vi } from "vitest";
-import { MAX_CONTROLLERS } from "../../src/index";
-import { makeBus, makeController, makeStage } from "./helpers/harness";
+import { createApp, MAX_CONTROLLERS, RoomFullError, stagePlugin } from "../../src/index";
+import type { Bus } from "./helpers/harness";
+import { makeBus, makeController, makeStage, sawEvent, siteCfg } from "./helpers/harness";
 
 describe("room edge cases — unregistered-slice mutate", () => {
   it("stage.mutate on a never-registered namespace throws synchronously", async () => {
@@ -157,6 +158,192 @@ describe("room edge cases — MAX_CONTROLLERS cap", () => {
     expect(stage.session.roster()).toHaveLength(MAX_CONTROLLERS);
 
     await Promise.all(controllers.map(c => c.app.stop()));
+    await stage.stop();
+  });
+});
+
+/**
+ * Starts eight controllers and joins each of them to `code`.
+ *
+ * @param bus - The signaling bus the stage is on.
+ * @param code - The stage's room code.
+ * @returns The eight players and their join results.
+ */
+async function seatEight(bus: Bus, code: string) {
+  const players = Array.from({ length: MAX_CONTROLLERS }, (_, index) =>
+    makeController(bus, `fullSeat${index}`)
+  );
+  await Promise.all(players.map(p => p.app.start()));
+  const results = await Promise.all(players.map(p => p.app.session.joinRoom(code)));
+  return { players, results };
+}
+
+/**
+ * Builds a stage with its own controller cap, so a refusal needs only a few apps.
+ *
+ * @param bus - The signaling bus to rendezvous on.
+ * @param maxControllers - The cap to run with.
+ * @returns The stage app.
+ */
+function makeCappedStage(bus: Bus, maxControllers: number) {
+  return createApp({
+    plugins: [stagePlugin],
+    pluginConfigs: { ...siteCfg(bus), session: { generateQr: false, maxControllers } }
+  });
+}
+
+describe("room edge cases — a full room is a join result", () => {
+  it("the 8th joinRoom resolves; the 9th gets full from session and controller, role none, roster stays 8", async () => {
+    const bus = makeBus();
+    const { app: stage, captured: stageEvents } = makeStage(bus);
+    await stage.start();
+    const { code } = stage.stage.createRoom();
+
+    const { players, results } = await seatEight(bus, code);
+    expect(results.map(result => result.ok)).toEqual(Array.from({ length: 8 }, () => true));
+
+    const viaSession = makeController(bus, "fullNinthSession");
+    const viaFacade = makeController(bus, "fullNinthFacade");
+    await viaSession.app.start();
+    await viaFacade.app.start();
+
+    await expect(viaSession.app.session.joinRoom(code)).resolves.toEqual({
+      ok: false,
+      reason: "full"
+    });
+    await expect(viaFacade.app.controller.joinRoom(code)).rejects.toThrow("full");
+
+    for (const refused of [viaSession, viaFacade]) {
+      expect(refused.app.session.self()).toMatchObject({ role: "none", roomCode: "" });
+      expect(refused.app.session.hostId()).toBe("");
+      expect(refused.app.session.roster()).toEqual([]);
+      // Fullness is a result, not a connectivity event (contracts §6.2).
+      expect(sawEvent(refused.captured, "room:network-warning")).toBe(false);
+    }
+    expect(stage.session.roster()).toHaveLength(MAX_CONTROLLERS);
+    expect(stageEvents.filter(event => event.name === "room:peer-joined")).toHaveLength(
+      MAX_CONTROLLERS
+    );
+
+    await Promise.all([...players, viaSession, viaFacade].map(controller => controller.app.stop()));
+    await stage.stop();
+  });
+
+  it("a roster broadcast inside the close delay reaches the refused device and does not admit it", async () => {
+    const bus = makeBus();
+    const stage = makeCappedStage(bus, 1);
+    await stage.start();
+    const { code } = stage.stage.createRoom();
+    const seated = makeController(bus, "delaySeated");
+    const refused = makeController(bus, "delayRefused");
+    await Promise.all([seated.app.start(), refused.app.start()]);
+    await seated.app.session.joinRoom(code);
+    const seen: string[] = [];
+    refused.app.transport.wire().on((_peerId, frame) => {
+      seen.push(frame.t);
+    });
+
+    // The bus reaches the host inside this call: `room-full` is on its way, and the peer is still connected.
+    const joining = refused.app.session.joinRoom(code);
+    stage.transport.wire().broadcast({
+      t: "roster",
+      roster: Object.fromEntries(stage.session.roster().map(entry => [entry.id, entry]))
+    });
+
+    await expect(joining).resolves.toEqual({ ok: false, reason: "full" });
+    await vi.waitFor(() => {
+      expect(seen).toEqual(["room-full", "roster"]);
+    });
+    expect(refused.app.session.self().role).toBe("none");
+    expect(refused.app.session.roster()).toEqual([]);
+
+    await Promise.all([seated.app.stop(), refused.app.stop()]);
+    await stage.stop();
+  });
+
+  it("stop() inside the close delay leaves no timer", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "setInterval", "clearInterval"] });
+    try {
+      const bus = makeBus();
+      const stage = makeCappedStage(bus, 0);
+      const phone = makeController(bus, "delayStopPhone");
+      await stage.start();
+      await phone.app.start();
+      const { code } = stage.stage.createRoom();
+
+      await expect(phone.app.session.joinRoom(code)).resolves.toEqual({
+        ok: false,
+        reason: "full"
+      });
+      await phone.app.stop();
+      await stage.stop();
+
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("an adapter that rejects with the public RoomFullError gives full and no warning", async () => {
+    const refusing: Bus = { join: () => Promise.reject(new RoomFullError()) };
+    const { app, captured } = makeController(refusing, "refusingAdapterPhone");
+    await app.start();
+
+    await expect(app.session.joinRoom("K7M2QX")).resolves.toEqual({ ok: false, reason: "full" });
+    expect(sawEvent(captured, "room:network-warning")).toBe(false);
+    expect(app.session.self().role).toBe("none");
+
+    await app.stop();
+  });
+
+  it("a slot frees: the refused device retries on the same app and joins", async () => {
+    const bus = makeBus();
+    // A short heartbeat: the host learns a player left through it, and the default takes 6 s.
+    const stage = createApp({
+      plugins: [stagePlugin],
+      pluginConfigs: {
+        ...siteCfg(bus),
+        transport: { signaling: bus, heartbeatIntervalMs: 50, heartbeatTimeoutMs: 400 }
+      }
+    });
+    await stage.start();
+    const { code } = stage.stage.createRoom();
+    const { players } = await seatEight(bus, code);
+
+    const refused = makeController(bus, "fullRetry");
+    await refused.app.start();
+    await expect(refused.app.session.joinRoom(code)).resolves.toEqual({
+      ok: false,
+      reason: "full"
+    });
+    // Asking again after the host dropped the refused peer, with the room still full, gets the same answer.
+    const refusedId = refused.app.session.self().selfId;
+    await vi.waitFor(() => {
+      expect(stage.transport.peers()).not.toContain(refusedId);
+    });
+    await expect(refused.app.session.joinRoom(code)).resolves.toEqual({
+      ok: false,
+      reason: "full"
+    });
+
+    await players[0]?.app.session.leave();
+    await vi.waitFor(
+      () => {
+        expect(stage.session.roster()).toHaveLength(MAX_CONTROLLERS - 1);
+      },
+      { timeout: 5000 }
+    );
+
+    const retried = await refused.app.session.joinRoom(code);
+
+    const selfId = refused.app.session.self().selfId;
+    expect(retried).toEqual({ ok: true, selfId });
+    expect(refused.app.session.self()).toMatchObject({ role: "controller", roomCode: code });
+    expect(refused.app.session.hostId()).toBe(stage.session.self().selfId);
+    expect(stage.session.roster().map(entry => entry.id)).toContain(selfId);
+    expect(stage.session.roster()).toHaveLength(MAX_CONTROLLERS);
+
+    await Promise.all([...players, refused].map(controller => controller.app.stop()));
     await stage.stop();
   });
 });

@@ -8,11 +8,15 @@
  */
 
 import type { Frame, PeerId, RosterEntry } from "../transport/protocol";
+import { settleJoin } from "./lifecycle/join";
 import { isStarViolation, removeRosterEntry, upsertRosterEntry } from "./lifecycle/roster";
 import { drainBuffer, reconcileFlush } from "./recovery/buffer";
 import { verifyHostToken } from "./recovery/hosttoken";
 import { armReconnectTimeout } from "./recovery/timeout";
-import type { SessionDeps } from "./types";
+import type { SessionDeps, SessionState } from "./types";
+
+/** Closing in the same tick lost `room-full` in real Chromium: 4 of 20 arrived at 0 ms, 20 of 20 from 50 ms. */
+const REFUSE_CLOSE_DELAY_MS = 250;
 
 /**
  * Broadcasts the current roster to all controllers via transport's `Wire`. Host-only. Called after every
@@ -32,8 +36,50 @@ function broadcastRoster(deps: SessionDeps): void {
 }
 
 /**
- * A controller channel reached `connected` (§6): enforce the cap (`maxControllers`) — reject the 9th —
- * otherwise upsert the `RosterEntry`, broadcast the roster, and `emit("room:peer-joined", { peerId })`.
+ * Cancels the pending close of a refused peer. A no-op when none is pending.
+ *
+ * @param state - This app's session state, which holds the close timers.
+ * @param peerId - The peer whose close to cancel.
+ * @example
+ * ```ts
+ * cancelRefuseClose(deps.state, peerId); // the refused peer is back on a new channel
+ * ```
+ */
+function cancelRefuseClose(state: SessionState, peerId: PeerId): void {
+  const timer = state._refuseTimers?.get(peerId);
+  if (timer === undefined) return;
+  clearTimeout(timer);
+  state._refuseTimers?.delete(peerId);
+}
+
+/**
+ * Refuses one peer over the cap: sends `room-full` now and disconnects after {@link REFUSE_CLOSE_DELAY_MS}, so
+ * the frame has left before the channel closes. The timer lives in `state` so `teardownSession` can clear it.
+ *
+ * @param deps - This app's destructured per-instance pieces.
+ * @param peerId - The peer to refuse.
+ * @example
+ * ```ts
+ * refusePeer(deps, "p-9");
+ * ```
+ */
+function refusePeer(deps: SessionDeps, peerId: PeerId): void {
+  const transport = deps.requireTransport();
+  transport.wire().send(peerId, { t: "room-full" });
+  const timers = deps.state._refuseTimers ?? new Map<PeerId, ReturnType<typeof setTimeout>>();
+  deps.state._refuseTimers = timers;
+  timers.set(
+    peerId,
+    setTimeout(() => {
+      timers.delete(peerId);
+      transport.disconnect(peerId);
+    }, REFUSE_CLOSE_DELAY_MS)
+  );
+}
+
+/**
+ * A controller channel reached `connected` (§6): enforce the cap (`maxControllers`) — tell the 9th
+ * `room-full`, then disconnect it after a short delay — otherwise upsert the `RosterEntry`, broadcast the roster, and `emit("room:peer-joined", { peerId })`.
  *
  * @param deps - This app's destructured per-instance pieces.
  * @returns A function accepting `(peerId, entry)` that processes the connection event.
@@ -46,11 +92,12 @@ export function handlePeerConnected(
   deps: SessionDeps
 ): (peerId: PeerId, entry: RosterEntry) => void {
   return (peerId, entry) => {
+    // A refused peer is back on a new channel: the old timer must not close this one.
+    cancelRefuseClose(deps.state, peerId);
     const admitted = upsertRosterEntry(deps.state, entry, deps.config.maxControllers);
     if (!admitted) {
-      // Room is full — reject by disconnecting the peer immediately.
-      const transport = deps.requireTransport();
-      transport.disconnect(peerId);
+      // Room is full: send the reason first, so the refusal is a join result on the phone (§6.2).
+      refusePeer(deps, peerId);
       return;
     }
     // Broadcast updated roster and emit the event.
@@ -190,12 +237,32 @@ function handleRecoveryFlush(
 }
 
 /**
+ * Handles a `roster` frame on the controller: mirrors the host-authoritative roster (§6.1), and the first
+ * one admits a pending join. The host and a device with no room ignore it. The frame's arrival is the
+ * admission: the host sends `roster` only to devices it admitted, and a refused one gets `room-full`. Its keys
+ * cannot prove it: `publicRendezvous` keys the roster by Trystero's peer id, not by this device's `selfId`.
+ *
+ * @param deps - This app's destructured per-instance pieces.
+ * @param frame - The incoming `roster` frame.
+ * @example
+ * ```ts
+ * handleRoster(deps, frame);
+ * ```
+ */
+function handleRoster(deps: SessionDeps, frame: Extract<Frame, { t: "roster" }>): void {
+  if (deps.state.role !== "controller") return;
+  deps.state.roster = { ...frame.roster };
+  settleJoin(deps, { ok: true, selfId: deps.state.selfId });
+}
+
+/**
  * Dispatches the session plugin's inbound `Frame` variants (the single `Wire.on` consumer it registers):
  * `RecoveryHelloFrame` (host verifies the token, replies `RecoveryWelcomeFrame`),
  * `RecoveryWelcomeFrame` (controller verifies the stored token, sends `RecoveryFlushFrame`, moves to
  * `"reconciling"`), `RecoveryFlushFrame` (host applies buffered intents in `cSeq` order, dropping
- * `cSeq <= lastApplied[peerId]` — §4.3 idempotence), and `RosterFrame` (controller mirrors the
- * host-authoritative roster — §6.1). Every other frame tag is ignored here (each plugin self-filters).
+ * `cSeq <= lastApplied[peerId]` — §4.3 idempotence), `RosterFrame` (controller mirrors the
+ * host-authoritative roster — §6.1 — and it admits a pending join), and `RoomFullFrame` (settles a pending
+ * join as `full` — §6.2). Every other frame tag is ignored here (each plugin self-filters).
  *
  * @param deps - This app's destructured per-instance pieces.
  * @returns A function accepting `(peerId, frame)` that dispatches the session-owned frame variants.
@@ -223,9 +290,11 @@ export function handleRecoveryFrame(deps: SessionDeps): (peerId: PeerId, frame: 
         break;
       }
       case "roster": {
-        // Controller mirrors the host-authoritative roster (§6.1). The host ignores its own broadcast
-        // (it never receives it; the guard keeps the host's roster the single source of truth).
-        if (deps.state.role !== "host") deps.state.roster = { ...frame.roster };
+        handleRoster(deps, frame);
+        break;
+      }
+      case "room-full": {
+        settleJoin(deps, { ok: false, reason: "full" });
         break;
       }
       default: {

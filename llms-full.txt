@@ -120,6 +120,7 @@ Everything below is the COMPLETE public surface. Nothing else is public.
   `RecoveryWelcomeFrame`, `RecoveryFlushFrame`, `PeerId`, `RosterEntry`, `Snapshot`, `Op`, `JsonValue`, `Namespace`.
 - **Event contract:** `RoomEvents` (from `src/config.ts`).
 - **Contract consts:** `MAX_CONTROLLERS` (= 8), `ROOM_CODE_LENGTH` (= 6).
+- **Contract error:** `RoomFullError`, what a `Signaling.join` rejects with when the room is full.
 - **Plugin-owned public types:** `RoomDescriptor`, `JoinResult`, `QrMatrix` (from session); `StageApi` (from stage);
   `ControllerApi` (from controller).
 - **NOT public from this barrel:** the §1.3 `ClientEnvelope` / `ServerEnvelope` server-protocol unions live in
@@ -371,6 +372,11 @@ type RosterFrame = {
   readonly roster: { readonly [id: PeerId]: RosterEntry };
 };
 
+/** Host -> controller refusal of one join: the room is at its cap. The host sends it and disconnects the peer 250 ms
+ *  later. It turns the refusal into JoinResult reason "full"; a device that loses it ends as "unreachable" at the join
+ *  timeout. */
+type RoomFullFrame = { readonly t: "room-full" };
+
 /** The complete device<->host wire protocol. Discriminated on `t`. Every variant is plain-JSON; nothing here
  *  flows through Moku emit. */
 type Frame =
@@ -384,7 +390,8 @@ type Frame =
   | RecoveryHelloFrame
   | RecoveryWelcomeFrame
   | RecoveryFlushFrame
-  | RosterFrame;
+  | RosterFrame
+  | RoomFullFrame;
 
 /** The typed device<->host DataChannel. Star topology: on the host, `peerId` selects a controller; on a
  *  controller, frames always target the single host so send/broadcast collapse to "send to host". This is the
@@ -474,7 +481,8 @@ the general `Signaling` seam — a DOM-free contract plus the two v1 adapters. E
 type TransportApi = {
   /** Opens the transport: joins the signaling room; host = active offerer, controller = passive. Idempotent per
    *  code. Resolves when the signaling session is live (NOT once peers connect). Throws (and emits
-   *  room:network-warning { reason: "rendezvous-unreachable" }) if no relay is reachable. */
+   *  room:network-warning { reason: "rendezvous-unreachable" }) if no relay is reachable. Throws RoomFullError with
+   *  no warning on the hub's `full` envelope: fullness is a join result, not a connectivity event. */
   connect(opts: { readonly role: "host" | "controller"; readonly selfId: PeerId; readonly code: string }): Promise<void>;
   /** Returns the stable typed Wire (same instance every call). */
   wire(): Wire;
@@ -515,13 +523,17 @@ type SessionApi = {
    *  lazy-imported host-only). null when generateQr is false or no room is open. Encodes the join URL ONLY,
    *  never SDP/ICE. (createRoom is sync so RoomDescriptor.qr is always null — get the matrix here.) */
   qr: () => Promise<QrMatrix | null>;
-  /** CONTROLLER. Loads/creates the phone reconnectToken, joins signaling as passive. Resolves once the channel is
-   *  connected. `{ ok:false, reason }` on failure. (passive:true set internally — caller passes code only.) */
+  /** CONTROLLER. Loads/creates the phone reconnectToken, joins signaling as passive. Resolves on the host's verdict:
+   *  its first roster frame admits, its room-full frame refuses; an open channel alone settles nothing. `{ ok:false,
+   *  reason }` on failure, and the device is then in no room (role "none", code "", transport closed), so joinRoom
+   *  can be called again. A lost room-full frame ends as "unreachable". (passive:true set internally — caller passes
+   *  code only.) */
   joinRoom: (code: string) => Promise<JoinResult>;
   /** Leaves the room (closes channels, clears roster/detaches, disarms recovery) and deletes the host's re-entry
    *  record, so the next load starts with no room. createRoom() then opens a new room on the same app. Idempotent. */
   leave: () => Promise<void>;
-  /** CONTROLLER re-entry helper for the iOS "rescan QR" degrade path; re-uses the persisted reconnectToken. */
+  /** CONTROLLER re-entry helper for the iOS "rescan QR" degrade path; re-uses the persisted reconnectToken. A failure
+   *  keeps the room, so it can be repeated and a host that comes back later is still adopted. */
   rejoin: () => Promise<JoinResult>;
   /** Roster snapshot (defensive copy, ordered by joinedAt). Host = authoritative; controller mirrors the host. */
   roster: () => readonly RosterEntry[];
@@ -773,9 +785,9 @@ lifecycle hook) so the game owns the UX policy. Re-declares all six `room:*` eve
 /** The CONTROLLER-role public surface (phone side). Reached as app.controller or ctx.require(controllerPlugin). */
 type ControllerApi = {
   /** Joins the room as a PASSIVE peer. Delegates to session.joinRoom(code). The passive flag is set INTERNALLY.
-   *  Resolves once the channel to the host is live; THROWS an Error whose message is the reason
+   *  Resolves once the host admits this phone; THROWS an Error whose message is the reason
    *  ("full" | "not-found" | "unreachable") on failure — a full room is a session-API rejection, NOT a
-   *  room:network-warning. */
+   *  room:network-warning. The phone is then in no room: call joinRoom again to retry. */
   joinRoom(code: string): Promise<void>;
   /** Reads one namespace from the READ-ONLY replica. Delegates to sync.read. Immutable; undefined if absent. */
   read(ns: Namespace): Readonly<Record<string, JsonValue>> | undefined;

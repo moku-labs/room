@@ -11,6 +11,7 @@
 import { describe, expect, it, vi } from "vitest";
 import type { RosterEntry, Snapshot } from "../../../transport/protocol";
 import { createSessionApi } from "../../api";
+import { handlePeerConnected } from "../../handlers";
 import * as persistence from "../../recovery/persistence";
 import { createSessionState } from "../../state";
 import type { SessionConfig, SessionDeps } from "../../types";
@@ -214,17 +215,22 @@ describe("createSessionApi", () => {
       expect(vi.mocked(transport.connect)).not.toHaveBeenCalled();
     });
 
-    it("from role 'none': mints selfId, sets role 'controller', calls connect, resolves not-found on reject", async () => {
+    it("from role 'none': mints selfId, calls connect as a controller; on reject resolves not-found, resets role + code, closes", async () => {
       const transport = makeMockTransport(false); // connect rejects → doJoinRoom resolves not-found
       const deps = makeDeps({ requireTransport: vi.fn().mockReturnValue(transport) });
       const api = createSessionApi(deps);
 
-      const result = await api.joinRoom("ABC234");
+      const joining = api.joinRoom("ABC234");
+      expect(deps.state.role).toBe("controller");
+      expect(deps.state.roomCode).toBe("ABC234");
+
+      const result = await joining;
 
       expect(result).toEqual({ ok: false, reason: "not-found" });
       expect(deps.state.selfId).not.toBe("");
-      expect(deps.state.role).toBe("controller");
-      expect(deps.state.roomCode).toBe("ABC234");
+      expect(deps.state.role).toBe("none");
+      expect(deps.state.roomCode).toBe("");
+      expect(vi.mocked(transport.close)).toHaveBeenCalledOnce();
       expect(vi.mocked(transport.connect)).toHaveBeenCalledWith({
         role: "controller",
         selfId: deps.state.selfId,
@@ -336,6 +342,22 @@ describe("createSessionApi", () => {
         expect([...store.keys()]).toEqual([]);
       } finally {
         vi.unstubAllGlobals();
+      }
+    });
+
+    it("leaves no timer when a refused peer is still inside its close delay", async () => {
+      vi.useFakeTimers();
+      try {
+        const deps = makeDeps({ config: { ...testConfig, maxControllers: 0 } });
+        deps.state.role = "host";
+        handlePeerConnected(deps)("p-1", makeRosterEntry("p-1", 1000));
+        expect(vi.getTimerCount()).toBe(1);
+
+        await createSessionApi(deps).leave();
+
+        expect(vi.getTimerCount()).toBe(0);
+      } finally {
+        vi.useRealTimers();
       }
     });
 

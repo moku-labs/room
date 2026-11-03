@@ -1,6 +1,6 @@
 /**
  * @file `transport/protocol` — the DOM-free cross-plugin wire + signaling contract OWNED by the
- * transport plugin (it owns the `Wire`). Pure types plus two consts, DOM-free by construction so it is
+ * transport plugin (it owns the `Wire`). Types plus two consts and one error class, DOM-free by construction so it is
  * safe to import from BOTH the `@moku-labs/web` engines AND the `@moku-labs/worker` `hub` (no DOM, no
  * `RTCPeerConnection`). Every engine + the hub import the protocol types they need from here; the
  * `room:*` Moku-`emit` event contract lives separately in `../../config` (`RoomEvents`). Materializes
@@ -147,6 +147,35 @@ export type SignalingJoinOpts = {
 };
 
 /**
+ * The rejection of a `Signaling.join` when the room is at its controller cap (the hub's `{kind:"full"}`,
+ * §1.3). Fullness is a join result and not a connectivity event (§6.2): `transport.connect` rethrows it with
+ * no `room:network-warning`, and `session.joinRoom` maps it to `{ ok: false, reason: "full" }`.
+ *
+ * @example
+ * ```ts
+ * try {
+ *   await signaling.join(code, { selfId, passive: true });
+ * } catch (error) {
+ *   if (error instanceof RoomFullError) showFullRoomScreen();
+ * }
+ * ```
+ */
+export class RoomFullError extends Error {
+  /**
+   * Builds the error with the fixed room-full message.
+   *
+   * @example
+   * ```ts
+   * reject(new RoomFullError()); // the hub answered { kind: "full" }
+   * ```
+   */
+  constructor() {
+    super("[room] The room is full.\n  Join again when a slot is free.");
+    this.name = "RoomFullError";
+  }
+}
+
+/**
  * A live signaling session scoped to ONE room code. Created by `Signaling.join`. Brokers the
  * out-of-band SDP/ICE handshake for every peer in the room, then is discarded (see §1.2 lifecycle
  * rule).
@@ -236,6 +265,7 @@ export type Signaling = {
    * @param code - The 6-char room code (see §6) that scopes the rendezvous.
    * @param opts - Self id + passive/active role (see {@link SignalingJoinOpts}).
    * @returns A promise resolving to the live {@link SignalingSession}.
+   * @throws {RoomFullError} When the room is at its controller cap (server-backed adapters only).
    */
   join(code: string, opts: SignalingJoinOpts): Promise<SignalingSession>;
   /**
@@ -412,6 +442,16 @@ export type RosterFrame = {
 };
 
 /**
+ * Host → controller refusal of ONE join: the room is at its cap (§6.1). The host sends it and disconnects the
+ * peer a short delay later, so the frame arrives before the close. It is what turns the refusal into
+ * `{ ok: false, reason: "full" }` on the phone (§6.2); a device that still loses this frame ends with
+ * `unreachable` when its join times out.
+ */
+export type RoomFullFrame = {
+  readonly t: "room-full";
+};
+
+/**
  * The complete device↔host wire protocol. Discriminated on `t`. Every variant is plain-JSON; nothing
  * here flows through Moku `emit` (spec/07 §3, spec/11 §2.7).
  */
@@ -426,7 +466,8 @@ export type Frame =
   | RecoveryHelloFrame
   | RecoveryWelcomeFrame
   | RecoveryFlushFrame
-  | RosterFrame;
+  | RosterFrame
+  | RoomFullFrame;
 
 /**
  * The typed device↔host DataChannel channel. Star topology: on the host (stage), `peerId` selects a
@@ -454,8 +495,8 @@ export type Wire = {
   /**
    * Registers the single inbound frame handler. Called once per fully-reassembled frame (§2.3),
    * with the sender's id. Transport dispatches each frame to the owning engine by `frame.t`
-   * (intent → intentPlugin, sync-* → syncPlugin, ping/pong → heartbeat, recovery-* / roster →
-   * sessionPlugin).
+   * (intent → intentPlugin, sync-* → syncPlugin, ping/pong → heartbeat, recovery-* / roster /
+   * room-full → sessionPlugin).
    *
    * @param handler - Invoked with `(senderPeerId, frame)` for every inbound frame.
    * @returns An unsubscribe function.

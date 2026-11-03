@@ -48,6 +48,7 @@ export type {
   RecoveryHelloFrame,
   RecoveryWelcomeFrame,
   RecoveryFlushFrame,
+  RoomFullFrame,
   PeerId,
   RosterEntry,
   Snapshot,
@@ -55,7 +56,7 @@ export type {
   JsonValue,
   Namespace
 } from "./plugins/transport/protocol";
-export { MAX_CONTROLLERS, ROOM_CODE_LENGTH } from "./plugins/transport/protocol";
+export { MAX_CONTROLLERS, ROOM_CODE_LENGTH, RoomFullError } from "./plugins/transport/protocol";
 
 // --- Public event payload contract (each engine registers its own slice) ---
 export type { RoomEvents } from "./config";

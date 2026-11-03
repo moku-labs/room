@@ -301,6 +301,8 @@ export type TransportApi = {
    *
    * @param opts - Role, self id, and 6-char room code.
    * @returns A promise that resolves when the signaling session is established.
+   * @throws {RoomFullError} If the hub refuses the join because the room is full. No warning: fullness is a
+   *   join result, not a connectivity event (contracts section 6.2).
    * @throws {Error} If the signaling adapter cannot reach any rendezvous relay (also emits
    *   `room:network-warning { reason: "rendezvous-unreachable" }`).
    * @example

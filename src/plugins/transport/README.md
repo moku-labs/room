@@ -20,13 +20,14 @@ planes:
 
 Emits exactly one Moku event: `room:network-warning { reason }` (`ice-failed` | `rendezvous-unreachable` |
 `channel-closed` | `room-evicted`). **No gameplay traffic ever flows through Moku `emit`** — all
-device-to-host frames ride the `Wire`.
+device-to-host frames ride the `Wire`. The `Frame` union is in `protocol.ts`; `room-full` is the host's
+refusal of one join, and `sessionPlugin` consumes it.
 
 ## API
 
 | Method | Description |
 |---|---|
-| `connect(opts)` | Joins the signaling room on demand (host active / controller passive). |
+| `connect(opts)` | Joins the signaling room on demand (host active / controller passive). Rejects with `RoomFullError` (from `protocol.ts`) on the hub's `full` envelope, with no `room:network-warning`: fullness is a join result, not a connectivity event. A join that lands after a `close()` releases its session. |
 | `wire()` | Returns the stable typed `Wire` for send/broadcast/on. |
 | `disconnect(peerId)` | Tears down one peer. |
 | `peers()` | Read-only snapshot of connected peer ids. |

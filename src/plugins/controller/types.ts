@@ -32,14 +32,15 @@ export type ControllerApi = {
    * performs the §1 rendezvous handshake, persists the phone-side `reconnectToken` (contracts §6
    * `RosterEntry`), and stays joined until `iceConnectionState === "connected"` (trickle ICE, §1.2). The
    * passive (controller-role) flag is set INTERNALLY by `sessionPlugin` (§1.1) — never a caller argument.
-   * `joinRoom` resolves once the DataChannel to the host is live; it maps `sessionPlugin`'s discriminated
+   * `joinRoom` resolves once the host admits this phone (its first `roster` frame; an open channel alone
+   * settles nothing, because a full host opens the channel too); it maps `sessionPlugin`'s discriminated
    * `JoinResult` to this contract — on `{ ok: false }` it THROWS an `Error` whose message is the `reason`
    * (`"full"` | `"not-found"` | `"unreachable"`), so the rejection is never silently dropped. A full room
    * is a session-API rejection, NOT a `room:network-warning` (contracts §6.2 — that enum is
-   * connectivity-only).
+   * connectivity-only). After a throw the phone is in no room: call `joinRoom` again to retry.
    *
    * @param code - The 6-char room code from the TV's QR / join URL (contracts §6.2; `ROOM_CODE_LENGTH`).
-   * @returns A promise resolving when the controller's channel to the host is connected.
+   * @returns A promise resolving when the host has admitted this phone.
    * @throws {Error} If the room is full (8-cap, contracts §6 `MAX_CONTROLLERS`), not found, or the
    *   rendezvous is unreachable — the `JoinResult.reason` becomes the thrown `Error.message`.
    * @example

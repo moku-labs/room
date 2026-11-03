@@ -15,6 +15,7 @@ import type {
   SignalingSession,
   SignalMsg
 } from "../protocol";
+import { RoomFullError } from "../protocol";
 
 /**
  * Resolves the `leave()` promise once a WebSocket reaches CLOSED state. Registers a one-shot
@@ -58,6 +59,7 @@ function waitForClose(ws: WebSocket): Promise<void> {
  *  - `peer-left` → `onPeerLeave` callback.
  *  - `relay` → `onSignal` callback.
  *  - `evict` → `onEvict` callback.
+ *  - `full` → rejects the join with {@link RoomFullError}; the hub closes the socket itself.
  *  - `session.send(to, msg)` → `{kind:"relay", to, msg}` sent over the WS.
  *  - `session.leave()` → `ws.close(1000)`.
  *
@@ -232,8 +234,11 @@ export function buildServerSession(
           onEvictCallback?.();
           break;
         }
-        // full, error — no action needed at the signaling-seam level.
-        case "full":
+        case "full": {
+          reject(new RoomFullError());
+          break;
+        }
+        // error — no action needed at the signaling-seam level.
         case "error": {
           break;
         }

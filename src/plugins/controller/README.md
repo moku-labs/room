@@ -29,9 +29,11 @@ Joins the room identified by `code` as a PASSIVE peer (the controller waits to b
 rendezvous handshake, persists the phone-side `reconnectToken` (contracts §6), and stays joined until
 the channel is `connected`. The passive (controller-role) flag is set INTERNALLY by `sessionPlugin` — it
 is never a caller argument. Maps `session`'s discriminated `JoinResult` to this contract: resolves once
-the DataChannel to the host is live, or **throws** an `Error` whose message is the `reason`
+the host admits this phone (its first `roster` frame; an open channel alone settles nothing, because a full
+host opens the channel too), or **throws** an `Error` whose message is the `reason`
 (`"full"` | `"not-found"` | `"unreachable"`) so the rejection is never silently dropped (a full room is
-a session-API rejection, NOT a `room:network-warning` — contracts §6.2).
+a session-API rejection, NOT a `room:network-warning` — contracts §6.2). After a throw the phone is in no
+room: call `joinRoom` again to retry.
 
 ### `read(ns: Namespace): Readonly<Record<string, JsonValue>> | undefined`
 

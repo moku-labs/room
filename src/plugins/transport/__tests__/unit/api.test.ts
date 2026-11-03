@@ -5,6 +5,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createTransportApi } from "../../api";
 import type { Signaling, SignalingSession } from "../../protocol";
+import { RoomFullError } from "../../protocol";
 import { createTransportState } from "../../state";
 import type { PeerConnection, TransportConfig, TransportState } from "../../types";
 
@@ -123,6 +124,41 @@ describe("createTransportApi — connect", () => {
       api.connect({ role: "host", selfId: "host_root", code: "K7M2QX" })
     ).rejects.toThrow();
     expect(emitWarning).toHaveBeenCalledWith("rendezvous-unreachable");
+  });
+
+  it("rethrows RoomFullError with no warning: fullness is a result, not an event", async () => {
+    const join = vi.fn().mockRejectedValue(new RoomFullError());
+    const emitWarning = vi.fn();
+    const state = createTransportState();
+    const api = createTransportApi(state, makeConfig({ join }), emitWarning);
+
+    await expect(
+      api.connect({ role: "controller", selfId: "p_ab12", code: "K7M2QX" })
+    ).rejects.toBeInstanceOf(RoomFullError);
+    expect(emitWarning).not.toHaveBeenCalled();
+  });
+
+  it("a join that lands after close() releases its session and leaves nothing live", async () => {
+    const session = fakeSession();
+    let land: ((value: SignalingSession) => void) | undefined;
+    const join = vi.fn(
+      () =>
+        new Promise<SignalingSession>(resolve => {
+          land = resolve;
+        })
+    );
+    const state = createTransportState();
+    const api = createTransportApi(state, makeConfig({ join }), vi.fn());
+
+    const connecting = api.connect({ role: "controller", selfId: "p_ab12", code: "K7M2QX" });
+    await api.close();
+    land?.(session);
+    await connecting;
+
+    expect(session.leave).toHaveBeenCalledOnce();
+    expect(session.onPeer).not.toHaveBeenCalled();
+    expect(state.session).toBeNull();
+    expect(state.heartbeatTimer).toBeNull();
   });
 
   it("is idempotent: a second connect leaves the prior session instead of leaking it", async () => {
