@@ -234,23 +234,14 @@ DO Alarm emits `{kind:"evict"}`, surfaced as `room:network-warning { reason: "ro
 Unlike the client core, the server tier is **not its own framework** — it exports **`hubPlugin`** (a
 [`@moku-labs/worker`](https://github.com/moku-labs/worker) plugin) + the **`Hub`** Durable Object class. You compose
 `hubPlugin` into your **own** `@moku-labs/worker` app — alongside `durableObjectsPlugin` (the `Hub` DO) and
-`deployPlugin`/`cliPlugin` (which generate `wrangler.jsonc` + run `wrangler dev`/`deploy`; `deployPlugin` also needs `storagePlugin`, `d1Plugin` and `queuesPlugin`) — so the app keeps **full
+`deployPlugin`/`cliPlugin` (which generate `wrangler.jsonc` + run `wrangler dev`/`deploy`) — so the app keeps **full
 control** of its worker composition + config, exactly like any other `@moku-labs/worker` app. `@moku-labs/worker` is an
 **optional peer dependency** you provide. The shape is **two files**: a **root composition** (`src/server.ts`) and a
 **`cloudflare/` entry** (`src/cloudflare/worker.ts`) — the `{ fetch }` default export + the `Hub` binding.
 
 ```ts
 // your-app/src/server.ts — ONE @moku-labs/worker app, composing room's hubPlugin.
-import {
-  cliPlugin,
-  createApp,
-  d1Plugin,
-  deployPlugin,
-  durableObjectsPlugin,
-  kvPlugin,
-  queuesPlugin,
-  storagePlugin
-} from "@moku-labs/worker";
+import { cliPlugin, createApp, d1Plugin, deployPlugin, durableObjectsPlugin, kvPlugin, queuesPlugin, storagePlugin } from "@moku-labs/worker";
 import { hubPlugin } from "@moku-labs/room/server";
 
 export const server = createApp({
