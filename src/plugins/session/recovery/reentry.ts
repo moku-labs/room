@@ -16,7 +16,7 @@ import {
   handleRecoveryFrame
 } from "../handlers";
 import { settleJoin } from "../lifecycle/join";
-import type { JoinResult, SessionDeps, SessionState } from "../types";
+import type { HostReentryRecord, JoinResult, SessionDeps, SessionState } from "../types";
 import { mintHostToken } from "./hosttoken";
 import { armPersistence, readReentryRecord } from "./persistence";
 
@@ -83,6 +83,31 @@ export function registerTransportBindings(deps: SessionDeps): void {
 }
 
 /**
+ * The fallback of a failed reclaim: joins the same code again with no token, then gives the kept record the hub's new
+ * token. Does nothing for a record with no token, where there is no reclaim to fall back from, or for a room that
+ * ended in the meantime, which nobody wants any more.
+ *
+ * @param deps - This app's destructured per-instance pieces.
+ * @param record - The re-entry record whose reclaim failed.
+ * @returns A promise that settles when the fresh join did, or at once when there is nothing to do.
+ * @example
+ * ```ts
+ * transport.connect(reclaimOpts).catch(() => rejoinWithoutToken(deps, record));
+ * ```
+ */
+async function rejoinWithoutToken(deps: SessionDeps, record: HostReentryRecord): Promise<void> {
+  const sameRoom = deps.state.role === "host" && deps.state.roomCode === record.roomCode;
+  if (record.reclaimToken === undefined || !sameRoom) return;
+
+  const transport = deps.requireTransport();
+  await transport.connect({ role: "host", selfId: deps.state.selfId, code: record.roomCode });
+
+  // The refused token is dead, and an idle host hands over no new record: the kept one takes the new token.
+  const token = transport.reclaimToken();
+  if (token !== null) deps.state.recovery.persistHandle?._setReclaimToken(token);
+}
+
+/**
  * `onInit` host-reload detection (§5.2). Reads back the `HostReentryRecord`; on a fresh hit it sets
  * `role:"host"`, restores `roomCode`/`hostToken`/`sSeqAtSnapshot`, instructs transport to REJOIN the same
  * room code, and emits `room:host-reconnecting {}`. No-op when there is no record. `reentryRecord()` hands the
@@ -109,8 +134,7 @@ export function detectHostReload(deps: SessionDeps): void {
   deps.state.selfId = deps.state.selfId || mintHostToken();
 
   // Store the record for re-broadcasting on controller reconnect.
-  const rt = deps.state;
-  rt._reentryRecord = record;
+  deps.state._reentryRecord = record;
 
   // Arm persistence driver so we keep snapshotting.
   deps.state.recovery.persistHandle = armPersistence(deps);
@@ -130,21 +154,7 @@ export function detectHostReload(deps: SessionDeps): void {
       code: record.roomCode,
       ...(record.reclaimToken === undefined ? {} : { reclaimToken: record.reclaimToken })
     })
-    .catch(async () => {
-      // The hub refused the token: it evicted the room. With no token there is no reclaim to fall back from,
-      // and a room that ended in the meantime is one nobody wants any more.
-      const sameRoom = deps.state.role === "host" && deps.state.roomCode === record.roomCode;
-      if (record.reclaimToken !== undefined && sameRoom) {
-        await transport.connect({
-          role: "host",
-          selfId: deps.state.selfId,
-          code: record.roomCode
-        });
-        // The refused token is dead, and an idle host hands over no new record: the kept one takes the new token.
-        const token = transport.reclaimToken();
-        if (token !== null) deps.state.recovery.persistHandle?._setReclaimToken(token);
-      }
-    })
+    .catch(() => rejoinWithoutToken(deps, record))
     .catch(() => {
       // Best-effort: failure is surfaced via room:network-warning from transport.
     });

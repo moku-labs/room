@@ -344,7 +344,9 @@ export function armPersistence(deps: SessionDeps): PersistHandleInternal {
     },
     /** @inheritdoc */
     _setReclaimToken(token: string): void {
-      if (latestRecord) latestRecord = { ...latestRecord, reclaimToken: token };
+      if (!latestRecord) return;
+      latestRecord = { ...latestRecord, reclaimToken: token };
+      syncFlush();
     }
   };
 

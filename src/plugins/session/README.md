@@ -130,7 +130,8 @@ that sits idle stays resumable.
 
 A reload replays the record's reclaim token (`serverSignaling` only). When that connect fails, the hub evicted the room
 for example, and the room is still this one, the host joins the same code again with no token and gets a new one. The
-kept record takes the new token, so the next reload of an idle room is not refused again. The refusal fires no
+kept record takes the new token and is written at once, so the next reload of an idle room is not refused again, also
+after a tab killed with no `visibilitychange`. The refusal fires no
 `room:network-warning`: `rendezvous-unreachable` fires once, and only when the fresh join fails too.
 
 ## A phone reload

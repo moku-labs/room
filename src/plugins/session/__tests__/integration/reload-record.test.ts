@@ -212,7 +212,7 @@ describe("host re-entry record", () => {
     await next.stop();
   });
 
-  it("an idle host after a refused reclaim: its next load reclaims with the new token, and nothing is refused", async () => {
+  it("an idle host killed right after a refused reclaim: the next load reclaims with the new token, and nothing is refused", async () => {
     await leaveRecordWithToken();
 
     const evicted = makeServerBus();
@@ -220,7 +220,9 @@ describe("host re-entry record", () => {
     await idle.start();
     await vi.waitFor(() => expect(idle.transport.reclaimToken()).not.toBeNull());
     const newToken = idle.transport.reclaimToken();
-    await idle.stop();
+
+    // The tab dies here: its socket goes with no stop and no visibilitychange, so storage holds only what the retry wrote.
+    await idle.transport.close();
 
     const join = vi.spyOn(evicted, "join");
     const { app: next } = makeStage(evicted);
@@ -231,6 +233,7 @@ describe("host re-entry record", () => {
     expect(join.mock.calls[0]?.[1]).toMatchObject({ reclaimToken: newToken });
 
     await next.stop();
+    await idle.stop();
   });
 
   it("leave() after a reload removes the key and ends the restored room", async () => {

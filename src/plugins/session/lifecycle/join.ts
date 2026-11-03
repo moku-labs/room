@@ -60,6 +60,7 @@ export function settleJoin(deps: SessionDeps, result: JoinResult): void {
     return;
   }
 
+  // A failed first join leaves no room behind: no role, no code, no host, no recovery running.
   state.role = "none";
   state.roomCode = "";
   state._hostId = null;
@@ -70,6 +71,7 @@ export function settleJoin(deps: SessionDeps, result: JoinResult): void {
   state.recovery.phase = "stable";
   state.recovery.reconnectDeadline = 0;
 
+  // The caller hears the result after the close, so a retry does not race it, but a dead socket must not hold it.
   let closeTimer: ReturnType<typeof setTimeout> | undefined;
   const closeDeadline = new Promise<void>(done => {
     closeTimer = setTimeout(done, JOIN_CLOSE_WAIT_MS);
