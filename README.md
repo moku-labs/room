@@ -156,13 +156,16 @@ showJoinCode(code, joinUrl);
 const qr = await app.stage.qr();
 if (qr) renderJoinQr(qr); // show on the TV; phones scan it to join
 
-// Own authoritative state: react to a controller intent, mutate, sync broadcasts the delta.
+// Own authoritative state: declare the slice and the intent first (onIntent throws on an unregistered
+// name, mutate on an unregistered slice), then react to a controller intent, mutate, sync broadcasts the delta.
+app.stage.registerSlice("scores", {});
+app.stage.register("score", { fields: {}, additionalFields: false });
 app.stage.onIntent("score", (payload, peerId) => {
   app.stage.mutate("scores", draft => ({ ...draft, [peerId]: ((draft[peerId] as number) ?? 0) + 1 }));
 });
 ```
 
-`StageApi` (`app.stage`): `createRoom`, `qr`, `mutate`, `broadcast`, `onIntent`, `roster`.
+`StageApi` (`app.stage`): `createRoom`, `qr`, `registerSlice`, `mutate`, `broadcast`, `register`, `onIntent`, `roster`.
 
 ### Controller — the phone
 
@@ -254,11 +257,11 @@ control** of its worker composition + config, exactly like any other `@moku-labs
 
 ```ts
 // your-app/src/server.ts — ONE @moku-labs/worker app, composing room's hubPlugin.
-import { cliPlugin, createApp, deployPlugin, durableObjectsPlugin, kvPlugin } from "@moku-labs/worker";
+import { cliPlugin, createApp, d1Plugin, deployPlugin, durableObjectsPlugin, kvPlugin, queuesPlugin, storagePlugin } from "@moku-labs/worker";
 import { hubPlugin } from "@moku-labs/room/server";
 
 export const server = createApp({
-  plugins: [kvPlugin, durableObjectsPlugin, hubPlugin, deployPlugin, cliPlugin],
+  plugins: [storagePlugin, kvPlugin, d1Plugin, queuesPlugin, durableObjectsPlugin, hubPlugin, deployPlugin, cliPlugin],
   pluginConfigs: {
     durableObjects: { hub: { binding: "ROOM_HUB", className: "Hub" } },
     kv: { rateLimit: { name: "ratelimit", binding: "RATE_LIMIT" } }

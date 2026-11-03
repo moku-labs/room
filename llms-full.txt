@@ -635,7 +635,8 @@ type IntentApi = {
   /** Host: declares an intent kind + its correctness-only shape-check. Idempotent per name (last wins). */
   register(name: string, schema: IntentSchema): void;
   /** Host: subscribes the single handler for a registered kind. Runs only for inbound frames that name a
-   *  registered kind, pass the schema, and are not a duplicate (cSeq > lastApplied[peerId]). Returns unsubscribe. */
+   *  registered kind, pass the schema, and are not a duplicate (cSeq > lastApplied[peerId]). Returns unsubscribe.
+   *  THROWS on an unregistered name and stores nothing: call register(name, schema) first. */
   onIntent(name: string, handler: IntentHandler): () => void;
   /** Controller: stamps the next cSeq, builds an IntentFrame, and EITHER hands it to the at-least-once live
    *  delivery tracker (retransmitted until the host's intent-ack receipt, or dropped with
@@ -680,7 +681,7 @@ type BufferedIntent = { readonly intent: IntentFrame; readonly ts: number };
 
 (`IntentApi`, `IntentSchema`, `IntentFieldRule`, `IntentMeta`, `IntentHandler`, `BufferedIntent` are the intent
 plugin's internal/public types; they are NOT in the package's top-level export surface — the host normally reaches
-`register`/`onIntent` through `StageApi.onIntent`, and the controller reaches `intent` through `ControllerApi.intent`.
+`register`/`onIntent` through `StageApi.register`/`StageApi.onIntent`, and the controller reaches `intent` through `ControllerApi.intent`.
 They are documented here because they describe the intent contract precisely.)
 
 **Note:** the intent plugin's own `onIntent` handler signature is `(payload, meta)` where `meta = { peerId, cSeq }`.
@@ -743,8 +744,8 @@ type SyncApi = {
 };
 ```
 
-(`SyncApi` and `Cells` are the sync plugin's surface; the host reaches `mutate`/`broadcast` through `StageApi`, and
-the controller reaches `read`/`subscribe` through `ControllerApi`. `Snapshot`/`Op` ARE in the public export surface.)
+(`SyncApi` and `Cells` are the sync plugin's surface; the host reaches `registerSlice`/`mutate`/`broadcast` through
+`StageApi`, and the controller reaches `read`/`subscribe` through `ControllerApi`. `Snapshot`/`Op` ARE in the public export surface.)
 
 ### 6.5 stage (Standard facade, depends: all four engines)
 
@@ -772,13 +773,20 @@ type StageApi = {
    *  createRoom (which is sync and so cannot carry the async matrix on RoomDescriptor.qr). Lazy-imports the
    *  qrcode encoder host-only; encodes the join URL ONLY — never SDP/ICE. null when generateQr is false / no room. */
   qr(): Promise<QrMatrix | null>;
+  /** Declares one authoritative namespaced sync slice with its initial cells. Delegates to sync.registerSlice.
+   *  Call before the first mutate of that namespace and before phones join. Same initial again is a no-op; a
+   *  different initial THROWS. */
+  registerSlice(ns: Namespace, initial: Cells): void;
   /** Mutates one authoritative namespaced sync slice. Delegates to sync.mutate. Advances sSeq and schedules a
    *  throttled (20–30 Hz) delta broadcast. The ONLY way the host changes shared state. */
   mutate(ns: Namespace, recipe: MutateRecipe): void;
   /** Forces an immediate full snapshot broadcast to all controllers. Delegates to sync.broadcast(). Idempotent. */
   broadcast(): void;
+  /** Declares a controller intent + its correctness-only shape-check. Delegates to intent.register. Must run
+   *  before the matching onIntent. Last registration of a name wins. */
+  register(name: string, schema: IntentSchema): void;
   /** Registers a typed host-side handler for a named controller intent. Delegates to intent.onIntent, unwrapping
-   *  meta.peerId so the handler is (payload, peerId). Returns unsubscribe. */
+   *  meta.peerId so the handler is (payload, peerId). Returns unsubscribe. THROWS on an unregistered name. */
   onIntent(name: string, handler: IntentHandler): () => void;
   /** Snapshot of the current connected-controller roster. Delegates to session.roster(). Read-only. */
   roster(): readonly RosterEntry[];
@@ -962,6 +970,11 @@ const scoreboard = createPlugin("scoreboard", {
     showJoinCode(code, joinUrl);
     stage.qr().then(qr => qr && renderJoinQr(qr)); // fetch the matrix via the async qr() accessor
 
+    // Declare the slice and the intent first: onIntent throws on an unregistered name, mutate on an
+    // unregistered slice.
+    stage.registerSlice("scores", {});
+    stage.register("score", { fields: {}, additionalFields: false });
+
     // Each controller intent advances that controller's score; mutate schedules a throttled delta.
     stage.onIntent("score", (_payload, peerId) => {
       stage.mutate("scores", draft => ({
@@ -1110,6 +1123,8 @@ const myGame = createPlugin("myGame", {
     const { code, joinUrl } = stage.createRoom();
     showJoinCode(code, joinUrl);
     stage.qr().then(qr => qr && renderJoinQr(qr)); // QR is async; descriptor.qr is null
+    stage.registerSlice("players", {}); // before mutate
+    stage.register("move", { fields: { dx: { type: "number" } }, additionalFields: true }); // before onIntent
     stage.onIntent("move", (payload, peerId) => {
       stage.mutate("players", draft => ({ ...draft, [peerId]: payload as JsonValue }));
     });
