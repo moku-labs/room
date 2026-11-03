@@ -1165,6 +1165,72 @@ function makeLinkedRoom(replicaIds: readonly PeerId[]) {
   return { host, hostState, replicas, dropTo };
 }
 
+describe("engine.reset (the room ended)", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("a host: slices go back to their initial, sSeq 0, nothing dirty, and it stays ready", () => {
+    const { engine, state, emit } = makeEngine();
+    engine.registerSlice("scores", { ann: 0 });
+    engine.mutate("scores", scores => ({ ...scores, ann: 5 }));
+    engine.broadcast();
+    engine.mutate("scores", scores => ({ ...scores, ann: 6 }));
+    emit.mockClear();
+
+    engine.reset();
+
+    expect(engine.read("scores")).toEqual({ ann: 0 });
+    expect(state.sSeq).toBe(0);
+    expect(state.dirty).toEqual({});
+    expect(state.ready).toBe(true);
+    expect(emit).not.toHaveBeenCalled();
+  });
+
+  it("a host: a second registerSlice with another initial still throws after a reset", () => {
+    const { engine } = makeEngine();
+    engine.registerSlice("scores", { ann: 0 });
+
+    engine.reset();
+
+    expect(() => engine.registerSlice("scores", { ann: 0 })).not.toThrow();
+    expect(() => engine.registerSlice("scores", { ann: 9 })).toThrow(/already registered/);
+  });
+
+  it("a stale replica: the gap goes away with the room", () => {
+    const { engine, state, wire } = makeEngine();
+    engine.applyFrame({ t: "sync-snap", snapshot: { scores: { ann: 1 } }, sSeq: 3 });
+    engine.applyFrame({ t: "sync-delta", ops: [], sSeq: 9 });
+    expect(state.stale).toBe(true);
+    wire.send.mockClear();
+
+    engine.reset();
+
+    expect(state.stale).toBe(false);
+    expect(state.ready).toBe(false);
+    expect(state.sSeq).toBe(0);
+    expect(engine.read("scores")).toBeUndefined();
+    engine.applyFrame({ t: "sync-delta", ops: [{ ns: "round", key: "n", val: 1 }], sSeq: 1 });
+    expect(engine.read("round")).toEqual({ n: 1 });
+  });
+
+  it("a replica asks for its baseline again in the next room, when that first frame is lost", () => {
+    const { engine, wire } = makeEngine();
+    engine.startBaselineRetry();
+    engine.applyFrame({ t: "sync-snap", snapshot: { scores: { ann: 1 } }, sSeq: 3 });
+    wire.send.mockClear();
+
+    engine.reset();
+    vi.advanceTimersByTime(1000);
+
+    expect(wire.send).toHaveBeenCalledWith("host", { t: "sync-resync", sSeq: 0 });
+  });
+});
+
 describe("engine linked-room loop (gap heal end-to-end)", () => {
   beforeEach(() => {
     vi.useFakeTimers();

@@ -13,6 +13,7 @@ import type { RosterEntry, Snapshot } from "../../../transport/protocol";
 import { createSessionApi } from "../../api";
 import { handlePeerConnected } from "../../handlers";
 import * as persistence from "../../recovery/persistence";
+import { armReconnectTimeout } from "../../recovery/timeout";
 import { createSessionState } from "../../state";
 import type { SessionConfig, SessionDeps } from "../../types";
 
@@ -265,6 +266,34 @@ describe("createSessionApi", () => {
   });
 
   describe("leave", () => {
+    it("a reconnect timer that comes due during the close connects nothing", async () => {
+      vi.useFakeTimers();
+      try {
+        const deps = makeDeps();
+        deps.state.role = "controller";
+        deps.state.roomCode = "ROOM01";
+        deps.state.selfId = "me";
+        deps.state.recovery.phase = "host-absent";
+        const transport = deps.requireTransport();
+        let finishClose = (): void => {};
+        vi.mocked(transport.close).mockReturnValue(
+          new Promise<void>(resolve => {
+            finishClose = resolve;
+          })
+        );
+        armReconnectTimeout(deps);
+
+        const leaving = createSessionApi(deps).leave();
+        await vi.advanceTimersByTimeAsync(testConfig.reconnectTimeoutMs + 1);
+
+        expect(transport.connect).not.toHaveBeenCalled();
+        finishClose();
+        await leaving;
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
     it("is an idempotent no-op when role is 'none' (does not close transport)", async () => {
       const deps = makeDeps();
       const transport = deps.requireTransport();

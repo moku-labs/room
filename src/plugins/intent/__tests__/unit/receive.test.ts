@@ -14,7 +14,10 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { Frame, PeerId, Wire } from "../../../transport/protocol";
 import { attachIntentReceive } from "../../receive";
 import { createIntentState } from "../../state";
-import type { IntentDelivery, IntentSchema, IntentState } from "../../types";
+import type { IntentDelivery, IntentHandler, IntentSchema, IntentState } from "../../types";
+
+/** The seat check of a test that is not about seats: every peer holds one. */
+const everySeated = (): boolean => true;
 
 /** Creates a fake `Wire` that captures the last `on` handler. */
 function makeFakeWire() {
@@ -60,14 +63,14 @@ describe("attachIntentReceive", () => {
   });
 
   it("registers exactly one Wire.on handler", () => {
-    attachIntentReceive(state, fakeWire.wire);
+    attachIntentReceive(state, fakeWire.wire, everySeated);
     expect(fakeWire.hasHandler()).toBe(true);
   });
 
   it("filters to frame.t === 'intent' and ignores other frame tags", () => {
     const handler = vi.fn();
     state.registry.set("move", { schema: moveSchema, handler });
-    attachIntentReceive(state, fakeWire.wire);
+    attachIntentReceive(state, fakeWire.wire, everySeated);
 
     // Non-intent frames must be ignored
     fakeWire.deliver("ctrl-1", { t: "ping", ts: Date.now() });
@@ -82,7 +85,7 @@ describe("attachIntentReceive", () => {
   it("routes into ctx.state: validate → de-dup vs lastApplied → dispatch to registry handler", () => {
     const handler = vi.fn();
     state.registry.set("move", { schema: moveSchema, handler });
-    attachIntentReceive(state, fakeWire.wire);
+    attachIntentReceive(state, fakeWire.wire, everySeated);
 
     // Valid frame → handler fires, lastApplied updated
     fakeWire.deliver("ctrl-1", {
@@ -119,13 +122,13 @@ describe("attachIntentReceive", () => {
     const state1 = createIntentState();
     state1.registry.set("move", { schema: moveSchema, handler: handler1 });
     const wire1 = makeFakeWire();
-    attachIntentReceive(state1, wire1.wire);
+    attachIntentReceive(state1, wire1.wire, everySeated);
 
     // App 2 — completely separate state + wire
     const state2 = createIntentState();
     state2.registry.set("move", { schema: moveSchema, handler: handler2 });
     const wire2 = makeFakeWire();
-    attachIntentReceive(state2, wire2.wire);
+    attachIntentReceive(state2, wire2.wire, everySeated);
 
     // Deliver to app1's wire
     wire1.deliver("ctrl-1", { t: "intent", name: "move", payload: { dx: 0, dy: 0 }, cSeq: 0 });
@@ -155,7 +158,7 @@ describe("attachIntentReceive — intent-ack receipt", () => {
   beforeEach(() => {
     state = createIntentState();
     fakeWire = makeFakeWire();
-    attachIntentReceive(state, fakeWire.wire);
+    attachIntentReceive(state, fakeWire.wire, everySeated);
   });
 
   it("acks a fresh applied intent back to its sender", () => {
@@ -217,5 +220,110 @@ describe("attachIntentReceive — intent-ack receipt", () => {
     expect(state.delivery).toBeNull();
     expect(() => fakeWire.deliver("host-id", { t: "intent-ack", cSeq: 5 })).not.toThrow();
     expect(fakeWire.wire.send).not.toHaveBeenCalled();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// The run of a frame: one app's stream of cSeq
+// ---------------------------------------------------------------------------
+
+describe("attachIntentReceive — run", () => {
+  let state: IntentState;
+  let fakeWire: ReturnType<typeof makeFakeWire>;
+  let handler: ReturnType<typeof vi.fn<IntentHandler>>;
+
+  /** Delivers a valid `move` intent with this `cSeq`, and this `run` when one is given. */
+  function moveFrom(peerId: PeerId, cSeq: number, run?: string): void {
+    fakeWire.deliver(peerId, {
+      t: "intent",
+      name: "move",
+      payload: { dx: 0, dy: 0 },
+      cSeq,
+      ...(run === undefined ? {} : { run })
+    });
+  }
+
+  beforeEach(() => {
+    state = createIntentState();
+    fakeWire = makeFakeWire();
+    handler = vi.fn<IntentHandler>();
+    state.registry.set("move", { schema: moveSchema, handler });
+    attachIntentReceive(state, fakeWire.wire, everySeated);
+  });
+
+  it("a new run clears the peer's mark before the de-dup: a reloaded phone's cSeq 0 applies", () => {
+    moveFrom("ctrl-1", 5, "run-a");
+
+    moveFrom("ctrl-1", 0, "run-b");
+
+    expect(handler).toHaveBeenCalledTimes(2);
+    expect(state.lastApplied.get("ctrl-1")).toBe(0);
+  });
+
+  it("the same run keeps the mark: a resent frame applies once", () => {
+    moveFrom("ctrl-1", 5, "run-a");
+
+    moveFrom("ctrl-1", 5, "run-a");
+    moveFrom("ctrl-1", 4, "run-a");
+
+    expect(handler).toHaveBeenCalledTimes(1);
+  });
+
+  it("a frame with no run is run '': it de-dups with itself and with an explicit empty run", () => {
+    moveFrom("ctrl-1", 3);
+
+    moveFrom("ctrl-1", 3);
+    moveFrom("ctrl-1", 3, "");
+
+    expect(handler).toHaveBeenCalledTimes(1);
+
+    moveFrom("ctrl-1", 0, "run-a");
+    expect(handler).toHaveBeenCalledTimes(2);
+  });
+
+  it("one peer's new run leaves another peer's mark alone", () => {
+    moveFrom("ctrl-1", 5, "run-a");
+    moveFrom("ctrl-2", 5, "run-c");
+
+    moveFrom("ctrl-1", 0, "run-b");
+    moveFrom("ctrl-2", 5, "run-c");
+
+    expect(handler).toHaveBeenCalledTimes(3);
+    expect(state.lastApplied.get("ctrl-2")).toBe(5);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// A frame from a peer with no seat
+// ---------------------------------------------------------------------------
+
+describe("attachIntentReceive — seat", () => {
+  it("a peer with no seat: the frame is acked and dropped, and leaves no mark", () => {
+    const state = createIntentState();
+    const fakeWire = makeFakeWire();
+    const handler = vi.fn();
+    state.registry.set("move", { schema: moveSchema, handler });
+    attachIntentReceive(state, fakeWire.wire, peerId => peerId === "seated");
+
+    fakeWire.deliver("refused", {
+      t: "intent",
+      name: "move",
+      payload: { dx: 0, dy: 0 },
+      cSeq: 7,
+      run: "run-a"
+    });
+
+    expect(fakeWire.wire.send).toHaveBeenCalledWith("refused", { t: "intent-ack", cSeq: 7 });
+    expect(handler).not.toHaveBeenCalled();
+    expect(state.lastApplied.has("refused")).toBe(false);
+
+    fakeWire.deliver("seated", {
+      t: "intent",
+      name: "move",
+      payload: { dx: 0, dy: 0 },
+      cSeq: 7,
+      run: "run-a"
+    });
+    expect(handler).toHaveBeenCalledTimes(1);
   });
 });

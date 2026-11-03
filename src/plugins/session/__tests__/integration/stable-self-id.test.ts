@@ -219,6 +219,40 @@ describe("a phone's stable selfId", () => {
     await stage.stop();
   });
 
+  it("a same-app rejoin that resends an applied frame: the handler runs once", async () => {
+    const bus = makeBus();
+    const { app: stage } = makeStage(bus);
+    await stage.start();
+    const { code } = stage.stage.createRoom();
+    const taps: unknown[] = [];
+    stage.intent.register("tap", {
+      fields: { value: { type: "number", min: 0, max: 100 } },
+      additionalFields: true
+    });
+    stage.stage.onIntent("tap", payload => {
+      taps.push(payload);
+    });
+
+    const tab = new TabStorage();
+    const phone = await startPhone(bus, "rejoiner");
+    await inTab(tab, () => phone.session.joinRoom(code));
+    const send = vi.spyOn(phone.transport.wire(), "send");
+    phone.controller.intent("tap", { value: 1 });
+    await vi.waitFor(() => expect(taps).toHaveLength(1));
+    const applied = send.mock.calls.find(([, frame]) => frame.t === "intent")?.[1];
+    if (!applied) throw new Error("expected the phone to have sent the intent");
+
+    // The ack was lost, and the phone rejoins on the same app: the host hears room:peer-joined again.
+    await inTab(tab, () => phone.session.rejoin());
+    phone.transport.wire().send(stage.session.self().selfId, applied);
+    await settle();
+
+    expect(taps).toHaveLength(1);
+
+    await phone.stop();
+    await stage.stop();
+  });
+
   it("real path: a replacement that opens keeps the entry, sends no peer-left, and joins again", async () => {
     const opens = stubRtc();
     const { bus, stage, code, joined, left } = await realPathStage(10_000);

@@ -5,10 +5,13 @@
  * rejection, sorted defensive-copy read.
  */
 
-import { describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { RosterEntry } from "../../../transport/protocol";
 import { ROOM_CODE_LENGTH } from "../../../transport/protocol";
+import type { TransportApi } from "../../../transport/types";
+import { sessionConfig } from "../../config";
 import { generateRoomCode } from "../../lifecycle/code";
+import { settleJoin } from "../../lifecycle/join";
 import { buildJoinUrl } from "../../lifecycle/qr";
 import {
   isStarViolation,
@@ -17,6 +20,7 @@ import {
   upsertRosterEntry
 } from "../../lifecycle/roster";
 import { createSessionState } from "../../state";
+import type { SessionDeps } from "../../types";
 
 // The confusable-free alphabet — excludes 0, O, 1, I, L.
 const CONFUSABLE = new Set(["0", "O", "1", "I", "L"]);
@@ -202,5 +206,72 @@ describe("lifecycle/roster", () => {
     // role "none" also takes the non-host branch.
     expect(isStarViolation("p-1", "p-2", "self", "none")).toBe(true);
     expect(isStarViolation("self", "p-2", "self", "none")).toBe(false);
+  });
+});
+
+/** A first join pending on a transport whose `close` is the given promise. */
+function pendingFirstJoin(close: Promise<void>) {
+  const state = createSessionState();
+  state.role = "controller";
+  state.roomCode = "AAAAAA";
+  const resolve = vi.fn();
+  state._pendingJoinResolve = resolve;
+  const roomEnded = vi.fn();
+  state._roomEndedCallbacks = new Set([roomEnded]);
+  const deps: SessionDeps = {
+    state,
+    config: sessionConfig,
+    emit: {
+      peerJoined: vi.fn(),
+      peerLeft: vi.fn(),
+      hostReconnecting: vi.fn(),
+      hostBack: vi.fn()
+    },
+    log: { warn: vi.fn() },
+    requireTransport: () => ({ close: () => close }) as unknown as TransportApi
+  };
+  return { deps, resolve, roomEnded };
+}
+
+describe("lifecycle/join: a failed first join and a slow close", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("a close that hangs: the caller hears the result after 1 s, and the room ends", async () => {
+    const { deps, resolve, roomEnded } = pendingFirstJoin(new Promise<void>(() => {}));
+
+    settleJoin(deps, { ok: false, reason: "unreachable" });
+    await vi.advanceTimersByTimeAsync(999);
+    expect(resolve).not.toHaveBeenCalled();
+    expect(roomEnded).not.toHaveBeenCalled();
+
+    await vi.advanceTimersByTimeAsync(1);
+    expect(resolve).toHaveBeenCalledWith({ ok: false, reason: "unreachable" });
+    expect(roomEnded).toHaveBeenCalledOnce();
+  });
+
+  it("a close that finishes first: the result goes out then, and no timer outlives it", async () => {
+    const { deps, resolve } = pendingFirstJoin(Promise.resolve());
+
+    settleJoin(deps, { ok: false, reason: "unreachable" });
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(resolve).toHaveBeenCalledOnce();
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("a close that rejects: the caller still hears the result, and no timer outlives it", async () => {
+    const { deps, resolve } = pendingFirstJoin(Promise.reject(new Error("socket gone")));
+
+    settleJoin(deps, { ok: false, reason: "unreachable" });
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(resolve).toHaveBeenCalledOnce();
+    expect(vi.getTimerCount()).toBe(0);
   });
 });

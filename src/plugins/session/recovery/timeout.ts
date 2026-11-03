@@ -50,7 +50,8 @@ export function armReconnectTimeout(deps: SessionDeps): void {
 /**
  * Timeout-expiry decision (§5.4). On a WebKit/iOS UA (read via a DOM-guarded `navigator.userAgent`) flips `recovery.phase` to
  * `"degraded"` and surfaces the "rescan QR" path; on a non-WebKit UA, attempts an auto-rejoin first and
- * only degrades if that fails. Clears the reconnect timer either way.
+ * only degrades if that fails while the phase is still not `"stable"`: a `leave()` or a host that came back during
+ * the rejoin already ended the absence. Clears the reconnect timer either way.
  *
  * @param deps - This app's destructured per-instance pieces.
  * @returns A promise that resolves when the decision (degrade or rejoin attempt) is complete.
@@ -75,8 +76,8 @@ export async function degradeOrRejoin(deps: SessionDeps): Promise<void> {
   // Non-iOS: attempt auto-rejoin first.
   try {
     const result = await rejoinSameRoom(deps);
-    if (!result.ok) {
-      // Rejoin failed — degrade.
+    if (!result.ok && deps.state.recovery.phase !== "stable") {
+      // Rejoin failed and the absence is still on — degrade.
       deps.state.recovery.phase = "degraded";
     }
     // On success, rejoinSameRoom already updated the phase.

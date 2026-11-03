@@ -38,8 +38,10 @@ export const syncPlugin = createPlugin("sync", {
   // Session inits first (dependency order), so a host reload's record is already there.
   onInit: ctx => {
     ctx.state.engine?.init();
-    const record = ctx.require(sessionPlugin).reentryRecord();
+    const session = ctx.require(sessionPlugin);
+    const record = session.reentryRecord();
     if (record) ctx.state.engine?.importSnapshot(record.snapshot, record.sSeq);
+    session.onRoomEnded(() => ctx.state.engine?.reset());
   },
   hooks: ctx => ({
     "room:peer-joined": payload => ctx.state.engine?.sendBaselineSnapshot(payload.peerId)

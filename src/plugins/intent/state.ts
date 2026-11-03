@@ -2,8 +2,8 @@
  * Per-app state factory for the intent plugin.
  *
  * Returns a fresh {@link IntentState} per `createApp` (D14 — NO module-level singleton): empty
- * `registry`/`lastApplied` `Map`s, `nextCSeq` at `0`, `buffering` off, empty `buffer`, no `delivery`
- * tracker yet (built by `createIntentApi` in the `api` phase). The host receive path
+ * `registry`/`lastApplied`/`runs` `Map`s, `nextCSeq` at `0`, no `run` yet, `buffering` off, empty `buffer`,
+ * no `delivery` tracker yet (built by `createIntentApi` in the `api` phase). The host receive path
  * ({@link ./receive}) and the API surface ({@link ./api}) both read/write this SAME `ctx.state`,
  * which is what keeps multiple composed app instances isolated.
  *
@@ -22,13 +22,16 @@ import type { IntentState } from "./types";
  * @example
  * ```ts
  * const state = createIntentState();
- * // { registry: Map(0), lastApplied: Map(0), nextCSeq: 0, buffering: false, buffer: [], delivery: null }
+ * // { registry: Map(0), lastApplied: Map(0), runs: Map(0), run: null, nextCSeq: 0, buffering: false,
+ * //   buffer: [], delivery: null }
  * ```
  */
 export function createIntentState(): IntentState {
   return {
     registry: new Map(),
     lastApplied: new Map(),
+    runs: new Map(),
+    run: null,
     nextCSeq: 0,
     buffering: false,
     buffer: [],

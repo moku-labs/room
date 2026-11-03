@@ -241,7 +241,7 @@ ALL gameplay rides the `Wire` (`Frame`s), never these events.
   was lost, or a different host appeared; intents buffer. On the host: this tab reloaded.
 - `room:host-back` → `{}` (`Record<string, never>`) — a phone adopted the host after an absence; its buffered intents
   are on their way (session).
-- `room:sync-ready` → `{}` — first full snapshot applied, replica readable (sync).
+- `room:sync-ready` → `{}` — first full snapshot applied, replica readable (sync). A controller hears it once per room.
 - `room:intent-undeliverable` → `{ name: string; cSeq: number }` — a LIVE intent exhausted its bounded retransmit
   budget with no wire receipt; every intent queued behind it drops with its own event (intent). Buffered intents
   (host absence) follow the recovery contract instead. A verdict, not a latch — a later `intent()` starts fresh.
@@ -254,14 +254,24 @@ after it, so `sync.read(ns)` gives the saved cells and `registerSlice` on a rest
 initial. Hooks register before any init, so a plugin's hook hears the host's `room:host-reconnecting`. The host's
 `recoveryPhase()` stays `"stable"`. Limits: a restarted host has an empty `lastApplied`, so a frame the old host applied
 but never acked applies twice; and a phone flushes as soon as the channel opens, so register intents early in the boot.
+A refused reclaim (`serverSignaling`) joins the same code again with no token, and the record keeps the new token. It
+fires no `room:network-warning` unless that fresh join fails too. A flush sets the record's `savedAt` to now, so an idle
+lobby stays resumable.
+
+Room end (`leave()` or a failed first join): `sync` resets. A host's slices stay registered, back at their initial, with
+`sSeq` 0, so `createRoom()` needs no second `registerSlice`. A slice restored and never claimed is gone. A phone's replica
+empties, and `room:sync-ready` fires again in its next room. `intent` drops the room's unacked frames.
 
 ## Frames — `Frame` union (the typed `Wire`, gameplay transport, NOT events)
 
 Discriminated on `t`. `Wire = { send(peerId, frame), broadcast(frame), on(handler) => unsubscribe }`. On a
 controller, `send`/`broadcast` collapse to "send to host".
 
-- `IntentFrame` (`t: "intent"`) — controller→host typed input; `{ name, payload, cSeq }`. At-least-once: receipt-acked
-  by the host, retransmitted (same `cSeq`, safe under de-dup) until acked or the bounded budget exhausts.
+- `IntentFrame` (`t: "intent"`) — controller→host typed input; `{ name, payload, cSeq, run? }`. At-least-once: receipt-acked
+  by the host, retransmitted (same `cSeq`, safe under de-dup) until acked or the bounded budget exhausts. `run` is one
+  random id per app; a different `run` clears the peer's de-dup mark, so a reloaded phone counts `cSeq` from 0 again and
+  a same-app rejoin applies a resent frame once. No `run` counts as `""`. A peer with no seat in the roster is acked and
+  dropped.
 - `IntentAckFrame` (`t: "intent-ack"`) — host→controller wire receipt for a received intent (sent pre-validation,
   fresh AND duplicate); `{ cSeq }`. Releases the controller's bounded retransmit loop.
 - `SyncSnapshotFrame` (`t: "sync-snap"`) — host→controller full snapshot; `{ snapshot, sSeq }`.

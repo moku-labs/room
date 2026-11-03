@@ -148,12 +148,30 @@ export function handleHostChannelLost(deps: SessionDeps): () => void {
 }
 
 /**
- * (Controller side) takes `peerId` as the host. A different host while the phase is stable means the old one
- * went and the heartbeat has not said so yet, so the host-absent entry runs first: `room:host-reconnecting`
- * and `room:host-back` then fire once each, as on any other absence. A first join has no absence to end: its
- * `_hostId` can still hold the host of a room this device left. Ending an absence also cancels the reconnect
- * timer, which would otherwise rejoin behind the host that just came back. A pending join stays pending: a
- * full host opens the channel too, so only its `roster` or `room-full` frame can settle the join.
+ * Whether `peerId` replaces the known host with no absence seen: a different host while the phase is stable means
+ * the old one went and the heartbeat has not said so yet. A first join is not one: its `_hostId` can still hold the
+ * host of a room this device left.
+ *
+ * @param state - This app's session state.
+ * @param peerId - The peer about to be taken as the host.
+ * @returns `true` when the host-absent entry has to run first.
+ * @example
+ * ```ts
+ * if (isSilentHostSwap(deps.state, peerId)) handleHostChannelLost(deps)();
+ * ```
+ */
+function isSilentHostSwap(state: SessionState, peerId: PeerId): boolean {
+  const firstJoin = Boolean(state._pendingJoinResolve) && !state._pendingJoinKeepsRoom;
+  const differentHost = Boolean(state._hostId) && state._hostId !== peerId;
+  return state.recovery.phase === "stable" && differentHost && !firstJoin;
+}
+
+/**
+ * (Controller side) takes `peerId` as the host. After a silent swap ({@link isSilentHostSwap}) the host-absent
+ * entry runs first: `room:host-reconnecting` and `room:host-back` then fire once each, as on any other absence.
+ * Ending an absence also cancels the reconnect timer, which would otherwise rejoin behind the host that just came
+ * back. A pending join stays pending: a full host opens the channel too, so only its `roster` or `room-full` frame
+ * can settle the join.
  *
  * @param deps - This app's destructured per-instance pieces.
  * @param peerId - The peer to take as the host.
@@ -165,12 +183,10 @@ export function handleHostChannelLost(deps: SessionDeps): () => void {
 export function adoptHost(deps: SessionDeps, peerId: PeerId): void {
   const { state } = deps;
   const { recovery } = state;
-  const firstJoin = Boolean(state._pendingJoinResolve) && !state._pendingJoinKeepsRoom;
-  const differentHost = Boolean(state._hostId) && state._hostId !== peerId;
-  if (recovery.phase === "stable" && differentHost && !firstJoin) {
-    handleHostChannelLost(deps)();
-  }
+  // The old host went unannounced: enter the absence, so it ends below like any other.
+  if (isSilentHostSwap(state, peerId)) handleHostChannelLost(deps)();
 
+  // An absence ends here, and its reconnect timer with it: left armed, it would rejoin behind this host.
   const absenceEnds = recovery.phase !== "stable";
   if (recovery.timer !== null) {
     clearTimeout(recovery.timer);

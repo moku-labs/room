@@ -79,11 +79,14 @@ export function createTransportApi(
 
       // Join the signaling room; failure surfaces the rendezvous-unreachable warning and rethrows. A full
       // room rethrows with no warning: fullness is a join result, not a connectivity event (contracts §6.2).
+      // A failed reclaim rethrows with no warning too: session joins again with no token, and that connect warns.
       let session: SignalingSession;
       try {
         session = await cfg.signaling.join(opts.code, joinOpts);
       } catch (error) {
-        if (!(error instanceof RoomFullError)) emitWarning("rendezvous-unreachable");
+        if (!(error instanceof RoomFullError) && opts.reclaimToken === undefined) {
+          emitWarning("rendezvous-unreachable");
+        }
         throw error;
       }
 
@@ -135,9 +138,10 @@ export function createTransportApi(
 
     /** @inheritdoc */
     async close(): Promise<void> {
-      await tearDownConnections(state);
+      // Before the await: a connect() during the teardown sets the role of the next room, and this must not undo it.
       state.role = "idle";
       state.selfId = "";
+      await tearDownConnections(state);
     },
 
     /** @inheritdoc */

@@ -233,14 +233,16 @@ function removeStoredRecord(key: string): void {
  * ```
  */
 export function armPersistence(deps: SessionDeps): PersistHandleInternal {
-  let latestRecord: HostReentryRecord | null = null;
+  // A reload's record stays the latest until sync hands over a new one, so an idle room still has one to flush.
+  let latestRecord: HostReentryRecord | null = deps.state._reentryRecord ?? null;
   let debounceTimer: ReturnType<typeof setTimeout> | null = null;
 
   const storageKey = localStorageKey(deps.config.storageKeyPrefix, deps.state.roomCode);
 
   /**
    * Synchronously writes the latest retained record to `localStorage` (the `visibilitychange`/`onStop`
-   * path). A no-op until a record exists.
+   * path), with `savedAt` set to now: the record's age counts from when this host was last alive, not from its
+   * last change, so a lobby that sits idle stays resumable. A no-op until a record exists.
    *
    * @example
    * ```ts
@@ -249,7 +251,7 @@ export function armPersistence(deps: SessionDeps): PersistHandleInternal {
    */
   const syncFlush = (): void => {
     if (!latestRecord) return;
-    tryLocalStorageSet(storageKey, JSON.stringify(latestRecord));
+    tryLocalStorageSet(storageKey, JSON.stringify({ ...latestRecord, savedAt: Date.now() }));
   };
 
   /**
@@ -339,6 +341,12 @@ export function armPersistence(deps: SessionDeps): PersistHandleInternal {
     _update(record: HostReentryRecord, scheduleIdb: boolean): void {
       latestRecord = record;
       if (scheduleIdb) scheduleIdbWrite();
+    },
+    /** @inheritdoc */
+    _setReclaimToken(token: string): void {
+      if (!latestRecord) return;
+      latestRecord = { ...latestRecord, reclaimToken: token };
+      syncFlush();
     }
   };
 
@@ -394,7 +402,7 @@ export function readReentryRecord(deps: SessionDeps): HostReentryRecord | null {
 
 /**
  * `onStop` entry point: the {@link teardownSession} a `leave()` also runs, plus the `onRoomEnded` callbacks. Those
- * live until the app stops, because `intent` registers once in `onInit` and must survive a `leave()`.
+ * live until the app stops, because `intent` and `sync` register once in `onInit` and must survive a `leave()`.
  *
  * @param state - This app's `SessionState`.
  * @example

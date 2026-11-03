@@ -60,6 +60,7 @@ function waitForClose(ws: WebSocket): Promise<void> {
  *  - `relay` → `onSignal` callback.
  *  - `evict` → `onEvict` callback.
  *  - `full` → rejects the join with {@link RoomFullError}; the hub closes the socket itself.
+ *  - A close before the ack → rejects the join: the hub refuses a reclaim that way, and nothing else would end it.
  *  - `session.send(to, msg)` → `{kind:"relay", to, msg}` sent over the WS.
  *  - `session.leave()` → `ws.close(1000)`.
  *
@@ -170,7 +171,7 @@ export function buildServerSession(
       return token === undefined ? base : { ...base, reclaimToken: token };
     }
 
-    // WS lifecycle: open → send join (or reclaim on host-reload re-entry), error → reject,
+    // WS lifecycle: open → send join (or reclaim on host-reload re-entry), error or early close → reject,
     // message → dispatch ServerEnvelope.
 
     // On open: send join/reclaim.
@@ -188,6 +189,11 @@ export function buildServerSession(
     // On error: reject.
     ws.addEventListener("error", () => {
       reject(new Error(`serverSignaling: WebSocket error connecting to ${wsUrl}`));
+    });
+
+    // On a close before the ack: reject. After the ack this does nothing, the promise has settled.
+    ws.addEventListener("close", () => {
+      reject(new Error(`serverSignaling: WebSocket closed before the ack from ${wsUrl}`));
     });
 
     // On message: dispatch the ServerEnvelope by kind.

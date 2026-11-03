@@ -257,6 +257,34 @@ describe("createTransportApi — wire / peers / disconnect / close", () => {
   });
 });
 
+/** The placeholder until a promise hands over its resolver. */
+const noResolverYet = (): void => {};
+
+describe("createTransportApi — a connect during a close", () => {
+  it("createRoom while the last session still leaves: the new connect keeps role host and its selfId", async () => {
+    const leaving = fakeSession();
+    let finishLeave = noResolverYet;
+    vi.mocked(leaving.leave).mockReturnValue(
+      new Promise<void>(resolve => {
+        finishLeave = resolve;
+      })
+    );
+    const { signaling, join } = fakeSignaling();
+    join.mockResolvedValueOnce(leaving);
+    const state = createTransportState();
+    const api = createTransportApi(state, makeConfig(signaling), vi.fn());
+    await api.connect({ role: "controller", selfId: "old", code: "AAAAAA" });
+
+    const closing = api.close();
+    await api.connect({ role: "host", selfId: "new", code: "BBBBBB" });
+    finishLeave();
+    await closing;
+
+    expect(state.role).toBe("host");
+    expect(state.selfId).toBe("new");
+  });
+});
+
 describe("createTransportApi — onPeerConnected / onPeerLost (D18 seam)", () => {
   it("onPeerConnected sets state.peerConnectedCb to the supplied callback", () => {
     const { signaling } = fakeSignaling();

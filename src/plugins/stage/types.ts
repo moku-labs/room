@@ -183,10 +183,10 @@ export type StageApi = {
   /**
    * Registers a typed host-side handler for a named controller intent: delegates to `intent.onIntent`,
    * adapting the engine's `(payload, meta)` callback to this facade's simpler `(payload, peerId)` surface
-   * (it unwraps `meta.peerId` — `intent`'s `IntentMeta` is `{ peerId; cSeq }`). `intent` validates each
-   * inbound `IntentFrame` payload by a correctness-only typed shape-check (D6 — no anti-cheat/rate-limit/
-   * HMAC) and drops any `cSeq <= lastApplied[peerId]` (contracts §4.3 idempotence) before invoking the
-   * handler, so the handler sees only fresh, well-formed intents. The handler typically calls
+   * (it unwraps `meta.peerId` — `intent`'s `IntentMeta` is `{ peerId; cSeq }`). `intent` drops a frame from a
+   * peer with no seat in the roster, validates each inbound `IntentFrame` payload by a correctness-only typed
+   * shape-check (D6 — no anti-cheat/rate-limit/HMAC) and drops any `cSeq <= lastApplied[peerId]` (contracts §4.3 idempotence) before invoking the
+   * handler, so the handler sees only fresh, well-formed intents from seated peers. The handler typically calls
    * {@link StageApi.mutate} to advance authoritative state.
    *
    * @param name - The registered intent name (the §2.2 `IntentFrame.name` discriminator).

@@ -38,7 +38,7 @@
 | `persistSnapshot` | `(snapshot: Snapshot, sSeq: number) => void` | HOST-ONLY seam called by `sync`; payload is opaque. |
 | `recoveryPhase` | `() => RecoveryPhase` | A controller's phase, for reconnect UX. A host's phase stays `"stable"`, also on a reload. |
 | `reentryRecord` | `() => HostReentryRecord \| null` | The record this load restored. `sync` reads it in `onInit`. `null` on a first load, on a controller and after `leave()`. |
-| `onRoomEnded` | `(cb: () => void) => () => void` | `cb` runs when `leave()` finishes and when a failed first join is settled, whatever the phase. Not on a failed `rejoin`, which keeps the room. No event fires on these paths. `intent` registers once in `onInit`: buffering off, buffer dropped. The list survives a `leave()`, and `app.stop()` clears it. |
+| `onRoomEnded` | `(cb: () => void) => () => void` | `cb` runs when `leave()` finishes and when a failed first join is settled, whatever the phase. Not on a failed `rejoin`, which keeps the room. No event fires on these paths. `intent` registers once in `onInit`: live window retired, buffering off, buffer dropped. `sync` too: it resets for the next room. The list survives a `leave()`, and `app.stop()` clears it. |
 
 ## Events (Moku `emit` plane — coarse lifecycle ONLY)
 
@@ -60,8 +60,9 @@ An open channel settles nothing, because a full host opens the channel too. `set
 | The host's first `roster` frame | `{ ok: true, selfId }` |
 | The host's `room-full` frame | `{ ok: false, reason: "full" }` |
 | `transport.connect` rejects with `RoomFullError` (the hub's `full` envelope) | `{ ok: false, reason: "full" }` |
-| `transport.connect` rejects with anything else | `{ ok: false, reason: "not-found" }` |
+| `transport.connect` rejects with anything else, a hub socket closed before its ack too | `{ ok: false, reason: "not-found" }` |
 | Nothing within `reconnectTimeoutMs` | `{ ok: false, reason: "unreachable" }` |
+| A newer `joinRoom` or `rejoin` started while this one was pending | `{ ok: false, reason: "unreachable" }` |
 
 - **Over the cap, the host** sends `room-full` to that peer and disconnects it 250 ms later
   (`REFUSE_CLOSE_DELAY_MS`): a close in the same tick lost the frame in real Chromium. The roster and
@@ -69,15 +70,17 @@ An open channel settles nothing, because a full host opens the channel too. `set
   it then does nothing: `room-full` went first and settled the join. `teardownSession` clears the timer, so
   none survives `stop()` or `leave()`.
 - **A failed `joinRoom`** leaves no room: `role` is `"none"`, `roomCode` is `""`, `hostId()` is `""`, recovery
-  is `"stable"`, transport is closed. The promise resolves after the close finished, and `close()` keeps the
-  wiring, so calling `joinRoom` again on the same app retries.
+  is `"stable"`, transport is closed. The promise resolves after the close finished, or after 1 s when the close
+  hangs on a dead socket (`JOIN_CLOSE_WAIT_MS`), and `close()` keeps the wiring, so calling `joinRoom` again on the
+  same app retries.
 - **A lost `room-full` frame** ends as `unreachable` at the timeout. The state after it is the same. On
   `serverSignaling` at the default cap the hub refuses first, so no frame is needed.
 - **A retry inside the delay** gets `full` at once. The `full` result removed the saved id, so the retry is a new
   peer. A reload that beat the frame comes back with the same id: the host replaces the record it still holds and
   refuses again.
 - **A failed `rejoin`** (and the auto-rejoin of §5.4) keeps the room: `role`, `roomCode` and transport stay, so
-  it can be repeated and a host that comes back later is still adopted.
+  it can be repeated and a host that comes back later is still adopted. A failed auto-rejoin moves the phase to
+  `"degraded"` only while it is not `"stable"`: a `leave()` or a host that came back during the rejoin ended the absence.
 - **Host re-entry** has no join pending, so the open channel is enough: the controller adopts the connecting
   host and goes back to `"stable"`.
 
@@ -120,8 +123,16 @@ The re-entry record is what makes a reload resume the room. Three things decide 
 | `session.leave()` | Deleted from `localStorage` and IndexedDB, with no final write | Starts with no room: `role` is `"none"`, and `createRoom()` mints a new code. |
 | The record is older than `reentryMaxAgeMs`, or cannot be parsed | Removed on read | Starts with no room. |
 
-Only a broadcast writes a record: `sync` calls `persistSnapshot` after it broadcasts a dirty slice. A host
-that never broadcast has nothing to resume.
+Only a broadcast makes a record: `sync` calls `persistSnapshot` after it broadcasts a dirty slice. A host
+that never broadcast has nothing to resume. A reloaded host keeps the record it restored until a new one comes, and
+every write to `localStorage` sets `savedAt` to now. So the age counts from when this host was last alive, and a lobby
+that sits idle stays resumable.
+
+A reload replays the record's reclaim token (`serverSignaling` only). When that connect fails, the hub evicted the room
+for example, and the room is still this one, the host joins the same code again with no token and gets a new one. The
+kept record takes the new token and is written at once, so the next reload of an idle room is not refused again, also
+after a tab killed with no `visibilitychange`. The refusal fires no
+`room:network-warning`: `rendezvous-unreachable` fires once, and only when the fresh join fails too.
 
 ## A phone reload
 
@@ -137,7 +148,8 @@ When that id reaches the host again, it is a known id:
 - `session` keeps the roster entry, `joinedAt` included, and admits it at the cap.
 - `room:peer-joined` fires again, with no `room:peer-left` before it. `sync` sends the new replica its baseline on
   that event. A game that counts players on it must treat a known id as known.
-- `intent` clears its `lastApplied` mark for the id on that event, because a new app counts `cSeq` from 0.
+- `intent` hears a new `run` on the next frame and clears its `lastApplied` mark for the id, because a new app counts
+  `cSeq` from 0. A rejoin on the same app keeps the `run` and the mark.
 - A phone away longer than `heartbeatTimeoutMs` was declared dead first: `room:peer-left` fired and the entry is gone.
   The same id then joins as a new entry, or gets `full`.
 - A replacement whose handshake dies, past the retry cap or by leaving signaling, reports the peer lost: the entry goes,

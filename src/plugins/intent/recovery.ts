@@ -10,8 +10,10 @@ import { drainBuffer, setBuffering } from "./api";
 import type { IntentConfig, IntentState } from "./types";
 
 /**
- * Ends this phone's part in a room that is over: buffering off, buffer dropped. Those frames were for that room's
- * host, and with buffering left on the next room's intents would stay on the phone for good.
+ * Ends this phone's part in a room that is over: live window retired, buffering off, buffer dropped. Those frames
+ * were for that room's host. A frame left in the window would reach the next room's host, or end as
+ * `room:intent-undeliverable` after the leave, and with buffering left on the next room's intents would stay on the
+ * phone for good.
  *
  * @param state - The per-app intent state.
  * @param cfg - The frozen intent config.
@@ -21,6 +23,7 @@ import type { IntentConfig, IntentState } from "./types";
  * ```
  */
 export function endRoom(state: IntentState, cfg: Readonly<IntentConfig>): void {
+  state.delivery?.retire();
   setBuffering(state, cfg, false);
   drainBuffer(state, cfg);
 }

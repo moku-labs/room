@@ -205,7 +205,7 @@ export type IntentDelivery = {
 
 /**
  * Internal mutable state for the intent plugin. A single instance is role-agnostic (D5): the host
- * populates `registry` + `lastApplied`; the controller advances `nextCSeq` and fills `buffer` while
+ * populates `registry` + `lastApplied` + `runs`; the controller advances `nextCSeq` and fills `buffer` while
  * `buffering` is on. Unused halves simply stay empty for the other role.
  *
  * @example
@@ -214,6 +214,8 @@ export type IntentDelivery = {
  * const host: IntentState = {
  *   registry: new Map([["move", { schema, handler }]]),
  *   lastApplied: new Map([["ctrl-a", 42], ["ctrl-b", 17]]),
+ *   runs: new Map([["ctrl-a", "f81d4fae-…"], ["ctrl-b", "9b2c17d0-…"]]),
+ *   run: null, // a host sends no intent, so it mints no run
  *   nextCSeq: 0, // host never sends intents
  *   buffering: false,
  *   buffer: [],
@@ -224,8 +226,12 @@ export type IntentDelivery = {
 export type IntentState = {
   /** Host-only: registered intent kinds keyed by `name`. Filled by `register()`, read on every inbound frame. Starts empty. */
   registry: Map<string, IntentRegistration>;
-  /** Host-only: highest applied `cSeq` per controller `PeerId` — the idempotence high-water mark (D4). Starts empty. `room:peer-joined` clears a peer's mark. */
+  /** Host-only: highest applied `cSeq` per controller `PeerId` — the idempotence high-water mark (D4). Starts empty. A frame with a new `run` clears its peer's mark. */
   lastApplied: Map<PeerId, number>;
+  /** Host-only: the last `run` per controller `PeerId`, written with every mark. Starts empty. */
+  runs: Map<PeerId, string>;
+  /** Controller-only: this app's run, stamped on every outbound `IntentFrame`. Random, minted once, at the first `intent()`, so `createApp` does not need `crypto.randomUUID`. Starts `null`. */
+  run: string | null;
   /** Controller-only: the next `cSeq` to stamp on an outbound `IntentFrame`; monotonic, increments per `intent()`. Starts `0`. */
   nextCSeq: number;
   /** Controller-only: whether `intent()` enqueues to `buffer` instead of sending live. Toggled by `setBuffering()` from the `room:host-*` hooks. Starts `false`. */
@@ -261,9 +267,9 @@ export type IntentApi = {
 
   /**
    * Host: subscribes the single handler for a registered intent kind. The handler runs ONLY for
-   * inbound frames that (a) name a registered kind, (b) pass the schema shape-check, and (c) are not a
-   * duplicate (`cSeq > lastApplied[peerId]`). Re-subscribing replaces the prior handler. Returns an
-   * unsubscribe function that detaches this handler (a subsequent inbound intent for `name` then drops
+   * inbound frames that (a) come from a peer with a seat in the roster, (b) name a registered kind, (c) pass
+   * the schema shape-check, and (d) are not a duplicate (`cSeq > lastApplied[peerId]`, within the peer's
+   * `run`). Re-subscribing replaces the prior handler. Returns an unsubscribe function that detaches this handler (a subsequent inbound intent for `name` then drops
    * at the no-subscriber check — registration via `register` is unaffected).
    *
    * @param name - The registered intent kind to subscribe to.
@@ -281,8 +287,8 @@ export type IntentApi = {
   onIntent(name: string, handler: IntentHandler): () => void;
 
   /**
-   * Controller: sends one typed intent to the host. Stamps the next `cSeq`, builds an `IntentFrame`,
-   * and EITHER hands it to the at-least-once delivery tracker (live — retransmitted until the host's
+   * Controller: sends one typed intent to the host. Stamps the next `cSeq` and this app's `run`, builds an
+   * `IntentFrame`, and EITHER hands it to the at-least-once delivery tracker (live — retransmitted until the host's
    * wire-level `intent-ack` receipt or, past the bounded budget, dropped with
    * `room:intent-undeliverable`) OR — when buffering is on during a host absence — enqueues it as a
    * timestamped `BufferedIntent`. Live delivery is stop-and-wait: one unacked frame in flight, later

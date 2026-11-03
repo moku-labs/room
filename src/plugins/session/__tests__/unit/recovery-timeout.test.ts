@@ -6,6 +6,7 @@
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Frame, PeerId } from "../../../transport/protocol";
+import { createSessionApi } from "../../api";
 import type { SessionStateWithRuntime } from "../../recovery/reentry";
 import { registerTransportBindings } from "../../recovery/reentry";
 import { armReconnectTimeout, degradeOrRejoin } from "../../recovery/timeout";
@@ -192,6 +193,66 @@ describe("recovery/timeout", () => {
     await degradeOrRejoin(deps);
 
     expect(deps.state.recovery.phase).toBe("degraded");
+  });
+
+  it("leave() during the auto-rejoin: the phase stays stable", async () => {
+    const deps = makeDeps();
+    const transport = {
+      ...deps.requireTransport(),
+      connect: vi.fn().mockResolvedValue(undefined)
+    };
+    const reachable: SessionDeps = { ...deps, requireTransport: () => transport };
+    reachable.state.selfId = "me";
+    reachable.state.recovery.phase = "host-absent";
+    armReconnectTimeout(reachable);
+    await vi.advanceTimersByTimeAsync(testConfig.reconnectTimeoutMs);
+    expect(transport.connect).toHaveBeenCalledOnce();
+
+    await createSessionApi(reachable).leave();
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(reachable.state.recovery.phase).toBe("stable");
+  });
+
+  it("the host is back during the auto-rejoin and its roster comes after the join timer: the phase stays stable", async () => {
+    let peerConnected: ((peerId: PeerId) => void) | undefined;
+    let onFrame: ((peerId: PeerId, frame: Frame) => void) | undefined;
+    const transport = {
+      connect: vi.fn().mockResolvedValue(undefined),
+      wire: vi.fn().mockReturnValue({
+        send: vi.fn(),
+        broadcast: vi.fn(),
+        on: vi.fn((cb: (peerId: PeerId, frame: Frame) => void) => {
+          onFrame = cb;
+        })
+      }),
+      disconnect: vi.fn(),
+      peers: vi.fn().mockReturnValue([]),
+      close: vi.fn().mockResolvedValue(undefined),
+      onPeerConnected: vi.fn((cb: (peerId: PeerId) => void) => {
+        peerConnected = cb;
+      }),
+      onPeerLost: vi.fn()
+    };
+    const deps: SessionDeps = {
+      ...makeDeps(),
+      requireTransport: vi.fn().mockReturnValue(transport)
+    };
+    deps.state.selfId = "me";
+    deps.state.recovery.phase = "host-absent";
+    registerTransportBindings(deps);
+    armReconnectTimeout(deps);
+    await vi.advanceTimersByTimeAsync(testConfig.reconnectTimeoutMs);
+
+    // The channel opens, so the phone adopts the host. Its roster frame takes longer than the join's own timer.
+    peerConnected?.("host-peer");
+    expect(deps.state.recovery.phase).toBe("stable");
+    await vi.advanceTimersByTimeAsync(testConfig.reconnectTimeoutMs);
+    onFrame?.("host-peer", { t: "roster", roster: { me: { id: "me", joinedAt: 1 } } });
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(deps.state.recovery.phase).toBe("stable");
+    expect(deps.state.roster).toEqual({ me: { id: "me", joinedAt: 1 } });
   });
 
   it("degradeOrRejoin does NOT degrade when auto-rejoin succeeds (non-iOS)", async () => {

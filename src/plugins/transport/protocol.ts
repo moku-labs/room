@@ -317,7 +317,8 @@ export type ServerEnvelope =
  * the host drops any `cSeq <= lastApplied[peerId]`. Shape-checked only (D6 — no anti-cheat/HMAC).
  * Delivery is at-least-once: the host receipt-acks every received frame ({@link IntentAckFrame}) and
  * the controller retransmits the SAME frame (same `cSeq` — safe under the de-dup) until acked or its
- * bounded retransmit budget exhausts (`room:intent-undeliverable`).
+ * bounded retransmit budget exhausts (`room:intent-undeliverable`). `cSeq` counts within one `run`: one app's
+ * stream of frames. A reloaded phone keeps its id, starts a new run and counts from 0 again.
  */
 export type IntentFrame = {
   readonly t: "intent";
@@ -327,6 +328,11 @@ export type IntentFrame = {
   readonly payload: unknown;
   /** Monotonic per-controller sequence number (§4.3). */
   readonly cSeq: number;
+  /**
+   * The sending app's run: random, minted once per app, the same on all its frames. When it differs from the peer's
+   * last run, the host clears that peer's `lastApplied` before the de-dup. A frame with no run counts as run `""`.
+   */
+  readonly run?: string;
 };
 
 /**

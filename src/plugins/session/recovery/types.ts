@@ -53,4 +53,18 @@ export type PersistHandleInternal = PersistHandle & {
    * ```
    */
   _update(record: HostReentryRecord, scheduleIdb: boolean): void;
+  /**
+   * Puts a new reclaim token on the retained record, whichever record that is by now, and writes it to
+   * `localStorage` at once: a tab killed with no `visibilitychange` must not read the refused token again. A reload
+   * whose reclaim was refused gets a new token from its fresh join, and an idle host hands over no new record to
+   * carry it. A no-op with no retained record.
+   *
+   * @param token - The token of the hub's new `join-ack`.
+   * @example
+   * ```ts
+   * const token = transport.reclaimToken();
+   * if (token !== null) state.recovery.persistHandle?._setReclaimToken(token);
+   * ```
+   */
+  _setReclaimToken(token: string): void;
 };

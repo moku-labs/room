@@ -26,8 +26,11 @@
    wire RTT between consecutive live intents (imperceptible at couch-LAN RTTs against human input rates).
 4. **Idempotency + reconnect buffering.** On the host, `lastApplied[peerId]` drops any inbound
    `cSeq <= lastApplied[peerId]` (D4) so a retransmit/reconnect/flush replay never double-applies.
-   `room:peer-joined` clears that peer's mark: a phone back on a known id is a new app, and its `cSeq` starts at 0
-   again. So a same-app `rejoin` that retransmits a frame the host applied but never acked applies it twice. On the
+   Every frame carries the sending app's `run`, one random id per app, minted at its first `intent()`. A `run` that differs from the peer's last one
+   clears that peer's mark before the de-dup: a phone back on a known id is a new app, and its `cSeq` starts at 0 again.
+   The same `run` keeps the mark, so a same-app `rejoin` that resends a frame the host applied but never acked applies
+   it once. A frame with no `run` counts as run `""`. A frame from a peer with no seat in `session.roster()`, such as a
+   refused phone inside the close delay, is acked and dropped, and leaves no mark. On the
    controller, during a host absence every `intent()` is buffered as a timestamped queue entry — and
    `setBuffering(true)` first **retires the live delivery window into that buffer** (the §5 recovery
    contract subsumes the retransmit contract during a known host absence; no `intent-undeliverable`
@@ -38,8 +41,9 @@
    on. `room:host-back` turns it off, drains the buffer and sends each frame through the delivery tracker with
    its own `cSeq`, in `cSeq` order, so the stop-and-wait rule above still holds. A restarted host has an empty
    `lastApplied`, so a frame the old host applied but never acked applies twice. When the room itself ends
-   (`session.onRoomEnded`: a `leave()` or a failed first join), `endRoom` turns buffering off and drops the buffer,
-   so the next room's intents go live. No event fires for that.
+   (`session.onRoomEnded`: a `leave()` or a failed first join), `endRoom` retires the live window, turns buffering off
+   and drops the buffer, so no frame of that room reaches the next one and the next room's intents go live. No event
+   fires for that.
 
 ## Role-agnostic
 
@@ -80,8 +84,8 @@ re-exposes which methods — nothing is role-flagged at construction.
 - `transportPlugin` — the `Wire` (`send` to route a live intent to the host and to return `intent-ack`
   receipts; `on` to receive inbound `t:"intent"` / `t:"intent-ack"` frames).
 - `sessionPlugin` — resolves the single host `PeerId` for `Wire.send` (re-resolved on every retransmit
-  attempt, so a pre-join send heals once the host is known), gives the role the hooks are guarded on, and
-  emits `room:host-reconnecting` + `room:host-back`, which drive the buffer, and calls back through
+  attempt, so a pre-join send heals once the host is known), gives the role the hooks are guarded on and the
+  `roster()` the seat check reads, and emits `room:host-reconnecting` + `room:host-back`, which drive the buffer, and calls back through
   `onRoomEnded` when the room ends. `intent` does NOT depend
   on `sync` (D5) — that keeps it buildable + unit-testable in parallel with `sync`.
 

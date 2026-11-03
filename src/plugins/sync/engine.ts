@@ -562,6 +562,26 @@ export function createSyncEngine(
       };
     },
 
+    reset(): void {
+      // A slice a reload restored and no boot code claimed belonged to the room that ended.
+      for (const ns of restored) registered.delete(ns);
+      restored.clear();
+
+      // Registered slices stay valid and go back to their initial, so a new room needs no second registerSlice.
+      state.snapshot = Object.fromEntries(
+        [...registered].map(([ns, initialJson]) => [ns, JSON.parse(initialJson) as Cells])
+      );
+      state.sSeq = 0;
+      state.dirty = {};
+      state.stale = false;
+      staleDeltasDropped = 0;
+
+      // A host keeps its slices, so it stays ready and says nothing. A replica starts over as on its first room:
+      // room:sync-ready can fire again, and the retry loop asks for the baseline of the next room.
+      state.ready = registered.size > 0;
+      if (!state.ready) startBaselineRetry();
+    },
+
     importSnapshot(snapshot: Snapshot, sSeq: number): void {
       state.snapshot = decodeSnapshot(snapshot);
       state.sSeq = sSeq;

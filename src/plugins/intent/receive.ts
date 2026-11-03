@@ -5,10 +5,10 @@
  * (D14 — never a cached API instance, never a module-level singleton). Host half: for every inbound
  * `t === "intent"` frame it FIRST sends the wire-level `intent-ack` receipt (fresh AND duplicate frames,
  * BEFORE registration/shape/de-dup — a retransmitted frame whose original ack was lost must be re-acked
- * or the sender retransmits to exhaustion), then runs the validate → de-dup (`state.lastApplied`) →
- * dispatch (`state.registry`) pipeline. Controller half: routes `t === "intent-ack"` receipts to this
- * app's delivery tracker (`state.delivery`). Every other frame tag is ignored. The returned `Wire.on`
- * unsubscribe is intentionally dropped — the callback lives on the `transport` channel, which
+ * or the sender retransmits to exhaustion), then drops a frame from a peer with no seat, follows the peer's
+ * `run`, and runs the validate → de-dup (`state.lastApplied`) → dispatch (`state.registry`) pipeline.
+ * Controller half: routes `t === "intent-ack"` receipts to this app's delivery tracker (`state.delivery`). Every
+ * other frame tag is ignored. The returned `Wire.on` unsubscribe is intentionally dropped — the callback lives on the `transport` channel, which
  * `transport.onStop` tears down wholesale (the plugin's own `onStop` tears down only the delivery
  * tracker's timer). The function takes the destructured per-app pieces (not a `ctx`): `@moku-labs/web`
  * infers `ctx` inline in `index.ts`.
@@ -16,7 +16,7 @@
  * @file
  * @see README.md
  */
-import type { JsonValue, Wire } from "../transport/protocol";
+import type { JsonValue, PeerId, Wire } from "../transport/protocol";
 import type { IntentState } from "./types";
 import { validateIntent } from "./validate";
 
@@ -31,13 +31,21 @@ import { validateIntent } from "./validate";
  *   routes receipts to `delivery`).
  * @param wire - The resolved transport `Wire`: `on` registers the single inbound-frame handler, `send`
  *   returns the wire-level `intent-ack` receipts.
+ * @param isSeated - Whether a peer holds a seat in this room. The wiring harness binds it to `session.roster()`.
  * @example
  * ```ts
  * // Inside the plugin's onInit:
- * attachIntentReceive(ctx.state, ctx.require(transportPlugin).wire());
+ * const session = ctx.require(sessionPlugin);
+ * attachIntentReceive(ctx.state, ctx.require(transportPlugin).wire(), peerId =>
+ *   session.roster().some(entry => entry.id === peerId)
+ * );
  * ```
  */
-export function attachIntentReceive(state: IntentState, wire: Wire): void {
+export function attachIntentReceive(
+  state: IntentState,
+  wire: Wire,
+  isSeated: (peerId: PeerId) => boolean
+): void {
   wire.on((peerId, frame) => {
     // Controller half: a wire-level receipt releases the delivery tracker's in-flight window.
     if (frame.t === "intent-ack") {
@@ -53,6 +61,20 @@ export function attachIntentReceive(state: IntentState, wire: Wire): void {
     //    acking RECEIPT (not application) is what lets the sender retransmit the SAME frame safely,
     //    and a de-dup-dropped re-send must still be re-acked or a lost ack retransmits to exhaustion.
     wire.send(peerId, { t: "intent-ack", cSeq: frame.cSeq });
+
+    // A peer the host refused can still send until its channel closes. The game must not hear it, and it
+    // leaves no mark. The ack above stays: it ends the sender's retransmits.
+    if (!isSeated(peerId)) {
+      return;
+    }
+
+    // A new run is a new app on a known id, and its cSeq starts at 0 again, so the peer's old mark goes.
+    // The same run keeps the mark: a same-app rejoin that resends an applied frame must not apply it twice.
+    const run = frame.run ?? "";
+    if (state.runs.get(peerId) !== run) {
+      state.runs.set(peerId, run);
+      state.lastApplied.delete(peerId);
+    }
 
     const { name, payload, cSeq } = frame;
 
