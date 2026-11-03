@@ -18,7 +18,7 @@ import { createSessionState } from "../../state";
 import type { SessionDeps } from "../../types";
 
 function makeRosterEntry(id: string, joinedAt = 1000): RosterEntry {
-  return { id, reconnectToken: `rt-${id}`, joinedAt };
+  return { id, joinedAt };
 }
 
 function makeDeps(overrides?: Partial<SessionDeps>): SessionDeps {

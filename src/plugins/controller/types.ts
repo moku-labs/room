@@ -29,8 +29,8 @@ export type ControllerApi = {
   /**
    * Joins the room identified by `code` as a PASSIVE peer — the controller waits to be offered to by the
    * authoritative host (star topology, contracts §6). Delegates to `sessionPlugin.joinRoom(code)`, which
-   * performs the §1 rendezvous handshake, persists the phone-side `reconnectToken` (contracts §6
-   * `RosterEntry`), and stays joined until `iceConnectionState === "connected"` (trickle ICE, §1.2). The
+   * performs the §1 rendezvous handshake, saves this tab's `selfId` per room in `sessionStorage`
+   * (contracts §6), and stays joined until `iceConnectionState === "connected"` (trickle ICE, §1.2). The
    * passive (controller-role) flag is set INTERNALLY by `sessionPlugin` (§1.1) — never a caller argument.
    * `joinRoom` resolves once the host admits this phone (its first `roster` frame; an open channel alone
    * settles nothing, because a full host opens the channel too); it maps `sessionPlugin`'s discriminated

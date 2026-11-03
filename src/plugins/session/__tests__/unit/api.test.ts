@@ -76,7 +76,7 @@ function makeDeps(overrides?: Partial<SessionDeps>): SessionDeps {
 }
 
 function makeRosterEntry(id: string, joinedAt: number): RosterEntry {
-  return { id, reconnectToken: `rt-${id}`, joinedAt };
+  return { id, joinedAt };
 }
 
 describe("createSessionApi", () => {

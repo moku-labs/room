@@ -451,13 +451,17 @@ function openableChannel(): WireChannel & { fireOpen(): void } {
 }
 
 describe("handlePeerArrival — loopback duplicate + null-channel guards", () => {
-  it("returns early on a duplicate loopback arrival (no second peer record, no extra cb)", () => {
+  it("replaces the record on a second loopback arrival: one connect, no lost, the old channel closed", () => {
     const state = createTransportState();
     const peerConnectedCb = vi.fn();
+    const peerLostCb = vi.fn();
     state.peerConnectedCb = peerConnectedCb;
-    const openWireChannel = vi.fn((peerId: string) =>
-      peerId === "p_ab12" ? (openableChannel() as unknown as WireChannel) : null
-    );
+    state.peerLostCb = peerLostCb;
+    const channels = [openableChannel(), openableChannel()];
+    const openWireChannel = vi
+      .fn<(peerId: string) => WireChannel | null>()
+      .mockReturnValueOnce(channels[0] as WireChannel)
+      .mockReturnValueOnce(channels[1] as WireChannel);
     state.session = {
       onPeer: vi.fn(),
       onPeerLeave: vi.fn(),
@@ -469,13 +473,41 @@ describe("handlePeerArrival — loopback duplicate + null-channel guards", () =>
 
     handlePeerArrival(state, cfg, "p_ab12", noopWarn);
     const firstPeer = state.peers.get("p_ab12") as PeerConnection;
+    expect(peerConnectedCb).toHaveBeenCalledTimes(1);
 
-    // Second arrival for the same peer short-circuits before opening another channel.
+    handlePeerArrival(state, cfg, "p_ab12", noopWarn);
+
+    const secondPeer = state.peers.get("p_ab12") as PeerConnection;
+    expect(secondPeer).not.toBe(firstPeer);
+    expect(secondPeer.channel).toBe(channels[1]);
+    expect(channels[0]?.close).toHaveBeenCalledTimes(1);
+    expect(peerConnectedCb).toHaveBeenCalledTimes(2);
+    expect(peerLostCb).not.toHaveBeenCalled();
+  });
+
+  it("keeps the old record when the bus has no pipe to the peer: the heartbeat can still declare it dead", () => {
+    const state = createTransportState();
+    const channel = openableChannel();
+    const openWireChannel = vi
+      .fn<(peerId: string) => WireChannel | null>()
+      .mockReturnValueOnce(channel)
+      .mockReturnValueOnce(null);
+    state.session = {
+      onPeer: vi.fn(),
+      onPeerLeave: vi.fn(),
+      onSignal: vi.fn(),
+      send: vi.fn(),
+      leave: vi.fn().mockResolvedValue(undefined),
+      openWireChannel
+    } as unknown as (typeof state)["session"];
+
+    handlePeerArrival(state, cfg, "p_ab12", noopWarn);
+    const firstPeer = state.peers.get("p_ab12");
+
     handlePeerArrival(state, cfg, "p_ab12", noopWarn);
 
     expect(state.peers.get("p_ab12")).toBe(firstPeer);
-    expect(peerConnectedCb).toHaveBeenCalledTimes(1);
-    expect(openWireChannel).toHaveBeenCalledTimes(1);
+    expect(channel.close).not.toHaveBeenCalled();
   });
 
   it("drives the loopback branch end-to-end via the inMemory adapter", async () => {
@@ -604,6 +636,179 @@ describe("handlePeerArrival — host channel open + ICE callbacks (real path)", 
 
     expect(pc.restartIce).not.toHaveBeenCalled();
     expect(state.peers.get("p_ab12")?.state).toBe("connecting");
+  });
+});
+
+/** Makes every host pc hand out a channel the test can open, and returns them in creation order. */
+function hostChannels(): ReturnType<typeof openableChannel>[] {
+  const channels: ReturnType<typeof openableChannel>[] = [];
+  class OpenableHostPc extends FakePeerConnection {
+    override createDataChannel(): RTCDataChannel {
+      const channel = openableChannel();
+      channels.push(channel);
+      return channel as unknown as RTCDataChannel;
+    }
+  }
+  globalThis.RTCPeerConnection = OpenableHostPc as unknown as typeof RTCPeerConnection;
+  return channels;
+}
+
+describe("handlePeerArrival — a second arrival for a known id (real path)", () => {
+  it("fires onPeerConnected once for the new channel and onPeerLost never; old pc, channel and warn keys go", () => {
+    const channels = hostChannels();
+    const state = createTransportState();
+    state.role = "host";
+    state.session = fakeSession();
+    const peerConnectedCb = vi.fn();
+    const peerLostCb = vi.fn();
+    state.peerConnectedCb = peerConnectedCb;
+    state.peerLostCb = peerLostCb;
+
+    handlePeerArrival(state, cfg, "p_ab12", noopWarn);
+    const oldPeer = state.peers.get("p_ab12") as PeerConnection;
+    channels[0]?.fireOpen();
+    expect(peerConnectedCb).toHaveBeenCalledTimes(1);
+    state.warned.add("channel-closed:p_ab12");
+    state.warned.add("ice-failed:p_ab12");
+
+    handlePeerArrival(state, cfg, "p_ab12", noopWarn);
+
+    expect(state.peers.get("p_ab12")).not.toBe(oldPeer);
+    expect((oldPeer.pc as unknown as FakePeerConnection).closed).toHaveBeenCalledTimes(1);
+    expect(channels[0]?.close).toHaveBeenCalledTimes(1);
+    expect(state.warned.size).toBe(0);
+    // The new channel has not opened yet: replacing a record is not a connect.
+    expect(peerConnectedCb).toHaveBeenCalledTimes(1);
+
+    channels[1]?.fireOpen();
+
+    expect(peerConnectedCb).toHaveBeenCalledTimes(2);
+    expect(peerLostCb).not.toHaveBeenCalled();
+  });
+
+  it("the old record's open timer dies with it, so it cannot tear down the new handshake", () => {
+    vi.useFakeTimers();
+    try {
+      const state = createTransportState();
+      state.role = "host";
+      state.session = fakeSession();
+
+      handlePeerArrival(state, cfg, "p_ab12", noopWarn);
+      vi.advanceTimersByTime(1000);
+      handlePeerArrival(state, cfg, "p_ab12", noopWarn);
+      const replacement = state.peers.get("p_ab12") as PeerConnection;
+
+      // The first record's deadline passes while the new one still has 1000 ms left.
+      vi.advanceTimersByTime(cfg.openTimeoutMs - 1000);
+
+      expect(state.peers.get("p_ab12")).toBe(replacement);
+      expect(replacement.retries).toBe(0);
+      expect((replacement.pc as unknown as FakePeerConnection).closed).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("replaces at once and offers after the wait while an ICE provider still resolves", async () => {
+    const servers = Promise.withResolvers<RTCIceServer[]>();
+    const providerCfg: TransportConfig = { ...cfg, iceServers: () => servers.promise };
+    const state = createTransportState();
+    state.role = "host";
+    const session = fakeSession();
+    state.session = session;
+    const oldPc = seedPeer(state, "p_ab12");
+
+    handlePeerArrival(state, providerCfg, "p_ab12", noopWarn);
+
+    expect(oldPc.closed).toHaveBeenCalledTimes(1);
+    expect(state.peers.has("p_ab12")).toBe(false);
+
+    servers.resolve([{ urls: "stun:stun.example:3478" }]);
+
+    await vi.waitFor(() => expect(session.send).toHaveBeenCalledTimes(1));
+    expect(state.peers.has("p_ab12")).toBe(true);
+    const [to, msg] = session.send.mock.calls[0] as [string, SignalMsg];
+    expect(to).toBe("p_ab12");
+    expect(msg.kind).toBe("offer");
+  });
+
+  it("reports lost once when the new handshake gives up past the retry cap", async () => {
+    vi.useFakeTimers();
+    try {
+      const state = createTransportState();
+      state.role = "host";
+      state.session = fakeSession();
+      const peerLostCb = vi.fn();
+      state.peerLostCb = peerLostCb;
+
+      handlePeerArrival(state, cfg, "p_ab12", noopWarn);
+      handlePeerArrival(state, cfg, "p_ab12", noopWarn);
+      expect(peerLostCb).not.toHaveBeenCalled();
+
+      await vi.advanceTimersByTimeAsync(cfg.openTimeoutMs * 5);
+
+      expect(state.peers.has("p_ab12")).toBe(false);
+      expect(peerLostCb).toHaveBeenCalledTimes(1);
+      expect(peerLostCb).toHaveBeenCalledWith("p_ab12");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("reports lost once when the peer leaves signaling mid-handshake", () => {
+    const state = createTransportState();
+    state.role = "host";
+    state.session = fakeSession();
+    const peerLostCb = vi.fn();
+    state.peerLostCb = peerLostCb;
+    handlePeerArrival(state, cfg, "p_ab12", noopWarn);
+    handlePeerArrival(state, cfg, "p_ab12", noopWarn);
+
+    handlePeerLeave(state, "p_ab12");
+    handlePeerLeave(state, "p_ab12");
+
+    expect(state.peers.has("p_ab12")).toBe(false);
+    expect(peerLostCb).toHaveBeenCalledTimes(1);
+    expect(peerLostCb).toHaveBeenCalledWith("p_ab12");
+  });
+
+  it("a connected peer that leaves signaling is not lost: the heartbeat owns that", () => {
+    const state = createTransportState();
+    state.role = "host";
+    const peerLostCb = vi.fn();
+    state.peerLostCb = peerLostCb;
+    seedPeer(state, "p_ab12");
+    (state.peers.get("p_ab12") as PeerConnection).state = "connected";
+
+    handlePeerLeave(state, "p_ab12");
+
+    expect(peerLostCb).not.toHaveBeenCalled();
+  });
+
+  it("a controller's half-open host leaving is not lost: it must not read as the host going away", () => {
+    const state = createTransportState();
+    state.role = "controller";
+    const peerLostCb = vi.fn();
+    state.peerLostCb = peerLostCb;
+    seedPeer(state, "host_root");
+
+    handlePeerLeave(state, "host_root");
+
+    expect(state.peers.has("host_root")).toBe(false);
+    expect(peerLostCb).not.toHaveBeenCalled();
+  });
+
+  it("a controller keeps its answerer: the host's arrival there is no replacement", () => {
+    const state = createTransportState();
+    state.role = "controller";
+    state.session = fakeSession();
+    const pc = seedPeer(state, "host_root");
+    const answerer = state.peers.get("host_root");
+
+    handlePeerArrival(state, cfg, "host_root", noopWarn);
+
+    expect(state.peers.get("host_root")).toBe(answerer);
+    expect(pc.closed).not.toHaveBeenCalled();
   });
 });
 

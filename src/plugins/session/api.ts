@@ -17,6 +17,7 @@ import { generateRoomCode } from "./lifecycle/code";
 import { notifyRoomEnded } from "./lifecycle/join";
 import { buildJoinUrl, buildQrMatrix } from "./lifecycle/qr";
 import { readRoster } from "./lifecycle/roster";
+import { forgetSelfId, loadOrMintSelfId } from "./lifecycle/self-id";
 import { mintHostToken } from "./recovery/hosttoken";
 import { armPersistence, recordSnapshot, teardownSession } from "./recovery/persistence";
 import { doJoinRoom, rejoinSameRoom } from "./recovery/reentry";
@@ -125,10 +126,8 @@ export function createSessionApi(deps: SessionDeps): SessionApi {
         return { ok: false, reason: "unreachable" };
       }
 
-      // Mint a stable selfId for this controller session.
-      if (!deps.state.selfId) {
-        deps.state.selfId = mintHostToken();
-      }
+      // This tab's id in this room: a reload loads the same one back, a second tab has its own.
+      deps.state.selfId = loadOrMintSelfId(deps, code);
 
       return doJoinRoom(deps, code);
     },
@@ -145,6 +144,7 @@ export function createSessionApi(deps: SessionDeps): SessionApi {
       // The room is over, so its re-entry record goes too. In the same tick as the teardown: a broadcast that
       // landed during the close above cannot write the record back.
       deps.state.recovery.persistHandle?.discard();
+      forgetSelfId(deps, deps.state.roomCode);
 
       // Disarm recovery handles.
       teardownSession(deps.state);

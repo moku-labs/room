@@ -110,7 +110,7 @@ describe("lifecycle/qr: join URL", () => {
 });
 
 function makeEntry(id: string, joinedAt = 1000): RosterEntry {
-  return { id, reconnectToken: `rt-${id}`, joinedAt };
+  return { id, joinedAt };
 }
 
 describe("lifecycle/roster", () => {
@@ -143,7 +143,7 @@ describe("lifecycle/roster", () => {
       upsertRosterEntry(state, makeEntry(`p-${i}`, i * 1000), 8);
     }
     // Updating an existing entry at full capacity should succeed.
-    const updatedEntry: RosterEntry = { id: "p-1", reconnectToken: "rt-updated", joinedAt: 9999 };
+    const updatedEntry: RosterEntry = { id: "p-1", joinedAt: 9999 };
     const admitted = upsertRosterEntry(state, updatedEntry, 8);
     expect(admitted).toBe(true);
     expect(state.roster["p-1"]).toEqual(updatedEntry);

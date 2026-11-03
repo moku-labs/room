@@ -25,7 +25,9 @@
    would silently eat a retransmitted older frame forever if a newer `cSeq` ever applied first. Cost: one
    wire RTT between consecutive live intents (imperceptible at couch-LAN RTTs against human input rates).
 4. **Idempotency + reconnect buffering.** On the host, `lastApplied[peerId]` drops any inbound
-   `cSeq <= lastApplied[peerId]` (D4) so a retransmit/reconnect/flush replay never double-applies. On the
+   `cSeq <= lastApplied[peerId]` (D4) so a retransmit/reconnect/flush replay never double-applies.
+   `room:peer-joined` clears that peer's mark: a phone back on a known id is a new app, and its `cSeq` starts at 0
+   again. So a same-app `rejoin` that retransmits a frame the host applied but never acked applies it twice. On the
    controller, during a host absence every `intent()` is buffered as a timestamped queue entry — and
    `setBuffering(true)` first **retires the live delivery window into that buffer** (the §5 recovery
    contract subsumes the retransmit contract during a known host absence; no `intent-undeliverable`

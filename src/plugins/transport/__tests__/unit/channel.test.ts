@@ -355,6 +355,21 @@ describe("channel — backpressure", () => {
     expect(sentTs).toEqual([1, 2, 3]);
   });
 
+  it("a same-id peer back on a new channel starts with no queue: the old channel's backlog cannot block it", () => {
+    const state = createTransportState();
+    const wire = createWire(state, cfg);
+    const old = addConnectedPeer(state, "p1");
+    old.bufferedAmount = 70 * 1024;
+    wire.send("p1", { t: "ping", ts: 1 });
+    expect(old.sent).toHaveLength(0);
+
+    disconnectPeer(state, "p1");
+    const fresh = addConnectedPeer(state, "p1");
+    wire.send("p1", { t: "ping", ts: 2 });
+
+    expect(fresh.sent.map(message => JSON.parse(message))).toEqual([{ t: "ping", ts: 2 }]);
+  });
+
   it("writeToPeer is a no-op when the peer has no channel assigned", () => {
     const state = createTransportState();
     state.role = "host";

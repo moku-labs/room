@@ -5,8 +5,9 @@
  * These are the offer/answer/ICE glue functions wired by `connect()` onto `session.onPeer` /
  * `session.onSignal` / `session.onPeerLeave`. They apply each inbound `SignalMsg` to the matching peer
  * connection (setRemoteDescription / addIceCandidate / createAnswer) and trickle local descriptions back
- * over the signaling plane. They do NOT emit Moku events — `onPeerLeave` during a handshake is
- * bookkeeping-only (dead-peer detection for ESTABLISHED channels is the heartbeat's job, section 2.4).
+ * over the signaling plane. They do NOT emit Moku events (dead-peer detection for ESTABLISHED channels is the
+ * heartbeat's job, section 2.4). A host handshake that dies reports the peer lost, so a known id that was being
+ * replaced does not keep its roster entry; `session` ignores an id that never reached the roster.
  *
  * The `inMemory` adapter exposes a loopback capability (`openWireChannel`); when present, a peer is wired
  * directly to its in-process channel and marked `connected` with no `RTCPeerConnection`. Real adapters
@@ -14,7 +15,7 @@
  */
 import type { RoomEvents } from "../../config";
 import type { LoopbackSignaling, WireChannel } from "./channel";
-import { bindPeerChannel } from "./channel";
+import { bindPeerChannel, disconnectPeer } from "./channel";
 import { iceServersReady, peekIceServers } from "./ice";
 import { effectiveIcePolicy } from "./ice-default";
 import type { IceCandidateInit, PeerId, SignalingSession, SignalMsg } from "./protocol";
@@ -209,6 +210,10 @@ function bindChannel(state: TransportState, peer: PeerConnection, channel: WireC
  * On a re-entry from {@link retryHandshake}, `retries` carries the running attempt count across the
  * peer's delete + recreate, so the open-timeout retry stays capped at {@link MAX_OPEN_RETRIES}.
  *
+ * A known id is a peer that came back (a phone reload, a rejoin). Its old record is replaced silently: timer,
+ * channel, pc and warn keys go, and `peerLostCb` does not fire, so the host keeps the roster entry. A controller
+ * on the real path replaces nothing: this cue is a no-op there, and its record is the answerer of a live handshake.
+ *
  * @param state - The per-app transport state holding the peer map and signaling session.
  * @param cfg - The transport config (ICE servers, open timeout).
  * @param peerId - The peer that just appeared in the signaling room.
@@ -229,9 +234,10 @@ export function handlePeerArrival(
   const loopback = asLoopback(state.session);
   // Loopback (inMemory) path: wire the in-process channel directly and mark the peer connected.
   if (loopback) {
-    if (state.peers.has(peerId)) return;
     const channel = loopback.openWireChannel(peerId);
+    // No pipe, no new record. The old one stays, so the heartbeat can still declare the peer dead.
     if (!channel) return;
+    disconnectPeer(state, peerId);
     const peer: PeerConnection = {
       peerId,
       // DOM-boundary stub: the loopback peer has no real WebRTC handshake, so `pc` is a minimal
@@ -254,6 +260,9 @@ export function handlePeerArrival(
 
   // Real WebRTC path: only the active host offers on peer arrival.
   if (state.role !== "host") return;
+
+  // Before the ICE wait below: its continuation offers only when no record exists for this id.
+  disconnectPeer(state, peerId);
 
   // Fast path — ICE servers already known (array config, or the provider resolved): offer now.
   const known = peekIceServers(state, cfg);
@@ -339,8 +348,9 @@ function offerToPeer(
  * within `cfg.openTimeoutMs`. Closes the stale `RTCPeerConnection` and removes the peer record, then:
  * within the cap, re-enters {@link handlePeerArrival} (carrying the incremented attempt count) for a
  * fresh offer/answer exchange; past the cap, emits `room:network-warning { reason: "ice-failed" }` once
- * (de-duped via `state.warned`, key `ice-failed:${peerId}`) and STOPS — no further timer is armed, so a
- * permanently-unreachable peer cannot loop forever (the iOS-to-Bravia GATE mitigation).
+ * (de-duped via `state.warned`, key `ice-failed:${peerId}`), reports the peer lost, and STOPS — no further timer
+ * is armed, so a permanently-unreachable peer cannot loop forever (the iOS-to-Bravia GATE mitigation). With no
+ * record left, the heartbeat could never report it.
  *
  * @param state - The per-app transport state holding the peer map and signaling session.
  * @param cfg - The transport config (open timeout, ICE servers).
@@ -374,6 +384,7 @@ function retryHandshake(
       state.warned.add(key);
       emitWarning("ice-failed");
     }
+    state.peerLostCb?.(peerId);
     return;
   }
 
@@ -549,9 +560,10 @@ function createAnswerer(
 }
 
 /**
- * Handles a peer disappearing from the signaling room DURING the handshake. Bookkeeping-only — clears the
- * half-open peer's open timer and removes its record if it never reached `connected`. Does NOT emit
- * `room:peer-left` (that is `sessionPlugin`'s job, driven by the heartbeat — contracts section 2.4).
+ * Handles a peer disappearing from the signaling room DURING the handshake: clears the half-open peer's open
+ * timer and removes its record if it never reached `connected`. On the host it then reports the peer lost, because
+ * with no record the heartbeat never could; `sessionPlugin` decides whether that is a `room:peer-left` (contracts
+ * section 2.4). On a controller it reports nothing: a half-open host is not the host going away.
  *
  * @param state - The per-app transport state holding the peer map.
  * @param peerId - The peer that left the signaling room.
@@ -570,4 +582,5 @@ export function handlePeerLeave(state: TransportState, peerId: PeerId): void {
   if (peer.openTimer !== null) clearTimeout(peer.openTimer);
   peer.pc.close();
   state.peers.delete(peerId);
+  if (state.role === "host") state.peerLostCb?.(peerId);
 }

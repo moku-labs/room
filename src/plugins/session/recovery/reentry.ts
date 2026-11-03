@@ -28,6 +28,7 @@ import { armPersistence, readReentryRecord } from "./persistence";
  *
  * D18 wiring — role-discriminated:
  * - `onPeerConnected`: host → upsert roster or refuse + `room:peer-joined`; controller → record host id.
+ *   A known id keeps its entry, and `room:peer-joined` still fires: that is what sends it a `sync` baseline.
  *   A pending joinRoom stays pending: the host's `roster` or `room-full` frame settles it.
  * - `onPeerLost`: host → remove roster + `room:peer-left`; controller + lost peer IS host → enter
  *   `host-absent` + arm reconnect timeout.
@@ -45,12 +46,8 @@ export function registerTransportBindings(deps: SessionDeps): void {
   transport.onPeerConnected(peerId => {
     // Host branch: a controller connected.
     if (deps.state.role === "host") {
-      // Build a basic RosterEntry and handle it.
-      const entry = {
-        id: peerId,
-        reconnectToken: "",
-        joinedAt: Date.now()
-      };
+      // A known id keeps its entry, so its seat keeps its place in the joinedAt order.
+      const entry = deps.state.roster[peerId] ?? { id: peerId, joinedAt: Date.now() };
       handlePeerConnected(deps)(peerId, entry);
     } else {
       // Controller branch: the host is the single star hub. Accept a connecting peer as the host ONLY
@@ -137,8 +134,8 @@ export function detectHostReload(deps: SessionDeps): void {
 }
 
 /**
- * Re-runs the join handshake against the stored `roomCode`, re-using the phone-persisted `reconnectToken`
- * so the controller re-binds to the same roster slot (the iOS "rescan QR" / `rejoin()` path, §5.4).
+ * Re-runs the join handshake against the stored `roomCode` with the same `selfId`, so the controller
+ * re-binds to the same roster slot (the iOS "rescan QR" / `rejoin()` path, §5.4).
  *
  * @param deps - This app's destructured per-instance pieces.
  * @returns A promise resolving to the `JoinResult`.

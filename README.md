@@ -195,6 +195,17 @@ app.controller.intent("move", { dx: 1, dy: 0 });
 
 `ControllerApi` (`app.controller`): `joinRoom`, `read`, `on`, `intent`, `requestWakeLock`, `releaseWakeLock`.
 
+> [!NOTE]
+> **A phone reload.** `joinRoom` keeps this tab's id in `sessionStorage`, per room. `leave()` and a `full` result remove
+> it. Where the adapter carries that id, `inMemory` and `serverSignaling`, a reload in the same tab is the same seat: the
+> same roster entry, no `room:peer-left`, and `room:peer-joined` fires again, so the new replica gets its baseline. A
+> duplicated tab copies `sessionStorage`, so both tabs hold one id and the host sees one player.
+>
+> **On the default `publicRendezvous` a reloaded phone never gets its old slot.** Peers there are keyed by Trystero's
+> id, which is new on every page load. It can take a new slot only while the host is in signaling, and the host leaves
+> signaling once a phone's channel connects: after that its join ends `unreachable`. See
+> [session](src/plugins/session/README.md#a-phone-reload).
+
 ### Choose a signaling adapter
 
 The transport plugin's `signaling` config selects the rendezvous backbone. All three adapters are interchangeable
@@ -300,7 +311,7 @@ The `room:*` plane is **coarse lifecycle only**. All gameplay rides the `Wire` (
 
 | Event | Payload | Emitted by | Meaning |
 |---|---|---|---|
-| `room:peer-joined` | `{ peerId }` | session | A controller's channel reached `connected` and was added to the roster. |
+| `room:peer-joined` | `{ peerId }` | session | A controller's channel reached `connected` and was added to the roster. A known id coming back fires it again, with its entry kept. |
 | `room:peer-left` | `{ peerId }` | session | A controller left or was declared dead by the heartbeat; removed from roster. |
 | `room:host-reconnecting` | `{}` | session | The host is away. On a phone: its channel was lost, or a different host appeared. Show "reconnecting" UX; intents buffer. On the host: this tab reloaded. |
 | `room:host-back` | `{}` | session | A phone adopted the host after an absence. Its buffered intents are on their way. |

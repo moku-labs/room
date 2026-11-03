@@ -28,9 +28,7 @@ function makeSessionSpy() {
     qr: null,
     hostToken: "00000000-0000-0000-0000-000000000001"
   };
-  const roster: readonly RosterEntry[] = [
-    { id: "p1", reconnectToken: "rt1", joinedAt: 1_718_600_000_000 }
-  ];
+  const roster: readonly RosterEntry[] = [{ id: "p1", joinedAt: 1_718_600_000_000 }];
   const qrMatrix: QrMatrix = { size: 2, modules: [true, false, false, true] };
   const spy = {
     createRoom: vi.fn<() => RoomDescriptor>(() => descriptor),
