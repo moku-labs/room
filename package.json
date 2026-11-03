@@ -40,7 +40,10 @@
       }
     },
     "./server": {
-      "import": "./dist/server.mjs"
+      "import": {
+        "types": "./dist/server.d.mts",
+        "default": "./dist/server.mjs"
+      }
     }
   },
   "files": [
@@ -68,7 +71,7 @@
   "scripts": {
     "build": "tsdown",
     "typecheck": "tsc --noEmit && tsc --noEmit -p tsconfig.worker.json",
-    "validate": "publint && attw --pack . --profile node16 --exclude-entrypoints server",
+    "validate": "publint && attw --pack . --profile node16 --exclude-entrypoints server && attw --pack . --profile esm-only --entrypoints server",
     "lint": "biome check . && eslint .",
     "lint:fix": "biome check --write . && eslint --fix .",
     "format": "biome format --write .",
