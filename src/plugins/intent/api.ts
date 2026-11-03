@@ -165,9 +165,12 @@ export function createIntentApi(
 
     onIntent(name, handler) {
       const existing = state.registry.get(name);
-      if (existing) {
-        state.registry.set(name, { schema: existing.schema, handler });
+      if (!existing) {
+        throw new Error(
+          `[room] intent.onIntent: "${name}" is not registered.\n  Call register("${name}", schema) first.`
+        );
       }
+      state.registry.set(name, { schema: existing.schema, handler });
       return () => {
         const reg = state.registry.get(name);
         if (reg && reg.handler === handler) {

@@ -9,10 +9,10 @@
  * @example
  * ```ts
  * // your-app/src/server.ts — ONE worker app, atlas-style:
- * import { cliPlugin, createApp, deployPlugin, durableObjectsPlugin, kvPlugin } from "@moku-labs/worker";
+ * import { cliPlugin, createApp, d1Plugin, deployPlugin, durableObjectsPlugin, kvPlugin, queuesPlugin, storagePlugin } from "@moku-labs/worker";
  * import { hubPlugin } from "@moku-labs/room/server";
  * export const server = createApp({
- *   plugins: [kvPlugin, durableObjectsPlugin, hubPlugin, deployPlugin, cliPlugin],
+ *   plugins: [storagePlugin, kvPlugin, d1Plugin, queuesPlugin, durableObjectsPlugin, hubPlugin, deployPlugin, cliPlugin],
  *   pluginConfigs: { durableObjects: { hub: { binding: "ROOM_HUB", className: "Hub" } } }
  * });
  *

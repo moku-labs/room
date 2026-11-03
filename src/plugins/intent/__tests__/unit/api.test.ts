@@ -216,6 +216,22 @@ describe("createIntentApi — host register() + onIntent()", () => {
     expect(handler).not.toHaveBeenCalled();
   });
 
+  it("onIntent on an unregistered name throws and stores nothing: a later register leaves the handler out", () => {
+    const api = createIntentApi(state, defaultConfig, fakeWire.wire, () => hostId, vi.fn());
+    const handler = vi.fn();
+
+    expect(() => api.onIntent("move", handler)).toThrow(
+      '[room] intent.onIntent: "move" is not registered.\n  Call register("move", schema) first.'
+    );
+    expect(state.registry.has("move")).toBe(false);
+
+    // Nothing was kept for later: registering now must not bring the refused handler back.
+    api.register("move", moveSchema);
+    fakeWire.deliver("ctrl-1", { t: "intent", name: "move", payload: { dx: 0, dy: 0 }, cSeq: 0 });
+
+    expect(handler).not.toHaveBeenCalled();
+  });
+
   it("a schema-failing payload drops silently (handler not called)", () => {
     const api = createIntentApi(state, defaultConfig, fakeWire.wire, () => hostId, vi.fn());
     const handler = vi.fn();

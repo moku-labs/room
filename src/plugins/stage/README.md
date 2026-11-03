@@ -38,6 +38,13 @@ const qr = await app.stage.qr(); // async — descriptor.qr is null
 if (qr) renderJoinQr(qr); // show on the TV; phones scan to join
 ```
 
+### `registerSlice(ns: Namespace, initial: Cells): void`
+
+Declares one authoritative namespaced sync slice with its initial cells. Delegates to
+`sync.registerSlice(ns, initial)`. Call it once per namespace, before the first `mutate()` of that
+namespace (`mutate` throws on an unregistered one) and before phones join, so their join baseline
+already carries the slice. Re-registering with the same initial is a no-op; a different initial throws.
+
 ### `mutate(ns: Namespace, recipe: MutateRecipe): void`
 
 Mutates one authoritative namespaced sync slice on the host. Delegates to `sync.mutate(ns, recipe)`,
@@ -52,13 +59,20 @@ Forces an immediate full authoritative snapshot broadcast to all controllers. De
 `sync.broadcast()`. Only needed to flush a snapshot outside the normal throttle cadence (e.g. round
 transition); idempotent and safe to over-call (contracts §4.3, §5.3).
 
+### `register(name: string, schema: IntentSchema): void`
+
+Declares a controller intent and its correctness-only shape-check (D6). Delegates to
+`intent.register(name, schema)`. Must run before the matching `onIntent()`. Re-registering a name replaces
+its schema and keeps its handler.
+
 ### `onIntent(name: string, handler: IntentHandler): () => void`
 
 Registers a typed host-side handler for a named controller intent. Delegates to `intent.onIntent`,
 adapting the engine's `(payload, meta)` callback to this facade's `(payload, peerId)` surface (it
 unwraps `meta.peerId`). `intent` drops a frame from a peer with no seat in the roster, correctness-only
 shape-checks each payload (D6) and drops any `cSeq <= lastApplied[peerId]` (contracts §4.3) before the handler
-runs. The handler is invoked with `(payload, peerId)`. Returns an unsubscribe function.
+runs. The handler is invoked with `(payload, peerId)`. Returns an unsubscribe function. Throws when `name` is not
+registered, and stores nothing: call `register(name, schema)` first.
 
 ### `roster(): readonly RosterEntry[]`
 
@@ -89,8 +103,8 @@ Coarse lifecycle only — no gameplay payload ever flows through `emit` (spec/07
 |--------|------|--------|
 | `transportPlugin` | visibility-only | Listed in `depends` solely so `transport`'s `room:network-warning` is mergeable for re-declaration (WARN-2). No method is ever `require`d. |
 | `sessionPlugin` | delegation target | `createRoom()` / `roster()` delegate here; owns room-code/QR/roster (contracts §6) + recovery (§5); source of `room:peer-joined`/`-left`/`host-reconnecting`. |
-| `intentPlugin` | delegation target | `onIntent()` delegates here; owns intent validation + `cSeq` de-dup (contracts §4.3). |
-| `syncPlugin` | delegation target | `mutate()` / `broadcast()` delegate here; owns the authoritative snapshot + op-list (contracts §4); source of `room:sync-ready`. |
+| `intentPlugin` | delegation target | `register()` / `onIntent()` delegate here; owns intent validation + `cSeq` de-dup (contracts §4.3). |
+| `syncPlugin` | delegation target | `registerSlice()` / `mutate()` / `broadcast()` delegate here; owns the authoritative snapshot + op-list (contracts §4); source of `room:sync-ready`. |
 
 > No **Config** section: the facade has no config of its own. Every host tunable (STUN servers,
 > signaling adapter, broadcast Hz, heartbeat cadence, reconnect timeout, room-code alphabet) belongs to
@@ -133,6 +147,10 @@ showJoinCode(code, joinUrl);
 const qr = await app.stage.qr();
 if (qr) renderJoinQr(qr);
 
+// Declare the slice and the intent first: onIntent throws on an unregistered name, mutate on an
+// unregistered slice.
+app.stage.registerSlice("scores", {});
+app.stage.register("score", { fields: {}, additionalFields: false });
 app.stage.onIntent("score", (payload, peerId) => {
   app.stage.mutate("scores", draft => ({
     ...draft,

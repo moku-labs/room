@@ -58,7 +58,7 @@ re-exposes which methods — nothing is role-flagged at construction.
 | Method | Role | Purpose |
 |---|---|---|
 | `register(name, schema)` | host | Declare an intent kind + correctness-only shape-check. |
-| `onIntent(name, handler)` | host | Subscribe to validated, de-duplicated intents; returns an unsubscribe. |
+| `onIntent(name, handler)` | host | Subscribe to validated, de-duplicated intents; returns an unsubscribe. Throws on an unregistered name. |
 | `intent(name, payload)` | controller | Stamp `cSeq`, deliver at-least-once (or buffer) one typed intent over the Wire. |
 | `setBuffering(on)` | recovery seam | Toggle controller buffering; ON retires the live delivery window into the buffer. The plugin's hooks call the same code on a host absence. |
 | `drainBuffer()` | recovery seam | Atomically return + clear the pruned, `ts`-ordered buffer. |

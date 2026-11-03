@@ -6,10 +6,11 @@
  * `PeerId`, `RosterEntry`) is imported from their owning plugins (`../transport/protocol` for the wire/signaling protocol; `RoomEvents` from `../../config`) —
  * never re-declared. `RoomDescriptor` is session-owned (the room-code/QR/hostToken descriptor) and is
  * imported from `../session/types`. `Cells` is imported from `../sync/types` (the per-namespace
- * cell map type). The facade defines no state, no config, and no `ctx` alias — its
+ * cell map type), `IntentSchema` from `../intent/types`. The facade defines no state, no config, and no `ctx` alias — its
  * methods delegate straight to the four engines (transport, session, intent, sync).
  */
 
+import type { IntentSchema } from "../intent/types";
 import type { QrMatrix, RoomDescriptor } from "../session/types";
 import type { Cells } from "../sync/types";
 import type { Namespace, PeerId, RosterEntry } from "../transport/protocol";
@@ -56,7 +57,9 @@ export type IntentHandler = (payload: unknown, peerId: PeerId) => void;
  * ```ts
  * const stage: StageApi = app.stage;
  * const { joinUrl } = stage.createRoom();
- * stage.onIntent("score", (payload, peerId) => stage.mutate("scores", d => { d[peerId] = payload as JsonValue; }));
+ * stage.registerSlice("scores", {});
+ * stage.register("score", { fields: {}, additionalFields: false });
+ * stage.onIntent("score", (_payload, peerId) => stage.mutate("scores", d => ({ ...d, [peerId]: 1 })));
  * ```
  */
 export type StageApi = {
@@ -105,6 +108,26 @@ export type StageApi = {
   qr(): Promise<QrMatrix | null>;
 
   /**
+   * Declares one authoritative namespaced sync slice with its initial cells: delegates to
+   * `sync.registerSlice(ns, initial)`. Call it once per namespace, before the first
+   * {@link StageApi.mutate} of that namespace (`mutate` throws on an unregistered one) and before phones
+   * join, so their join baseline already carries the slice. Re-registering with the same initial is a
+   * no-op.
+   *
+   * @param ns - The namespace / slice key (contracts §4.1 `Namespace`, e.g. `"scores"`).
+   * @param initial - The slice's initial plain-JSON cells.
+   * @returns Nothing.
+   * @throws {Error} If `ns` is re-registered with a different initial value.
+   * @example
+   * ```ts
+   * // The lobby opens: declare the scoreboard, so a score can be mutated and phones can read it.
+   * app.stage.registerSlice("scores", { p1: 0, p2: 0 });
+   * app.stage.mutate("scores", draft => ({ ...draft, p1: 1 })); // scores is now { p1: 1, p2: 0 }
+   * ```
+   */
+  registerSlice(ns: Namespace, initial: Cells): void;
+
+  /**
    * Mutates one authoritative namespaced sync slice on the host: delegates to `sync.mutate(ns, recipe)`.
    * `sync` applies the recipe to the slice's current cells, advances `sSeq` (contracts §4.3), and
    * schedules a throttled (20–30 Hz, contracts §4.3) delta broadcast to every connected controller. This
@@ -137,6 +160,27 @@ export type StageApi = {
   broadcast(): void;
 
   /**
+   * Declares a controller intent and its correctness-only shape-check (D6): delegates to
+   * `intent.register(name, schema)`. Must run before the matching {@link StageApi.onIntent}, which throws
+   * on an unregistered name. Re-registering a name replaces its schema (the last registration wins) and
+   * keeps its handler. An inbound intent whose name was never registered is dropped on receipt.
+   *
+   * @param name - The intent name (the §2.2 `IntentFrame.name` discriminator).
+   * @param schema - The field/bounds shape-check for the payload (see {@link IntentSchema}).
+   * @returns Nothing.
+   * @example
+   * ```ts
+   * // Phones send a joystick move: declare its shape, then subscribe to it.
+   * app.stage.register("move", {
+   *   fields: { dx: { type: "number", min: -1, max: 1 } },
+   *   additionalFields: false
+   * });
+   * app.stage.onIntent("move", (payload, peerId) => moveAvatar(peerId, payload));
+   * ```
+   */
+  register(name: string, schema: IntentSchema): void;
+
+  /**
    * Registers a typed host-side handler for a named controller intent: delegates to `intent.onIntent`,
    * adapting the engine's `(payload, meta)` callback to this facade's simpler `(payload, peerId)` surface
    * (it unwraps `meta.peerId` — `intent`'s `IntentMeta` is `{ peerId; cSeq }`). `intent` drops a frame from a
@@ -149,10 +193,13 @@ export type StageApi = {
    * @param handler - The host-side callback for validated intents, invoked with `(payload, peerId)` (see
    *   {@link IntentHandler}).
    * @returns An unsubscribe function that removes the handler.
+   * @throws {Error} If `name` is not registered; nothing is stored. Call {@link StageApi.register} first.
    * @example
    * ```ts
+   * app.stage.registerSlice("players", {});
+   * app.stage.register("move", { fields: { dx: { type: "number" } }, additionalFields: false });
    * const off = app.stage.onIntent("move", (payload, peerId) => {
-   *   app.stage.mutate("players", d => { d[peerId] = payload as JsonValue; });
+   *   app.stage.mutate("players", d => ({ ...d, [peerId]: payload as JsonValue }));
    * });
    * ```
    */

@@ -72,6 +72,48 @@ describe("user journey — single-player scoreboard game", () => {
 });
 
 // ---------------------------------------------------------------------------
+// Journey 1b — the README host flow: everything through the stage facade
+// ---------------------------------------------------------------------------
+
+describe("user journey — README host flow through the stage facade", () => {
+  it("registerSlice + register + onIntent: a controller intent fires the handler and mutate advances the slice", async () => {
+    const bus = makeBus();
+    const { app: stage } = makeStage(bus);
+    const { app: phone } = makeController(bus, "readmeFlowPhone");
+
+    await stage.start();
+    await phone.start();
+
+    const { code } = stage.stage.createRoom();
+
+    stage.stage.registerSlice("scores", {});
+    stage.stage.register("score", { fields: {}, additionalFields: false });
+    const senders: string[] = [];
+    stage.stage.onIntent("score", (_payload, peerId) => {
+      senders.push(peerId);
+      stage.stage.mutate("scores", draft => ({
+        ...draft,
+        [peerId]: ((draft[peerId] as number) ?? 0) + 1
+      }));
+    });
+
+    await phone.controller.joinRoom(code);
+    await vi.waitFor(() => expect(stage.stage.roster()).toHaveLength(1), { timeout: 5000 });
+    const peerId = stage.stage.roster()[0]?.id as string;
+
+    phone.controller.intent("score", {});
+
+    await vi.waitFor(() => expect(phone.controller.read("scores")?.[peerId]).toBe(1), {
+      timeout: 5000
+    });
+    expect(senders).toEqual([peerId]);
+
+    await phone.stop();
+    await stage.stop();
+  });
+});
+
+// ---------------------------------------------------------------------------
 // Journey 2 — two-player competitive: per-peer state keyed by peerId
 // ---------------------------------------------------------------------------
 

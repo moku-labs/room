@@ -107,9 +107,13 @@ plugin: `ctx.require(stagePlugin)` / `ctx.require(controllerPlugin)`.
 - `createRoom(): RoomDescriptor` — SYNCHRONOUS; `{ code, joinUrl, qr, hostToken }` (`qr` is always `null` — fetch it
   via `qr()`). After a host reload the first call returns the restored room (no second connect); a later call throws.
 - `qr(): Promise<QrMatrix | null>` — async QR matrix for the join URL (null when `generateQr: false`).
+- `registerSlice(ns, initial): void` — declare one authoritative slice; call before `mutate` (it throws on an
+  unregistered slice) and before phones join.
 - `mutate(ns, recipe): void` — mutate one authoritative slice; recipe `(draft) => next`; schedules a throttled delta.
 - `broadcast(): void` — force an immediate snapshot broadcast.
-- `onIntent(name, handler): () => void` — handler `(payload, peerId)`; validated + de-duped before it runs.
+- `register(name, schema): void` — declare an intent + its correctness-only shape-check; call before `onIntent`.
+- `onIntent(name, handler): () => void` — handler `(payload, peerId)`; validated + de-duped before it runs. THROWS on
+  an unregistered `name`.
 - `roster(): readonly RosterEntry[]` — connected controllers.
 
 **ControllerApi (`app.controller`, phone):**
@@ -152,10 +156,10 @@ re-exports `Hub` for the binding.
 
 ```typescript
 // your-app/src/server.ts — ONE @moku-labs/worker app, composing room's hubPlugin.
-import { cliPlugin, createApp, deployPlugin, durableObjectsPlugin, kvPlugin } from "@moku-labs/worker";
+import { cliPlugin, createApp, d1Plugin, deployPlugin, durableObjectsPlugin, kvPlugin, queuesPlugin, storagePlugin } from "@moku-labs/worker";
 import { hubPlugin } from "@moku-labs/room/server";
 export const server = createApp({
-  plugins: [kvPlugin, durableObjectsPlugin, hubPlugin, deployPlugin, cliPlugin],
+  plugins: [storagePlugin, kvPlugin, d1Plugin, queuesPlugin, durableObjectsPlugin, hubPlugin, deployPlugin, cliPlugin],
   pluginConfigs: {
     durableObjects: { hub: { binding: "ROOM_HUB", className: "Hub" } },
     kv: { rateLimit: { name: "ratelimit", binding: "RATE_LIMIT" } }
@@ -223,7 +227,7 @@ Just two exports — NOT a core (no `createApp`/`createPlugin`/`createCore`, no 
 | `sessionPlugin` | Complex | client default | transport | Room code + QR + roster; star topology (`hostId()`); host-reload recovery. | `createRoom`, `qr`, `joinRoom`, `leave`, `rejoin`, `roster`, `self`, `hostId`, `hostToken`, `persistSnapshot`, `recoveryPhase`, `reentryRecord`, `onRoomEnded` | emits `room:peer-joined`, `room:peer-left`, `room:host-reconnecting`, `room:host-back` |
 | `intentPlugin` | Standard | client default | transport, session | Controller→host typed inputs; at-least-once live delivery (receipt-ack + bounded retransmit); per-controller `cSeq` idempotent de-dup; reconnect buffer. | `register`, `onIntent`, `intent`, `setBuffering`, `drainBuffer`, `bufferedCount` | emits `room:intent-undeliverable` |
 | `syncPlugin` | Complex | client default | transport, session | Host→controller authoritative state: snapshot + throttled op-list deltas (custom codec). | `registerSlice`, `mutate`, `broadcast`, `read`, `subscribe`, `applyFrame`, `exportSnapshot`, `importSnapshot` | emits `room:sync-ready` |
-| `stagePlugin` | Standard (facade) | app-added (host) | all four engines | Host-role facade → `StageApi` (`app.stage`). | `createRoom`, `qr`, `mutate`, `broadcast`, `onIntent`, `roster` | re-declares all seven |
+| `stagePlugin` | Standard (facade) | app-added (host) | all four engines | Host-role facade → `StageApi` (`app.stage`). | `createRoom`, `qr`, `registerSlice`, `mutate`, `broadcast`, `register`, `onIntent`, `roster` | re-declares all seven |
 | `controllerPlugin` | Standard (facade) | app-added (controller) | all four engines | Controller-role facade → `ControllerApi` (`app.controller`). | `joinRoom`, `read`, `on`, `intent`, `requestWakeLock`, `releaseWakeLock` | re-declares all seven |
 | `hubPlugin` | Standard | app-added (worker) | native Cloudflare `env` (DO + KV) | OPT-IN operated signaling tier (`@moku-labs/room/server`); a `@moku-labs/worker` plugin composed into your own worker app. WS-Hibernation `Hub` DO-per-room: handshake + in-band discovery + host-reload reclaim; NO gameplay relay (D2). | `handle(request, env, ctx)` | none |
 
@@ -319,8 +323,9 @@ Internal types (`transport/protocol.ts`; NOT client-barrel exports). The client�
 
 ## End-to-end flow
 
-1. Stage `app.stage.createRoom()` → `{ code, joinUrl, hostToken }` + `await app.stage.qr()`; render the QR. Register
-   slices + intent handlers.
+1. Stage `app.stage.createRoom()` → `{ code, joinUrl, hostToken }` + `await app.stage.qr()`; render the QR. Declare
+   state and inputs, in this order: `app.stage.registerSlice(ns, initial)`, `app.stage.register(name, schema)`,
+   `app.stage.onIntent(name, handler)`.
 2. Controller scans QR, `await app.controller.joinRoom(code)`; `requestWakeLock()`.
 3. Controller `app.controller.intent("move", {...})` → `IntentFrame` over the Wire → host.
 4. Host receipt-acks (`intent-ack`), then `onIntent` validates + de-dups by `cSeq`, then `app.stage.mutate(ns, recipe)`.
