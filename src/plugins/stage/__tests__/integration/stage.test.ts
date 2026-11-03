@@ -101,6 +101,7 @@ describe("stage — createApp integration (inMemory signaling)", () => {
     // Facade methods complete synchronously without error
     expect(() => app.stage.roster()).not.toThrow();
     expect(() => app.stage.broadcast()).not.toThrow();
+    app.stage.register("test", { fields: {}, additionalFields: false });
     const off = app.stage.onIntent("test", vi.fn());
     expect(typeof off).toBe("function");
     off();

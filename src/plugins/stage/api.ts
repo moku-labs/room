@@ -17,15 +17,16 @@ import type { StageApi } from "./types";
 
 /**
  * Creates the HOST-role facade API from the three resolved engine APIs. Every method is a
- * one-line delegation: `createRoom`/`qr`/`roster` → session; `mutate`/`broadcast` → sync;
- * `onIntent` → intent (adapts engine's `(payload, meta)` callback to facade's `(payload, peerId)`
- * by unwrapping `meta.peerId`). The `transportPlugin` is intentionally absent from this factory's
+ * one-line delegation: `createRoom`/`qr`/`roster` → session; `registerSlice`/`mutate`/`broadcast` →
+ * sync; `register`/`onIntent` → intent (`onIntent` adapts engine's `(payload, meta)` callback to
+ * facade's `(payload, peerId)` by unwrapping `meta.peerId`). The `transportPlugin` is intentionally absent from this factory's
  * signature — it is a visibility-only dependency wired via `depends` in `index.ts`, and the facade
  * calls no transport method (transport is reached transitively by `session`/`sync`).
  *
  * @param session - The resolved `sessionPlugin` API — `createRoom()` and `roster()` delegate here.
- * @param intent - The resolved `intentPlugin` API — `onIntent()` delegates here.
- * @param sync - The resolved `syncPlugin` API — `mutate()` and `broadcast()` delegate here.
+ * @param intent - The resolved `intentPlugin` API — `register()` and `onIntent()` delegate here.
+ * @param sync - The resolved `syncPlugin` API — `registerSlice()`, `mutate()` and `broadcast()`
+ *   delegate here.
  * @returns The {@link StageApi} host surface.
  * @example
  * ```ts
@@ -43,8 +44,10 @@ export function createStageApi(session: SessionApi, intent: IntentApi, sync: Syn
   return {
     createRoom: () => session.createRoom(),
     qr: () => session.qr(),
+    registerSlice: (ns, initial) => sync.registerSlice(ns, initial),
     mutate: (ns, recipe) => sync.mutate(ns, recipe),
     broadcast: () => sync.broadcast(),
+    register: (name, schema) => intent.register(name, schema),
     onIntent: (name, handler) =>
       intent.onIntent(name, (payload, meta) => handler(payload, meta.peerId)),
     roster: () => session.roster()
