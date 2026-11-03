@@ -9,6 +9,7 @@
 
 import { RoomFullError } from "../../transport/protocol";
 import {
+  adoptHost,
   handleHostChannelLost,
   handlePeerConnected,
   handlePeerLost,
@@ -53,21 +54,17 @@ export function registerTransportBindings(deps: SessionDeps): void {
       handlePeerConnected(deps)(peerId, entry);
     } else {
       // Controller branch: the host is the single star hub. Accept a connecting peer as the host ONLY
-      // when we are actively (re)connecting to one — a pending joinRoom, OR a non-"stable" recovery
-      // phase (host re-entry after absence). Once stable with a known host, a later connection is NOT
-      // the host (e.g. a non-star / meshing signaling adapter surfacing another controller) and must
-      // not clobber `_hostId` (finding #1). The pending resolver/host id live on the runtime extension.
+      // when we are actively (re)connecting to one — a pending joinRoom, a non-"stable" recovery phase
+      // (host re-entry after absence) — or when the known host is no longer connected. While the known
+      // host is connected and stable, a later connection is NOT the host (e.g. a non-star / meshing
+      // signaling adapter surfacing another controller) and must not clobber `_hostId` (finding #1).
       const rt = deps.state;
-      const expectingHost =
-        rt._pendingJoinResolve !== null || deps.state.recovery.phase !== "stable";
-      if (rt._hostId !== null && !expectingHost) return;
+      const pendingJoin = Boolean(rt._pendingJoinResolve);
+      const current = rt._hostId ? transport.peers().includes(rt._hostId) : false;
+      const expectingHost = pendingJoin || deps.state.recovery.phase !== "stable" || !current;
+      if (!expectingHost) return;
 
-      // Adopt the connecting peer as the host and mark recovery stable. That is all the recovery path
-      // needs. A pending join stays pending: a full host opens the channel too, so only its `roster` or
-      // `room-full` frame can settle the join (`handleRecoveryFrame`).
-      deps.state.selfId = deps.state.selfId || peerId; // keep our own id if already set
-      deps.state.recovery.phase = "stable";
-      rt._hostId = peerId;
+      adoptHost(deps, peerId);
     }
   });
 
@@ -91,8 +88,8 @@ export function registerTransportBindings(deps: SessionDeps): void {
 /**
  * `onInit` host-reload detection (§5.2). Reads back the `HostReentryRecord`; on a fresh hit it sets
  * `role:"host"`, restores `roomCode`/`hostToken`/`sSeqAtSnapshot`, instructs transport to REJOIN the same
- * room code, and emits `room:host-reconnecting {}`. No-op when there is no record. Note: on the reload path
- * this event fires BEFORE consumer hooks are wired — consumers must POLL `recoveryPhase()` (see README).
+ * room code, and emits `room:host-reconnecting {}`. No-op when there is no record. `reentryRecord()` hands the
+ * record to `sync`, whose `onInit` runs next.
  *
  * @param deps - This app's destructured per-instance pieces.
  * @example

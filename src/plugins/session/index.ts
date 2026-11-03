@@ -5,7 +5,8 @@
  * reconnectToken, 8-cap, star-topology enforcement), and the full CLIENT-SIDE host-reload recovery state
  * machine (D11): hostToken mint/verify peer-side, debounced IndexedDB + synchronous localStorage on
  * visibilitychange, rejoin-same-room, intent-buffer flush + reconcile, ~10s timeout, iOS "rescan QR"
- * degrade. Emits room:peer-joined, room:peer-left, room:host-reconnecting. Depends on transport.
+ * degrade. Emits room:peer-joined, room:peer-left, room:host-reconnecting, room:host-back. Depends on
+ * transport.
  *
  * Each extracted module (`api`/`handlers`/`lifecycle/*`/`recovery/*`) receives the destructured
  * `SessionDeps` bundle `makeSessionDeps` builds from the inferred `ctx` — so no domain module imports the
@@ -19,7 +20,7 @@ import { createPlugin } from "../../config";
 import { transportPlugin } from "../transport";
 import { createSessionApi, makeSessionDeps } from "./api";
 import { sessionConfig } from "./config";
-import { teardownSession } from "./recovery/persistence";
+import { stopSession } from "./recovery/persistence";
 import { detectHostReload, registerTransportBindings } from "./recovery/reentry";
 import { createSessionState } from "./state";
 
@@ -37,13 +38,18 @@ export const sessionPlugin = createPlugin("session", {
   config: sessionConfig,
   events: register =>
     register.map<
-      Pick<RoomEvents, "room:peer-joined" | "room:peer-left" | "room:host-reconnecting">
+      Pick<
+        RoomEvents,
+        "room:peer-joined" | "room:peer-left" | "room:host-reconnecting" | "room:host-back"
+      >
     >({
       "room:peer-joined":
         "A controller's DataChannel reached connected and was added to the roster.",
       "room:peer-left":
         "A controller left or was declared dead by the heartbeat and removed from the roster.",
-      "room:host-reconnecting": "The host tab reloaded; client-side recovery is in flight."
+      "room:host-reconnecting":
+        "The host is away: a controller lost its channel or saw a different host, or this host tab reloaded.",
+      "room:host-back": "A controller adopted the host after an absence."
     }),
   createState: createSessionState,
   api: ctx => createSessionApi(makeSessionDeps(ctx)),
@@ -54,6 +60,6 @@ export const sessionPlugin = createPlugin("session", {
     registerTransportBindings(deps);
     detectHostReload(deps);
   },
-  onStop: ({ state }) => teardownSession(state)
+  onStop: ({ state }) => stopSession(state)
 });
 /* eslint-enable jsdoc/require-jsdoc */

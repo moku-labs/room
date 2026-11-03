@@ -28,8 +28,13 @@ export type RoomEvents = {
   "room:peer-joined": { peerId: PeerId };
   /** A controller left or was declared dead by the heartbeat (§2.4) and removed from the roster. */
   "room:peer-left": { peerId: PeerId };
-  /** The host tab reloaded; recovery is in flight. Controllers should show "reconnecting" UX (§5). */
+  /**
+   * The host is away (§5). On a controller: the host channel was lost, or a different host appeared. Show
+   * "reconnecting" UX; intents buffer until `room:host-back`. On the host: this tab reloaded.
+   */
   "room:host-reconnecting": Record<string, never>;
+  /** A controller adopted the host after an absence (§5). Its buffered intents are on their way. */
+  "room:host-back": Record<string, never>;
   /** The first authoritative frame (snapshot, or gap-free delta) has been applied; replica readable (§4). */
   "room:sync-ready": Record<string, never>;
   /**

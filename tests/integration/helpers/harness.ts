@@ -15,6 +15,7 @@
  * `vi.waitFor(...)` rather than arbitrary sleeps.
  */
 
+import { vi } from "vitest";
 import type { RoomEvents } from "../../../src/config";
 import {
   controllerPlugin,
@@ -29,6 +30,9 @@ export type Bus = ReturnType<typeof inMemory>;
 
 /** One captured `room:*` lifecycle event observed by a consumer probe plugin. */
 export type CapturedEvent = { name: keyof RoomEvents; payload: unknown };
+
+/** The heartbeat timings a test shortens, so a lost peer is declared dead in milliseconds. */
+export type HeartbeatTimings = { heartbeatIntervalMs: number; heartbeatTimeoutMs: number };
 
 /**
  * A fresh, isolated in-process signaling bus. Create ONE per test and pass the SAME instance to every
@@ -60,17 +64,48 @@ export function makeServerBus(): Bus {
  *
  * @param bus - The in-process signaling bus to wire onto transport.
  * @param generateQr - Whether `session` should build QR matrix data. Default `false`.
+ * @param heartbeat - Heartbeat timings for transport. Default: the transport's own.
+ * @param reconnectTimeoutMs - The session's reconnect window. Default: the session's own.
  * @returns The `pluginConfigs` object to hand to `createApp`.
  */
-export function siteCfg(bus: Bus, generateQr = false) {
+export function siteCfg(
+  bus: Bus,
+  generateQr = false,
+  heartbeat?: HeartbeatTimings,
+  reconnectTimeoutMs?: number
+) {
   return {
-    transport: { signaling: bus },
-    session: { generateQr }
+    transport: { signaling: bus, ...heartbeat },
+    session: { generateQr, ...(reconnectTimeoutMs === undefined ? {} : { reconnectTimeoutMs }) }
   };
 }
 
 /**
- * The five-hook `room:*` capture map shared by both role probes. Every observed lifecycle event is
+ * Replaces `localStorage` with a `Map`, so a reload's re-entry record survives from one `createApp` to the
+ * next. Undo it with `vi.unstubAllGlobals()`.
+ *
+ * @returns The `Map` behind the stub.
+ */
+export function stubLocalStorage(): Map<string, string> {
+  const store = new Map<string, string>();
+  vi.stubGlobal("localStorage", {
+    get length(): number {
+      return store.size;
+    },
+    key: (index: number): string | null => [...store.keys()][index] ?? null,
+    getItem: (key: string): string | null => store.get(key) ?? null,
+    setItem: (key: string, value: string): void => {
+      store.set(key, value);
+    },
+    removeItem: (key: string): void => {
+      store.delete(key);
+    }
+  });
+  return store;
+}
+
+/**
+ * The six-hook `room:*` capture map shared by both role probes. Every observed lifecycle event is
  * pushed onto `captured` so a test can assert which events reached a `depends:[facade]` consumer.
  */
 function captureHooks(captured: CapturedEvent[]) {
@@ -83,6 +118,9 @@ function captureHooks(captured: CapturedEvent[]) {
     },
     "room:host-reconnecting": (p: RoomEvents["room:host-reconnecting"]): void => {
       captured.push({ name: "room:host-reconnecting", payload: p });
+    },
+    "room:host-back": (p: RoomEvents["room:host-back"]): void => {
+      captured.push({ name: "room:host-back", payload: p });
     },
     "room:sync-ready": (p: RoomEvents["room:sync-ready"]): void => {
       captured.push({ name: "room:sync-ready", payload: p });
@@ -126,9 +164,16 @@ export function makeStage(bus: Bus, probeName = "stageGameProbe", generateQr = f
  * Builds a CONTROLLER (phone) app from the public `[controllerPlugin]` plus a throwaway game probe
  * that `depends:[controllerPlugin]` and records every `room:*` event it sees. The returned app exposes
  * `app.controller`, `app.sync`, `app.session`, `app.intent`, `app.transport`. Give each controller a
- * unique `probeName` so multi-controller composition does not collide on plugin names.
+ * unique `probeName` so multi-controller composition does not collide on plugin names. Pass `heartbeat` when
+ * the test needs a lost host declared dead in milliseconds, and `reconnectTimeoutMs` when it needs a join to
+ * time out in milliseconds.
  */
-export function makeController(bus: Bus, probeName: string) {
+export function makeController(
+  bus: Bus,
+  probeName: string,
+  heartbeat?: HeartbeatTimings,
+  reconnectTimeoutMs?: number
+) {
   const captured: CapturedEvent[] = [];
 
   const probe = createPlugin(probeName, {
@@ -140,7 +185,7 @@ export function makeController(bus: Bus, probeName: string) {
 
   const app = createApp({
     plugins: [controllerPlugin, probe],
-    pluginConfigs: siteCfg(bus)
+    pluginConfigs: siteCfg(bus, false, heartbeat, reconnectTimeoutMs)
   });
 
   return { app, captured };
@@ -149,4 +194,9 @@ export function makeController(bus: Bus, probeName: string) {
 /** `true` iff a `room:*` event with `name` was captured by the probe. */
 export function sawEvent(captured: CapturedEvent[], name: keyof RoomEvents): boolean {
   return captured.some(e => e.name === name);
+}
+
+/** How many `room:*` events with `name` the probe captured. */
+export function countEvent(captured: CapturedEvent[], name: keyof RoomEvents): number {
+  return captured.filter(e => e.name === name).length;
 }

@@ -68,7 +68,7 @@ function makeDeps(overrides?: Partial<SessionDeps>): SessionDeps {
   return {
     state,
     config: testConfig,
-    emit: { peerJoined: vi.fn(), peerLeft: vi.fn(), hostReconnecting: vi.fn() },
+    emit: { peerJoined: vi.fn(), peerLeft: vi.fn(), hostReconnecting: vi.fn(), hostBack: vi.fn() },
     log: { warn: vi.fn() },
     requireTransport: vi.fn().mockReturnValue(transport),
     ...overrides
@@ -377,6 +377,48 @@ describe("createSessionApi", () => {
 
       expect(deps.state._reentryRecord).toBeNull();
       expect(deps.state._reentryClaimed).toBe(false);
+    });
+  });
+
+  describe("onRoomEnded", () => {
+    it("leave() calls it once the room is reset, and it survives for the next room's leave()", async () => {
+      const deps = makeDeps();
+      const api = createSessionApi(deps);
+      const roles: string[] = [];
+      api.onRoomEnded(() => roles.push(deps.state.role));
+
+      api.createRoom();
+      await api.leave();
+      expect(roles).toEqual(["none"]);
+
+      api.createRoom();
+      await api.leave();
+      expect(roles).toEqual(["none", "none"]);
+    });
+
+    it("leave() with no room to leave does not call it", async () => {
+      const api = createSessionApi(makeDeps());
+      const ended = vi.fn();
+      api.onRoomEnded(ended);
+
+      await api.leave();
+
+      expect(ended).not.toHaveBeenCalled();
+    });
+
+    it("the function it returns unsubscribes that callback only", async () => {
+      const api = createSessionApi(makeDeps());
+      const gone = vi.fn();
+      const kept = vi.fn();
+      const off = api.onRoomEnded(gone);
+      api.onRoomEnded(kept);
+
+      off();
+      api.createRoom();
+      await api.leave();
+
+      expect(gone).not.toHaveBeenCalled();
+      expect(kept).toHaveBeenCalledOnce();
     });
   });
 

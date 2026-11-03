@@ -5,7 +5,7 @@
  * Controller → host typed-input contract: typed intent registration + shape-checked, idempotent,
  * AT-LEAST-ONCE routing over the transport `Wire` (NOT emit) — live frames are receipt-acked by the
  * host and retransmitted (bounded) by the controller's delivery tracker — plus the reconnect
- * intent-buffer that `sessionPlugin` flushes. Declares ONE event (`room:intent-undeliverable`, the
+ * intent-buffer its `room:host-*` hooks fill and flush. Declares ONE event (`room:intent-undeliverable`, the
  * terminal retransmit-budget verdict) via the register-callback pattern (spec/14 §2). Owns ONE resource:
  * the delivery tracker's retransmit timer, stopped in `onStop` through this app's own state (the `Wire.on`
  * callback itself is still subsumed by `transport.onStop`). Depends on transport + session. No explicit
@@ -20,15 +20,16 @@ import { transportPlugin } from "../transport";
 import { createIntentApi } from "./api";
 import { DEFAULT_INTENT_CONFIG } from "./config";
 import { attachIntentReceive } from "./receive";
+import { createRecoveryHooks, endRoom } from "./recovery";
 import { createIntentState } from "./state";
 
-/* eslint-disable jsdoc/require-jsdoc -- structural wiring callbacks (events/api/onInit/onStart/onStop); domain JSDoc lives in the extracted state/api/delivery/receive modules */
+/* eslint-disable jsdoc/require-jsdoc -- structural wiring callbacks (events/api/hooks/onInit/onStop); domain JSDoc lives in the extracted state/api/delivery/receive/recovery modules */
 /**
  * `intentPlugin` — Standard tier.
  *
  * Controller → host typed-input contract: typed intent registration + shape-checked, idempotent,
- * at-least-once routing over the transport `Wire` (NOT emit), plus the reconnect intent-buffer that
- * `sessionPlugin` flushes. Live sends are receipt-acked (`intent-ack`) and retransmitted (bounded,
+ * at-least-once routing over the transport `Wire` (NOT emit), plus the reconnect intent-buffer its
+ * `room:host-*` hooks fill and flush. Live sends are receipt-acked (`intent-ack`) and retransmitted (bounded,
  * doubling backoff) until acked; exhaustion emits the ONE event this plugin owns —
  * `room:intent-undeliverable`. Owns the retransmit timer as its single resource (`onStart`/`onStop`
  * pair over the D14 registry). Depends on transport + session.
@@ -52,7 +53,12 @@ export const intentPlugin = createPlugin("intent", {
       () => ctx.require(sessionPlugin).hostId(),
       payload => ctx.emit("room:intent-undeliverable", payload)
     ),
-  onInit: ctx => attachIntentReceive(ctx.state, ctx.require(transportPlugin).wire()),
+  hooks: ctx =>
+    createRecoveryHooks(ctx.state, ctx.config, () => ctx.require(sessionPlugin).self().role),
+  onInit: ctx => {
+    attachIntentReceive(ctx.state, ctx.require(transportPlugin).wire());
+    ctx.require(sessionPlugin).onRoomEnded(() => endRoom(ctx.state, ctx.config));
+  },
   // @no-resource-check — onStop clears the delivery tracker's retransmit timer through THIS app's own
   // state (D14): since kernel 1.6 onStop gets `{ global, config, state }`. contracts section 4.3.
   onStop: ({ state }) => {

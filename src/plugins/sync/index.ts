@@ -5,7 +5,6 @@ import { transportPlugin } from "../transport";
 import { createSyncApi } from "./api";
 import { DEFAULT_SYNC_CONFIG } from "./config";
 import { createSyncState } from "./state";
-import type { State } from "./types";
 
 /* eslint-disable jsdoc/require-jsdoc -- structural wiring callbacks (api/onInit/events/hooks/onStart/onStop); domain JSDoc lives in the extracted state/api/engine/codec modules */
 /**
@@ -36,7 +35,12 @@ export const syncPlugin = createPlugin("sync", {
       ctx.require(sessionPlugin),
       () => ctx.emit("room:sync-ready", {})
     ),
-  onInit: ctx => ctx.state.engine?.init(),
+  // Session inits first (dependency order), so a host reload's record is already there.
+  onInit: ctx => {
+    ctx.state.engine?.init();
+    const record = ctx.require(sessionPlugin).reentryRecord();
+    if (record) ctx.state.engine?.importSnapshot(record.snapshot, record.sSeq);
+  },
   hooks: ctx => ({
     "room:peer-joined": payload => ctx.state.engine?.sendBaselineSnapshot(payload.peerId)
   }),

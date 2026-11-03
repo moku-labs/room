@@ -30,7 +30,7 @@ function makeDeps(state = createSessionState()): SessionDeps {
   return {
     state,
     config: testConfig,
-    emit: { peerJoined: vi.fn(), peerLeft: vi.fn(), hostReconnecting: vi.fn() },
+    emit: { peerJoined: vi.fn(), peerLeft: vi.fn(), hostReconnecting: vi.fn(), hostBack: vi.fn() },
     log: { warn: vi.fn() },
     requireTransport: vi.fn().mockReturnValue({
       connect: vi.fn().mockRejectedValue(new Error("not-found")),
@@ -234,7 +234,12 @@ describe("recovery/timeout", () => {
     const deps: SessionDeps = {
       state,
       config: testConfig,
-      emit: { peerJoined: vi.fn(), peerLeft: vi.fn(), hostReconnecting: vi.fn() },
+      emit: {
+        peerJoined: vi.fn(),
+        peerLeft: vi.fn(),
+        hostReconnecting: vi.fn(),
+        hostBack: vi.fn()
+      },
       log: { warn: vi.fn() },
       requireTransport: vi.fn().mockReturnValue(transport)
     };

@@ -52,7 +52,9 @@ function makeSession(): SessionApi {
     self: vi.fn(() => ({ selfId: "host", role: "host" as const, roomCode: "ABC123" })),
     hostId: vi.fn(() => "host"),
     persistSnapshot: vi.fn(),
-    recoveryPhase: vi.fn(() => "stable" as const)
+    recoveryPhase: vi.fn(() => "stable" as const),
+    reentryRecord: vi.fn(() => null),
+    onRoomEnded: vi.fn()
   };
 }
 
@@ -728,7 +730,10 @@ describe("engine", () => {
     expect(engine.read("round")).toEqual({ n: 2 });
 
     // `scores` was already registered, so a conflicting re-register still throws (it was not clobbered).
-    expect(() => engine.registerSlice("round", { n: 0 })).toThrow(/already registered/);
+    expect(() => engine.registerSlice("scores", { p1: 99 })).toThrow(/already registered/);
+    // `round` came from the import: its first registerSlice keeps the imported cells and does not throw.
+    expect(() => engine.registerSlice("round", { n: 0 })).not.toThrow();
+    expect(engine.read("round")).toEqual({ n: 2 });
   });
 
   // ─────────────────────────────────────────────────────────────────────────────

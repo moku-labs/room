@@ -12,7 +12,7 @@
    schema shape-check, is **dropped** (D6 — correctness, not security; no error channel back, no penalty).
 2. **Controller → host routing over the Wire (NOT emit).** `intent(name, payload)` stamps a monotonic
    per-controller `cSeq`, wraps an `IntentFrame`, and hands it to the at-least-once delivery tracker
-   toward the single host. This traffic NEVER flows through Moku `emit` — `emit` is reserved for the six
+   toward the single host. This traffic NEVER flows through Moku `emit` — `emit` is reserved for the seven
    coarse `room:*` lifecycle events, of which `intentPlugin` declares and emits exactly **one**
    (`room:intent-undeliverable`, the terminal delivery verdict below).
 3. **At-least-once live delivery (§4.3).** The wire is at-most-once (`Wire.send` silently discards on a
@@ -29,9 +29,15 @@
    controller, during a host absence every `intent()` is buffered as a timestamped queue entry — and
    `setBuffering(true)` first **retires the live delivery window into that buffer** (the §5 recovery
    contract subsumes the retransmit contract during a known host absence; no `intent-undeliverable`
-   fires for retired frames). `sessionPlugin`'s recovery state machine drains it via `drainBuffer()` into
-   a single `RecoveryFlushFrame`. The buffer is `bufferCap`-capped + `bufferMaxAgeMs`-pruned (lossy is
+   fires for retired frames). The buffer is `bufferCap`-capped + `bufferMaxAgeMs`-pruned (lossy is
    acceptable for high-frequency analog intents).
+5. **Following the host's absence (`recovery.ts`).** Two hooks, both guarded on the session role `controller`
+   (the host also emits `room:host-reconnecting`, on its own reload). `room:host-reconnecting` turns buffering
+   on. `room:host-back` turns it off, drains the buffer and sends each frame through the delivery tracker with
+   its own `cSeq`, in `cSeq` order, so the stop-and-wait rule above still holds. A restarted host has an empty
+   `lastApplied`, so a frame the old host applied but never acked applies twice. When the room itself ends
+   (`session.onRoomEnded`: a `leave()` or a failed first join), `endRoom` turns buffering off and drops the buffer,
+   so the next room's intents go live. No event fires for that.
 
 ## Role-agnostic
 
@@ -48,7 +54,7 @@ re-exposes which methods — nothing is role-flagged at construction.
 | `register(name, schema)` | host | Declare an intent kind + correctness-only shape-check. |
 | `onIntent(name, handler)` | host | Subscribe to validated, de-duplicated intents; returns an unsubscribe. |
 | `intent(name, payload)` | controller | Stamp `cSeq`, deliver at-least-once (or buffer) one typed intent over the Wire. |
-| `setBuffering(on)` | recovery seam | Toggle controller buffering during a host absence; ON retires the live delivery window into the buffer. |
+| `setBuffering(on)` | recovery seam | Toggle controller buffering; ON retires the live delivery window into the buffer. The plugin's hooks call the same code on a host absence. |
 | `drainBuffer()` | recovery seam | Atomically return + clear the pruned, `ts`-ordered buffer. |
 | `bufferedCount()` | recovery seam | Read the current buffered-intent count for reconnect UX. |
 
@@ -72,16 +78,17 @@ re-exposes which methods — nothing is role-flagged at construction.
 - `transportPlugin` — the `Wire` (`send` to route a live intent to the host and to return `intent-ack`
   receipts; `on` to receive inbound `t:"intent"` / `t:"intent-ack"` frames).
 - `sessionPlugin` — resolves the single host `PeerId` for `Wire.send` (re-resolved on every retransmit
-  attempt, so a pre-join send heals once the host is known), and is the **caller** for the buffer seam
-  (`setBuffering` / `drainBuffer`) during the `room:host-reconnecting` window. `intent` does NOT depend
+  attempt, so a pre-join send heals once the host is known), gives the role the hooks are guarded on, and
+  emits `room:host-reconnecting` + `room:host-back`, which drive the buffer, and calls back through
+  `onRoomEnded` when the room ends. `intent` does NOT depend
   on `sync` (D5) — that keeps it buildable + unit-testable in parallel with `sync`.
 
 ## Non-goals
 
 - **No gameplay on emit.** The one declared event (`room:intent-undeliverable`) is a coarse lifecycle
   verdict; intents themselves NEVER flow through Moku `emit`.
-- **No hooks.** The receive path is the transport `Wire.on` frame dispatch, not a Moku hook — so there
-  is no `handlers.ts`.
+- **No hook on the receive path.** It is the transport `Wire.on` frame dispatch, so there is no
+  `handlers.ts`. The only hooks are the two `room:host-*` ones in `recovery.ts`.
 - **No anti-cheat / rate-limit / HMAC.** Shape-checking is correctness-only (D6, trusted threat model).
 - **No application-level acks.** The `intent-ack` receipt confirms the frame reached the host's intent
   engine, NOT that a handler ran — an unregistered or shape-rejected intent is still acked (its silent

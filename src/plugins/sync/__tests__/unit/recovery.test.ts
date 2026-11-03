@@ -39,7 +39,9 @@ function makeSession(): SessionApi {
     self: vi.fn(() => ({ selfId: "host", role: "host" as const, roomCode: "ABC123" })),
     hostId: vi.fn(() => "host"),
     persistSnapshot: vi.fn(),
-    recoveryPhase: vi.fn(() => "stable" as const)
+    recoveryPhase: vi.fn(() => "stable" as const),
+    reentryRecord: vi.fn(() => null),
+    onRoomEnded: vi.fn()
   };
 }
 

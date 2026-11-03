@@ -2,8 +2,8 @@
  * @file Wire/peer-event handler FACTORIES (NOT Moku-`emit` hook handlers — `sessionPlugin` subscribes to
  * no Moku event; its inbound signals are the §2 wire + transport peer callbacks). Each factory closes over
  * THIS app's destructured `deps` (D14) and is a thin dispatcher delegating to `lifecycle/*` + `recovery/*`
- * (spec/15 §8 "no domain logic in handlers"). The ONLY `emit` calls here are the three owned `room:*`
- * events (via `deps.emit`).
+ * (spec/15 §8 "no domain logic in handlers"). The ONLY `emit` calls here are the owned `room:*` events (via
+ * `deps.emit`).
  * @see README.md
  */
 
@@ -128,8 +128,9 @@ export function handlePeerLost(deps: SessionDeps): (peerId: PeerId) => void {
 }
 
 /**
- * (Controller side) the host channel dropped: enter `recovery.phase = "host-absent"`, start buffering
- * intents, and arm the `reconnectTimeoutMs` timer (§5.3/§5.4).
+ * (Controller side) the host channel dropped: enter `recovery.phase = "host-absent"`, arm the
+ * `reconnectTimeoutMs` timer (§5.3/§5.4), and emit `room:host-reconnecting`. `intent` hears the event and
+ * starts buffering.
  *
  * @param deps - This app's destructured per-instance pieces.
  * @returns A function that processes the host channel loss event.
@@ -142,7 +143,44 @@ export function handleHostChannelLost(deps: SessionDeps): () => void {
   return () => {
     deps.state.recovery.phase = "host-absent";
     armReconnectTimeout(deps);
+    deps.emit.hostReconnecting({});
   };
+}
+
+/**
+ * (Controller side) takes `peerId` as the host. A different host while the phase is stable means the old one
+ * went and the heartbeat has not said so yet, so the host-absent entry runs first: `room:host-reconnecting`
+ * and `room:host-back` then fire once each, as on any other absence. A first join has no absence to end: its
+ * `_hostId` can still hold the host of a room this device left. Ending an absence also cancels the reconnect
+ * timer, which would otherwise rejoin behind the host that just came back. A pending join stays pending: a
+ * full host opens the channel too, so only its `roster` or `room-full` frame can settle the join.
+ *
+ * @param deps - This app's destructured per-instance pieces.
+ * @param peerId - The peer to take as the host.
+ * @example
+ * ```ts
+ * transport.onPeerConnected(peerId => adoptHost(deps, peerId));
+ * ```
+ */
+export function adoptHost(deps: SessionDeps, peerId: PeerId): void {
+  const { state } = deps;
+  const { recovery } = state;
+  const firstJoin = Boolean(state._pendingJoinResolve) && !state._pendingJoinKeepsRoom;
+  const differentHost = Boolean(state._hostId) && state._hostId !== peerId;
+  if (recovery.phase === "stable" && differentHost && !firstJoin) {
+    handleHostChannelLost(deps)();
+  }
+
+  const absenceEnds = recovery.phase !== "stable";
+  if (recovery.timer !== null) {
+    clearTimeout(recovery.timer);
+    recovery.timer = null;
+  }
+  recovery.reconnectDeadline = 0;
+  recovery.phase = "stable";
+  state.selfId = state.selfId || peerId; // keep our own id if already set
+  state._hostId = peerId;
+  if (absenceEnds) deps.emit.hostBack({});
 }
 
 /**
@@ -241,16 +279,26 @@ function handleRecoveryFlush(
  * one admits a pending join. The host and a device with no room ignore it. The frame's arrival is the
  * admission: the host sends `roster` only to devices it admitted, and a refused one gets `room-full`. Its keys
  * cannot prove it: `publicRendezvous` keys the roster by Trystero's peer id, not by this device's `selfId`.
+ * Only a host sends `roster`, so one from a peer that is not the known host is the reloaded host, up before
+ * the heartbeat saw the old one die: `transport.peers()` still lists the old one, so the connect callback
+ * could not tell. Waiting for the heartbeat would lose that callback for good, and stall the phone for
+ * `heartbeatTimeoutMs`.
  *
  * @param deps - This app's destructured per-instance pieces.
+ * @param peerId - The peer that sent the frame.
  * @param frame - The incoming `roster` frame.
  * @example
  * ```ts
- * handleRoster(deps, frame);
+ * handleRoster(deps, peerId, frame);
  * ```
  */
-function handleRoster(deps: SessionDeps, frame: Extract<Frame, { t: "roster" }>): void {
+function handleRoster(
+  deps: SessionDeps,
+  peerId: PeerId,
+  frame: Extract<Frame, { t: "roster" }>
+): void {
   if (deps.state.role !== "controller") return;
+  if (deps.state._hostId && deps.state._hostId !== peerId) adoptHost(deps, peerId);
   deps.state.roster = { ...frame.roster };
   settleJoin(deps, { ok: true, selfId: deps.state.selfId });
 }
@@ -261,7 +309,7 @@ function handleRoster(deps: SessionDeps, frame: Extract<Frame, { t: "roster" }>)
  * `RecoveryWelcomeFrame` (controller verifies the stored token, sends `RecoveryFlushFrame`, moves to
  * `"reconciling"`), `RecoveryFlushFrame` (host applies buffered intents in `cSeq` order, dropping
  * `cSeq <= lastApplied[peerId]` — §4.3 idempotence), `RosterFrame` (controller mirrors the
- * host-authoritative roster — §6.1 — and it admits a pending join), and `RoomFullFrame` (settles a pending
+ * host-authoritative roster — §6.1 — it admits a pending join, and its sender is the host), and `RoomFullFrame` (settles a pending
  * join as `full` — §6.2). Every other frame tag is ignored here (each plugin self-filters).
  *
  * @param deps - This app's destructured per-instance pieces.
@@ -290,7 +338,7 @@ export function handleRecoveryFrame(deps: SessionDeps): (peerId: PeerId, frame: 
         break;
       }
       case "roster": {
-        handleRoster(deps, frame);
+        handleRoster(deps, peerId, frame);
         break;
       }
       case "room-full": {

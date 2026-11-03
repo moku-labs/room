@@ -151,8 +151,7 @@ export type IntentRegistration = {
 
 /**
  * One timestamped, queued intent held on the controller during a host absence (recovery contract).
- * Plain-JSON so `sessionPlugin` can ship the drained array straight inside a `RecoveryFlushFrame`
- * with no re-encoding.
+ * Plain-JSON, so the entry survives any re-encoding on the way back to the wire.
  */
 export type BufferedIntent = {
   /** The fully-formed, `cSeq`-stamped frame that would have been sent live. */
@@ -229,7 +228,7 @@ export type IntentState = {
   lastApplied: Map<PeerId, number>;
   /** Controller-only: the next `cSeq` to stamp on an outbound `IntentFrame`; monotonic, increments per `intent()`. Starts `0`. */
   nextCSeq: number;
-  /** Controller-only: whether `intent()` enqueues to `buffer` instead of sending live. Toggled by `setBuffering()` from `sessionPlugin` recovery. Starts `false`. */
+  /** Controller-only: whether `intent()` enqueues to `buffer` instead of sending live. Toggled by `setBuffering()` from the `room:host-*` hooks. Starts `false`. */
   buffering: boolean;
   /** Controller-only: FIFO queue of timestamped intents accumulated while `buffering`. Capped/pruned per config; drained by `drainBuffer()`. Starts empty. */
   buffer: BufferedIntent[];
@@ -240,7 +239,7 @@ export type IntentState = {
 /**
  * The public API of the intent plugin. Role-agnostic surface (D5) — facades re-expose role subsets.
  * `register` / `onIntent` are host-authoritative; `intent` is controller-side; `setBuffering` /
- * `drainBuffer` / `bufferedCount` are the recovery seam shared with `sessionPlugin`.
+ * `drainBuffer` / `bufferedCount` are the recovery seam the plugin's `room:host-*` hooks drive.
  */
 export type IntentApi = {
   /**
@@ -300,33 +299,44 @@ export type IntentApi = {
   intent(name: string, payload: JsonValue): void;
 
   /**
-   * Recovery seam (called by `sessionPlugin`): toggles controller buffering. When `sessionPlugin`
-   * detects `room:host-reconnecting` it calls `setBuffering(true)`; on reconcile completion it calls
-   * `setBuffering(false)`. While `true`, `intent()` enqueues instead of sending.
+   * Recovery seam: toggles controller buffering. The plugin's own hooks drive it: `room:host-reconnecting`
+   * turns it on and `room:host-back` turns it off. While `true`, `intent()` enqueues instead of sending.
+   * Turning it on also retires the live window into the buffer.
    *
    * @param on - `true` to buffer subsequent intents; `false` to resume live sends.
+   * @example
+   * ```ts
+   * // A game holding its inputs through a pause screen of its own:
+   * app.intent.setBuffering(true);
+   * app.controller.intent("move", { dx: 1, dy: 0 }); // stays on the phone
+   * ```
    */
   setBuffering(on: boolean): void;
 
   /**
-   * Recovery seam (called by `sessionPlugin`): atomically returns the buffered, pruned, `ts`-ordered
-   * intents AND clears the buffer, for inclusion in a single `RecoveryFlushFrame`. Applies
+   * Recovery seam: atomically returns the buffered, pruned, `ts`-ordered intents AND clears the buffer. The
+   * plugin's `room:host-back` hook drains it and sends each frame through the delivery tracker. Applies
    * `bufferMaxAgeMs` pruning before returning so stale analog intents are not flushed.
    *
    * @returns The drained, ordered buffer (empty if nothing is queued).
    * @example
    * ```ts
-   * const buffered = intent.drainBuffer();
-   * wire.send(hostId, { t: "recovery-flush", buffered });
+   * // A game dropping the inputs it held through its own pause screen:
+   * app.intent.drainBuffer();
+   * app.intent.setBuffering(false);
    * ```
    */
   drainBuffer(): readonly BufferedIntent[];
 
   /**
    * Recovery seam: the current buffered-intent count (post-prune is NOT applied here — read-only peek).
-   * Used by `sessionPlugin` / consumers for reconnect UX ("12 inputs queued").
+   * Used by consumers for reconnect UX ("12 inputs queued").
    *
    * @returns The number of intents currently in the buffer.
+   * @example
+   * ```ts
+   * overlay.text = `${app.intent.bufferedCount()} inputs queued`;
+   * ```
    */
   bufferedCount(): number;
 };

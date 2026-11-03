@@ -80,6 +80,10 @@ export function createSyncEngine(
   // Stores the initial JSON string for idempotence checking.
   const registered = new Map<Namespace, string>();
 
+  // Namespaces importSnapshot restored that no registerSlice has claimed yet: their saved cells win over the
+  // initial the boot code passes on every load.
+  const restored = new Set<Namespace>();
+
   // Per-namespace onResyncRequest handlers (host-side gap notification).
   const resyncHandlers: Array<(peerId: PeerId) => void> = [];
 
@@ -409,6 +413,13 @@ export function createSyncEngine(
 
     registerSlice(ns: Namespace, initial: Cells): void {
       const initialJson = JSON.stringify(initial);
+
+      // A reload restored this slice: keep the saved cells. From here on the usual rules hold for `initial`.
+      if (restored.delete(ns)) {
+        registered.set(ns, initialJson);
+        return;
+      }
+
       const existing = registered.get(ns);
 
       if (existing !== undefined) {
@@ -555,11 +566,12 @@ export function createSyncEngine(
       state.snapshot = decodeSnapshot(snapshot);
       state.sSeq = sSeq;
 
-      // Register all restored namespaces
+      // Register all restored namespaces, and let the next registerSlice of each keep its cells.
       for (const ns of Object.keys(state.snapshot)) {
         const cells = state.snapshot[ns];
         if (cells && !registered.has(ns)) {
           registered.set(ns, JSON.stringify(cells));
+          restored.add(ns);
         }
       }
 

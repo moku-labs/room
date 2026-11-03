@@ -212,6 +212,19 @@ describe("session integration (inMemory)", () => {
     await expect(app.stop()).resolves.toBeUndefined();
   });
 
+  it("stop() clears the onRoomEnded callbacks: a leave() after it calls none", async () => {
+    const { app } = makeSessionApp(bus);
+    await app.start();
+    app.session.createRoom();
+    const ended = vi.fn();
+    app.session.onRoomEnded(ended);
+
+    await app.stop();
+    await app.session.leave();
+
+    expect(ended).not.toHaveBeenCalled();
+  });
+
   it("D14: stopping ONE of two app instances leaves the OTHER app's recoveryPhase/timers untouched", async () => {
     const bus2 = inMemory();
     const { app: app1 } = makeSessionApp(bus);
