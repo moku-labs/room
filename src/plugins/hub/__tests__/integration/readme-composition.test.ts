@@ -2,10 +2,11 @@
  * @file Guards the README's server-tier composition: the plugin list a reader copies must compose under
  * the real `@moku-labs/worker` `createApp` (`deployPlugin` depends on more plugins than it looks like).
  */
-import { readFileSync } from "node:fs";
+
 import * as worker from "@moku-labs/worker";
 import { describe, expect, it } from "vitest";
-import { hubPlugin } from "../../src/plugins/hub";
+import readme from "../../../../../README.md?raw";
+import { hubPlugin } from "../../index";
 
 /**
  * Reads the plugin names of the README's server-tier `createApp` example.
@@ -17,7 +18,6 @@ import { hubPlugin } from "../../src/plugins/hub";
  * ```
  */
 function readmePluginNames(): string[] {
-  const readme = readFileSync("README.md", "utf8");
   const start = readme.indexOf("// your-app/src/server.ts");
   const list = /plugins: \[([^\]]+)\]/.exec(readme.slice(start))?.[1] ?? "";
   return list.split(",").map(name => name.trim());
