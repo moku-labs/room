@@ -52,6 +52,9 @@ After a host reload, the first call for a restored namespace keeps the saved cel
 and does not throw, so the boot code stays the same on every load. A second call follows the rules above,
 against the `initial` of that first call. A namespace the record does not hold starts from `initial` as usual.
 
+A slice stays registered when the room ends (see [When a room ends](#when-a-room-ends)), so the next room on the same
+app needs no second call.
+
 ### `mutate(ns: Namespace, recipe: (draft: { readonly [key: string]: JsonValue }) => { readonly [key: string]: JsonValue }): void`
 
 Mutates a registered slice (host only). `recipe` receives a draft of the namespace's cells and returns
@@ -100,7 +103,7 @@ this replica. The first applied snapshot emits `room:sync-ready`. Non-sync frame
 ### `isReady(): boolean`
 
 Whether the first snapshot has been applied and the synced state is readable (contracts section 3.1,
-section 4). Mirrors `room:sync-ready` for pull-style checks.
+section 4). Mirrors `room:sync-ready` for pull-style checks. On a controller it goes back to `false` when the room ends.
 
 **Shared / Recovery seam (consumed by `sessionPlugin`, contracts section 5)**
 
@@ -139,14 +142,25 @@ section 2.7).
 
 | Event | Payload | Description |
 |-------|---------|-------------|
-| `room:sync-ready` | `Record<string, never>` (`{}`) | First authoritative snapshot applied; the synced replica is now readable. Emitted exactly once, on the `ready` transition `false -> true` (host: after the first `registerSlice` + baseline export; controller: on the first applied `sync-snap`). |
+| `room:sync-ready` | `Record<string, never>` (`{}`) | First authoritative snapshot applied; the synced replica is now readable. Emitted on the `ready` transition `false -> true` (host: after the first `registerSlice` + baseline export, and a host stays ready across rooms; controller: on the first applied `sync-snap` or delta of each room). |
+
+## When a room ends
+
+`sync` registers on `session.onRoomEnded` in `onInit`: a `leave()` or a failed first join runs the engine's `reset()`.
+It emits nothing and notifies no subscriber.
+
+| | After the room ends |
+|---|---|
+| A host | Registered slices stay, each back at its initial. `sSeq` is `0`, nothing is dirty, and it stays ready. `mutate` works in the next room with no second `registerSlice`, and a different initial still throws. |
+| A reloaded host | A slice restored from the record that no `registerSlice` claimed is gone, so `registerSlice` takes the real initial. |
+| A controller | The replica is empty, `read` gives `undefined`, `sSeq` is `0`, and it is not ready or stale. Its next room goes as its first did: the baseline retry asks again, and `room:sync-ready` fires again. |
 
 ## Dependencies
 
 | Plugin | Role | Reason |
 |--------|------|--------|
 | `transportPlugin` | required engine | Broadcasting frames + receiving inbound sync frames. `ctx.require(transportPlugin).wire()` yields the contracts section 2 `Wire`, whose `broadcast(frame)`, `send(peerId, frame)`, and `on(handler)` carry ALL sync wire I/O (host deltas, single-peer snapshots, inbound routing). Never `emit`. |
-| `sessionPlugin` | required engine | Roster / `PeerId` access for single-peer baseline snapshots on join/late-join (contracts section 6), the `room:peer-joined` hook that triggers a baseline snapshot for a new peer, and the recovery seam (`sync` hands each broadcast to `session.persistSnapshot()`, and reads `session.reentryRecord()` in `onInit`, contracts section 5). |
+| `sessionPlugin` | required engine | Roster / `PeerId` access for single-peer baseline snapshots on join/late-join (contracts section 6), the `room:peer-joined` hook that triggers a baseline snapshot for a new peer, and the recovery seam (`sync` hands each broadcast to `session.persistSnapshot()`, and reads `session.reentryRecord()` in `onInit`, contracts section 5). `session.onRoomEnded` runs the reset of [When a room ends](#when-a-room-ends). |
 
 `intentPlugin` is **not** a dependency: the host applies a `mutate` as a result of a game-defined
 `onIntent` handler, but that call originates in the game plugin, not in `sync` (the two are parallel in

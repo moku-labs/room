@@ -289,7 +289,7 @@ type ServerEnvelope =
  *  the host drops any cSeq <= lastApplied[peerId]. Shape-checked only (D6 — no anti-cheat/HMAC). Delivery is
  *  at-least-once: the host receipt-acks every received frame (IntentAckFrame) and the controller retransmits the
  *  SAME frame (same cSeq — safe under the de-dup) until acked or the bounded budget exhausts
- *  (room:intent-undeliverable). */
+ *  (room:intent-undeliverable). cSeq counts within one run: one app's stream of frames. */
 type IntentFrame = {
   readonly t: "intent";
   /** Registered intent name (the intent contract key). */
@@ -298,6 +298,9 @@ type IntentFrame = {
   readonly payload: unknown;
   /** Monotonic per-controller sequence number. */
   readonly cSeq: number;
+  /** The sending app's run: random, one per app. When it differs from the peer's last run, the host clears that
+   *  peer's lastApplied before the de-dup. A frame with no run counts as run "". */
+  readonly run?: string;
 };
 
 /** Host -> controller wire-level receipt for a received intent frame — sent for fresh AND duplicate frames,
@@ -446,7 +449,7 @@ these events.
 | `room:peer-left` | `{ peerId: PeerId }` | session | Controller left or heartbeat-declared dead; removed from roster. |
 | `room:host-reconnecting` | `Record<string, never>` (`{}`) | session | The host is away. On a controller: its channel was lost, or a different host appeared; intents buffer. On the host: this tab reloaded. |
 | `room:host-back` | `Record<string, never>` (`{}`) | session | A controller adopted the host after an absence; its buffered intents are on their way. |
-| `room:sync-ready` | `Record<string, never>` (`{}`) | sync | First full snapshot applied; replica readable. |
+| `room:sync-ready` | `Record<string, never>` (`{}`) | sync | First full snapshot applied; replica readable. A controller hears it once per room. |
 | `room:intent-undeliverable` | `{ name: string; cSeq: number }` | intent | A LIVE intent exhausted its bounded retransmit budget with no wire receipt (the at-least-once terminal verdict); every intent queued behind it drops with its own event. Buffered intents (host absence) follow the recovery contract instead. A verdict, not a latch — a later `intent()` starts a fresh tracked cycle. |
 | `room:network-warning` | `{ reason: "ice-failed" \| "rendezvous-unreachable" \| "channel-closed" \| "room-evicted" }` | transport | Connectivity hard-failure UX hook (D2). `room-evicted` is server-tier only (`serverSignaling` received `{kind:"evict"}` from the DO Alarm). |
 
@@ -491,7 +494,8 @@ type TransportApi = {
   /** Opens the transport: joins the signaling room; host = active offerer, controller = passive. Idempotent per
    *  code. Resolves when the signaling session is live (NOT once peers connect). Throws (and emits
    *  room:network-warning { reason: "rendezvous-unreachable" }) if no relay is reachable. Throws RoomFullError with
-   *  no warning on the hub's `full` envelope: fullness is a join result, not a connectivity event. */
+   *  no warning on the hub's `full` envelope: fullness is a join result, not a connectivity event. A connect with a
+   *  reclaim token that fails throws with no warning too: session joins again with no token, and that connect warns. */
   connect(opts: { readonly role: "host" | "controller"; readonly selfId: PeerId; readonly code: string }): Promise<void>;
   /** Returns the stable typed Wire (same instance every call). */
   wire(): Wire;
@@ -634,8 +638,9 @@ at couch-LAN RTTs against human input rates.
 type IntentApi = {
   /** Host: declares an intent kind + its correctness-only shape-check. Idempotent per name (last wins). */
   register(name: string, schema: IntentSchema): void;
-  /** Host: subscribes the single handler for a registered kind. Runs only for inbound frames that name a
-   *  registered kind, pass the schema, and are not a duplicate (cSeq > lastApplied[peerId]). Returns unsubscribe. */
+  /** Host: subscribes the single handler for a registered kind. Runs only for inbound frames from a peer with a seat
+   *  in the roster that name a registered kind, pass the schema, and are not a duplicate (cSeq > lastApplied[peerId],
+   *  within the peer's run). Returns unsubscribe. */
   onIntent(name: string, handler: IntentHandler): () => void;
   /** Controller: stamps the next cSeq, builds an IntentFrame, and EITHER hands it to the at-least-once live
    *  delivery tracker (retransmitted until the host's intent-ack receipt, or dropped with
@@ -726,7 +731,8 @@ type SyncApi = {
   /** Applies one inbound host frame to the replica (controller). Called by transport's frame dispatch for
    *  sync-snap / sync-delta. First applied snapshot emits room:sync-ready. Non-sync frames ignored. */
   applyFrame(frame: Frame): void;
-  /** Whether the first snapshot has been applied and the synced state is readable. Mirrors room:sync-ready. */
+  /** Whether the first snapshot has been applied and the synced state is readable. Mirrors room:sync-ready. On a
+   *  controller it goes back to false when the room ends. */
   isReady(): boolean;
 
   // --- Shared / recovery seam (consumed by session) ---
@@ -1051,7 +1057,15 @@ flushes as soon as the channel opens, and a host acks and drops an intent kind i
 early in the boot code.
 
 `session.leave()` is the opposite of a reload: it deletes the record with no final write, so the next load starts with
-no room (`role` is `"none"`), and `createRoom()` opens a new room on the same app. `app.stop()` keeps the record.
+no room (`role` is `"none"`), and `createRoom()` opens a new room on the same app. `app.stop()` keeps the record, and a
+flush sets its `savedAt` to now, so an idle lobby stays resumable. A reload whose reclaim is refused (`serverSignaling`)
+joins the same code again with no token, and the record keeps the new token. The refusal fires no `room:network-warning`
+unless that fresh join fails too.
+
+When a room ends (`leave()` or a failed first join), `sync` resets. A host's slices stay registered, back at their
+initial, with `sSeq` 0, so the next room needs no second `registerSlice`. A slice restored and never claimed is gone. A
+controller's replica empties, its baseline retry asks again, and `room:sync-ready` fires again in its next room. `intent`
+drops the room's unacked frames, so none reaches the next host and no `room:intent-undeliverable` fires.
 
 ---
 

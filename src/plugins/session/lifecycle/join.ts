@@ -8,6 +8,9 @@
 import type { JoinResult, SessionDeps, SessionState } from "../types";
 import { forgetSelfId } from "./self-id";
 
+/** How long a failed first join waits for the transport to close. A socket on dead Wi-Fi can take far longer. */
+const JOIN_CLOSE_WAIT_MS = 1000;
+
 /**
  * Runs the `onRoomEnded` callbacks: this device's room is over.
  *
@@ -25,10 +28,11 @@ export function notifyRoomEnded(state: SessionState): void {
  * Settles the pending join with `result`. A no-op when none is pending, so a stray frame changes nothing. A
  * failed first join leaves no room behind: `role` `"none"`, `roomCode` `""`, no host id, no recovery running
  * (a refused device whose `room-full` frame was lost sees its host die on the heartbeat before the timeout),
- * transport closed. The promise resolves only after the close finished, so a retry made on the result never
- * races the teardown; `close()` keeps the wiring, so that retry is heard by the same consumers. That is also the
- * end of the room, so the `onRoomEnded` callbacks run. A failed re-entry (`rejoin`) keeps the room, and the
- * transport stays open for the host to come back on. A `full` result, on either path, forgets this tab's saved id.
+ * transport closed. The promise resolves when the close finished, or after {@link JOIN_CLOSE_WAIT_MS} when it hangs:
+ * a retry made on the result does not race a normal teardown, and a dead socket cannot hold the caller. `close()`
+ * keeps the wiring, so that retry is heard by the same consumers. That is also the end of the room, so the
+ * `onRoomEnded` callbacks run. A failed re-entry (`rejoin`) keeps the room, and the transport stays open for the host
+ * to come back on. A `full` result, on either path, forgets this tab's saved id.
  *
  * @param deps - This app's destructured per-instance pieces.
  * @param result - The join's outcome.
@@ -65,13 +69,17 @@ export function settleJoin(deps: SessionDeps, result: JoinResult): void {
   }
   state.recovery.phase = "stable";
   state.recovery.reconnectDeadline = 0;
-  deps
-    .requireTransport()
-    .close()
+
+  let closeTimer: ReturnType<typeof setTimeout> | undefined;
+  const closeDeadline = new Promise<void>(done => {
+    closeTimer = setTimeout(done, JOIN_CLOSE_WAIT_MS);
+  });
+  Promise.race([deps.requireTransport().close(), closeDeadline])
     .catch(() => {
       // A failed teardown is best-effort: the caller still gets the join's result.
     })
     .finally(() => {
+      clearTimeout(closeTimer);
       resolve(result);
       // Same tick: the caller's continuation runs after this, so a retry made on the result finds it done.
       notifyRoomEnded(state);

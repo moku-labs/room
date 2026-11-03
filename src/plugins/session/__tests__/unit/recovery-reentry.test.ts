@@ -97,6 +97,30 @@ function stateWithSelfId(): ReturnType<typeof createSessionState> {
   return state;
 }
 
+/** Restores a record that carries a reclaim token, over a transport whose first connect rejects. */
+function reloadWithRejectedReclaim(record: Partial<HostReentryRecord>): SessionDeps {
+  vi.spyOn(persistence, "readReentryRecord").mockReturnValue({
+    roomCode: "RELOAD4",
+    hostToken: "tok-4",
+    snapshot: {},
+    sSeq: 1,
+    savedAt: 1_700_000_000_003,
+    ...record
+  });
+  vi.spyOn(persistence, "armPersistence").mockReturnValue({
+    flushNow: vi.fn(),
+    dispose: vi.fn(),
+    discard: vi.fn(),
+    _update: vi.fn(),
+    _setReclaimToken: vi.fn()
+  });
+  const state = createSessionState();
+  state.selfId = "host-v2";
+  const deps = makeDeps(state, () => Promise.reject(new Error("reclaim-rejected")));
+  detectHostReload(deps);
+  return deps;
+}
+
 describe("recovery/reentry", () => {
   afterEach(() => {
     vi.restoreAllMocks();
@@ -668,6 +692,23 @@ describe("recovery/reentry", () => {
     });
   });
 
+  describe("doJoinRoom over a pending join", () => {
+    it("the first promise resolves unreachable, and the second is the live join", async () => {
+      const deps = makeDeps(stateWithSelfId());
+      registerTransportBindings(deps);
+
+      const first = doJoinRoom(deps, "TEST01");
+      const second = doJoinRoom(deps, "TEST01");
+      deliverRoster("me");
+
+      await expect(second).resolves.toEqual({ ok: true, selfId: "me" });
+      await expect(Promise.race([first, Promise.resolve("still pending")])).resolves.toEqual({
+        ok: false,
+        reason: "unreachable"
+      });
+    });
+  });
+
   describe("detectHostReload", () => {
     it("no record: no-op (role stays none, no connect, no event)", () => {
       // In bun/node there is no localStorage, so readReentryRecord returns null.
@@ -694,7 +735,8 @@ describe("recovery/reentry", () => {
         flushNow: vi.fn(),
         dispose: vi.fn(),
         discard: vi.fn(),
-        _update: vi.fn()
+        _update: vi.fn(),
+        _setReclaimToken: vi.fn()
       };
       const readSpy = vi.spyOn(persistence, "readReentryRecord").mockReturnValue(record);
       const armSpy = vi.spyOn(persistence, "armPersistence").mockReturnValue(fakeHandle);
@@ -741,7 +783,8 @@ describe("recovery/reentry", () => {
         flushNow: vi.fn(),
         dispose: vi.fn(),
         discard: vi.fn(),
-        _update: vi.fn()
+        _update: vi.fn(),
+        _setReclaimToken: vi.fn()
       });
 
       const deps = makeDeps();
@@ -767,7 +810,8 @@ describe("recovery/reentry", () => {
         flushNow: vi.fn(),
         dispose: vi.fn(),
         discard: vi.fn(),
-        _update: vi.fn()
+        _update: vi.fn(),
+        _setReclaimToken: vi.fn()
       });
 
       const state = createSessionState();
@@ -783,6 +827,25 @@ describe("recovery/reentry", () => {
       );
     });
 
+    it("a failed connect with no token is not retried: there is no reclaim to fall back from", async () => {
+      const deps = reloadWithRejectedReclaim({});
+
+      await new Promise(resolve => setTimeout(resolve, 0));
+
+      expect(vi.mocked(deps.requireTransport().connect)).toHaveBeenCalledTimes(1);
+    });
+
+    it("a reclaim refused after the room ended is not retried: nobody wants that room any more", async () => {
+      const deps = reloadWithRejectedReclaim({ reclaimToken: "old" });
+      deps.state.role = "none";
+      deps.state.roomCode = "";
+      deps.state.recovery.persistHandle = null;
+
+      await new Promise(resolve => setTimeout(resolve, 0));
+
+      expect(vi.mocked(deps.requireTransport().connect)).toHaveBeenCalledTimes(1);
+    });
+
     it("with a record: a rejected transport.connect is swallowed (no throw)", async () => {
       const record: HostReentryRecord = {
         roomCode: "RELOAD3",
@@ -796,7 +859,8 @@ describe("recovery/reentry", () => {
         flushNow: vi.fn(),
         dispose: vi.fn(),
         discard: vi.fn(),
-        _update: vi.fn()
+        _update: vi.fn(),
+        _setReclaimToken: vi.fn()
       });
 
       const deps = makeDeps(createSessionState(), () => Promise.reject(new Error("net down")));

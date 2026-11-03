@@ -299,6 +299,24 @@ describe("serverSignaling — full → RoomFullError", () => {
   });
 });
 
+describe("serverSignaling — a close before the ack", () => {
+  it("rejects the join: the hub refused a reclaim and closed the socket", {
+    timeout: 200
+  }, async () => {
+    const sig = serverSignaling("wss://room.example.com");
+    const joinPromise = sig.join("K7M2QX", { selfId: "host_v2", reclaimToken: "old-token" });
+    await vi.waitFor(() => expect(MockWebSocket.instances).toHaveLength(1));
+    const ws = MockWebSocket.instances[0];
+    if (!ws) throw new Error("expected a mock WS instance");
+
+    ws.open();
+    ws.receiveFromServer({ kind: "error", code: 1008, message: "reclaim-rejected" });
+    ws.close(1008, "reclaim-rejected");
+
+    await expect(joinPromise).rejects.toThrow(/closed/);
+  });
+});
+
 describe("serverSignaling — leave → ws.close(1000)", () => {
   it("closes the WS with code 1000 on leave()", async () => {
     const { session, ws } = await openSession();

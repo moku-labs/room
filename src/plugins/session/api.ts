@@ -138,6 +138,12 @@ export function createSessionApi(deps: SessionDeps): SessionApi {
 
       const transport = deps.requireTransport();
 
+      // Before the close: a reconnect timer that comes due during it would connect a device that is leaving.
+      if (deps.state.recovery.timer !== null) {
+        clearTimeout(deps.state.recovery.timer);
+        deps.state.recovery.timer = null;
+      }
+
       // Close all connections.
       await transport.close();
 

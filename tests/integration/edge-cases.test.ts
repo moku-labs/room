@@ -13,6 +13,8 @@
  */
 import { describe, expect, it, vi } from "vitest";
 import { createApp, MAX_CONTROLLERS, RoomFullError, stagePlugin } from "../../src/index";
+import type { LoopbackSignaling } from "../../src/plugins/transport/channel";
+import type { SignalingSession } from "../../src/plugins/transport/protocol";
 import type { Bus } from "./helpers/harness";
 import { makeBus, makeController, makeStage, sawEvent, siteCfg } from "./helpers/harness";
 
@@ -229,6 +231,47 @@ describe("room edge cases — a full room is a join result", () => {
     await stage.stop();
   });
 
+  it("a refused peer's intent inside the close delay is acked and never reaches the handler", async () => {
+    const bus = makeBus();
+    const stage = makeCappedStage(bus, 1);
+    await stage.start();
+    const { code } = stage.stage.createRoom();
+    const taps: string[] = [];
+    stage.intent.register("tap", { fields: {}, additionalFields: true });
+    stage.stage.onIntent("tap", (_payload, peerId) => {
+      taps.push(peerId);
+    });
+    const seated = makeController(bus, "seatSeated");
+    await seated.app.start();
+    await seated.app.session.joinRoom(code);
+
+    // A bare peer on the bus: it keeps its end of the channel open after room-full, for the whole close delay.
+    const refused = (await bus.join(code, {
+      selfId: "refused",
+      passive: true
+    })) as SignalingSession & LoopbackSignaling;
+    const pipe = refused.openWireChannel(stage.session.self().selfId);
+    const seen: string[] = [];
+    if (!pipe) throw new Error("expected a pipe to the host");
+    // eslint-disable-next-line unicorn/prefer-add-event-listener -- WireChannel.onmessage is the channel's one message sink
+    pipe.onmessage = event => {
+      seen.push((JSON.parse(event.data) as { t: string }).t);
+    };
+
+    pipe.send(JSON.stringify({ t: "intent", name: "tap", payload: {}, cSeq: 0, run: "r" }));
+    await vi.waitFor(() => expect(seen).toContain("intent-ack"));
+    expect(seen).toContain("room-full");
+    expect(taps).toEqual([]);
+
+    // The seated phone on the same host still reaches the handler.
+    seated.app.controller.intent("tap", {});
+    await vi.waitFor(() => expect(taps).toEqual([seated.app.session.self().selfId]));
+
+    await refused.leave();
+    await seated.app.stop();
+    await stage.stop();
+  });
+
   it("a roster broadcast inside the close delay reaches the refused device and does not admit it", async () => {
     const bus = makeBus();
     const stage = makeCappedStage(bus, 1);
@@ -345,6 +388,17 @@ describe("room edge cases — a full room is a join result", () => {
 
     await Promise.all([...players, refused].map(controller => controller.app.stop()));
     await stage.stop();
+  });
+});
+
+describe("room edge cases — a non-secure page", () => {
+  it("createApp does not throw where crypto.randomUUID does not exist", () => {
+    vi.stubGlobal("crypto", {});
+    try {
+      expect(() => makeController(makeBus(), "phoneOnHttp")).not.toThrow();
+    } finally {
+      vi.unstubAllGlobals();
+    }
   });
 });
 

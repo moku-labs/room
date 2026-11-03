@@ -23,6 +23,7 @@ type PersistHandleWithUpdate = {
   dispose(): void;
   discard(): void;
   _update(record: HostReentryRecord, scheduleIdb: boolean): void;
+  _setReclaimToken(token: string): void;
 };
 
 /** Minimal config for persistence tests. */
@@ -391,7 +392,13 @@ describe("recovery/persistence", () => {
 
     const flushNow = vi.fn();
     const dispose = vi.fn();
-    state.recovery.persistHandle = { flushNow, dispose, discard: vi.fn(), _update: vi.fn() };
+    state.recovery.persistHandle = {
+      flushNow,
+      dispose,
+      discard: vi.fn(),
+      _update: vi.fn(),
+      _setReclaimToken: vi.fn()
+    };
 
     const timerHandle = setTimeout(() => {}, 99_999);
     state.recovery.timer = timerHandle;

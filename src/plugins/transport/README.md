@@ -29,11 +29,11 @@ refusal of one join, and `sessionPlugin` consumes it.
 
 | Method | Description |
 |---|---|
-| `connect(opts)` | Joins the signaling room on demand (host active / controller passive). Rejects with `RoomFullError` (from `protocol.ts`) on the hub's `full` envelope, with no `room:network-warning`: fullness is a join result, not a connectivity event. A join that lands after a `close()` releases its session. |
+| `connect(opts)` | Joins the signaling room on demand (host active / controller passive). Rejects with `RoomFullError` (from `protocol.ts`) on the hub's `full` envelope, with no `room:network-warning`: fullness is a join result, not a connectivity event. A hub socket that closes before its ack rejects too: that is how the hub refuses a reclaim. A connect with a `reclaimToken` that fails rejects with no warning, because `sessionPlugin` joins again with no token, and that connect warns if the hub is really gone. A join that lands after a `close()` releases its session. |
 | `wire()` | Returns the stable typed `Wire` for send/broadcast/on. |
 | `disconnect(peerId)` | Tears down one peer. |
 | `peers()` | Read-only snapshot of connected peer ids. |
-| `close()` | Closes all peers, stops the heartbeat, leaves the signaling session. |
+| `close()` | Closes all peers, stops the heartbeat, leaves the signaling session. A `connect()` made while it still leaves keeps its role and `selfId`. |
 | `reclaimToken()` | The DO-issued host re-entry token from the active `serverSignaling` session, or `null` for `publicRendezvous`/`inMemory` (no Durable Object). Read by `sessionPlugin` to persist the host-reload reclaim credential (§1.3/§5.1, D25). |
 | `onPeerConnected(cb)` | Registers the consumer fired when a peer's gameplay channel opens (host: a controller connected; controller: the host connected). Latest registration wins; returns an unsubscribe. Used by `sessionPlugin` to emit `room:peer-joined`. |
 | `onPeerLost(cb)` | Registers the consumer fired when an established peer is lost via the heartbeat dead-peer path (§2.4), or, on the host, when a handshake dies: past the retry cap, or the peer left signaling. A peer that never connected is reported too. NOT on clean teardown/`close()`/`disconnect()`, or when a known id is replaced. Latest registration wins; returns an unsubscribe. Used by `sessionPlugin` to emit `room:peer-left`, which ignores an id not in the roster. |

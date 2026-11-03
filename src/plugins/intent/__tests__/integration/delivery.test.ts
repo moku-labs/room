@@ -201,6 +201,50 @@ describe("intent delivery — at-least-once over a lossy inMemory wire", () => {
 });
 
 // ---------------------------------------------------------------------------
+// The end of a room ends the delivery of its frames
+// ---------------------------------------------------------------------------
+
+describe("intent delivery — a room ends with a frame unacked", () => {
+  it("leave: no frame reaches the next room, and no room:intent-undeliverable fires", async () => {
+    const undeliverable: Array<{ name: string; cSeq: number }> = [];
+    const flags = { dead: true };
+    const bus = lossySignaling(
+      inMemory(),
+      (data, opts) => flags.dead && opts.passive === true && frameTag(data) === "intent"
+    );
+    const budget = { ackTimeoutMs: 10, maxRetransmits: 2 };
+    const firstHost = makeApp(bus, budget);
+    const nextHost = makeApp(bus, budget);
+    const phone = makeApp(bus, budget, payload => undeliverable.push(payload));
+    await Promise.all([firstHost.start(), nextHost.start(), phone.start()]);
+    const received: number[] = [];
+    nextHost.intent.register("lock", lockSchema);
+    nextHost.intent.onIntent("lock", (_payload, meta) => received.push(meta.cSeq));
+
+    try {
+      await phone.session.joinRoom(firstHost.session.createRoom().code);
+      phone.intent.intent("lock", { qid: 1 }); // in flight: this transmission vanishes
+      phone.intent.intent("lock", { qid: 2 }); // queued behind it
+
+      await phone.session.leave();
+      flags.dead = false;
+      await phone.session.joinRoom(nextHost.session.createRoom().code);
+
+      // Longer than the whole budget of 10 + 20 + 40 ms.
+      await new Promise(resolve => setTimeout(resolve, 120));
+      expect(received).toEqual([]);
+      expect(undeliverable).toEqual([]);
+
+      // The window is free: the next room's intent goes straight out.
+      phone.intent.intent("lock", { qid: 3 });
+      await vi.waitFor(() => expect(received).toEqual([2]));
+    } finally {
+      await Promise.all([firstHost.stop(), nextHost.stop(), phone.stop()]);
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
 // Terminal room:intent-undeliverable on a dead wire
 // ---------------------------------------------------------------------------
 

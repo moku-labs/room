@@ -227,7 +227,7 @@ export type HostReentryRecord = {
   readonly snapshot: Snapshot;
   /** The `sSeq` (§4.3) the snapshot represents — stamped into the re-entry `RecoveryWelcomeFrame`. */
   readonly sSeq: number;
-  /** Epoch-ms the record was written (staleness check on reload). */
+  /** Epoch-ms the record was last written to `localStorage`, set at each flush (staleness check on reload). */
   readonly savedAt: number;
   /**
    * (`serverSignaling` deployments only) The DO-issued host re-entry token captured from

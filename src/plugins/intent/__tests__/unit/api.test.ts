@@ -87,7 +87,7 @@ describe("createIntentApi — controller intent()", () => {
 
   it("stamps a monotonic cSeq starting at 0 and increments across calls (ack releases each next send)", () => {
     // The receive path routes the host's intent-ack receipts to the delivery tracker (same state).
-    attachIntentReceive(state, fakeWire.wire);
+    attachIntentReceive(state, fakeWire.wire, () => true);
     const api = createIntentApi(state, defaultConfig, fakeWire.wire, () => hostId, vi.fn());
 
     // Stop-and-wait: only the first frame transmits; the rest queue behind it in cSeq order.
@@ -117,8 +117,33 @@ describe("createIntentApi — controller intent()", () => {
       t: "intent",
       name: "jump",
       payload: { height: 1 },
-      cSeq: 0
+      cSeq: 0,
+      run: expect.any(String)
     });
+  });
+
+  it("one app stamps one run on every frame, live and buffered; another app has another run", () => {
+    const api = createIntentApi(state, defaultConfig, fakeWire.wire, () => hostId, vi.fn());
+    api.intent("jump", { height: 1 });
+    api.setBuffering(true);
+    api.intent("jump", { height: 2 });
+
+    const [live, buffered] = api.drainBuffer().map(entry => entry.intent.run);
+    expect(live).toEqual(expect.any(String));
+    expect(live).not.toBe("");
+    expect(buffered).toBe(live);
+
+    const otherWire = makeFakeWire();
+    const other = createIntentApi(
+      createIntentState(),
+      defaultConfig,
+      otherWire.wire,
+      () => hostId,
+      vi.fn()
+    );
+    other.intent("jump", { height: 1 });
+    const [, otherFrame] = otherWire.send.mock.calls[0] ?? [];
+    expect((otherFrame as { run?: string }).run).not.toBe(live);
   });
 
   it("never routes gameplay through emit (the injected emit fires ONLY for intent-undeliverable)", () => {
@@ -154,7 +179,7 @@ describe("createIntentApi — host register() + onIntent()", () => {
     state = createIntentState();
     fakeWire = makeFakeWire();
     // Wire the receive path against the same state
-    attachIntentReceive(state, fakeWire.wire);
+    attachIntentReceive(state, fakeWire.wire, () => true);
   });
 
   it("a valid IntentFrame invokes the handler with (payload, { peerId, cSeq })", () => {

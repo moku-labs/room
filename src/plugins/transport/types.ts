@@ -276,7 +276,8 @@ export type ConnectOpts = {
    * (`serverSignaling` host reload only) The DO-issued reclaim token persisted across the reload,
    * threaded into `Signaling.join` so the warm Durable Object re-binds this host instead of opening a
    * fresh room (contracts §1.3, §5.1, D25). Omitted on a normal host/controller connect and ignored by
-   * `publicRendezvous`/`inMemory` (no DO to reclaim).
+   * `publicRendezvous`/`inMemory` (no DO to reclaim). A connect with a token that fails rejects with no warning:
+   * the caller decides, and `session` joins again with no token, which warns if the hub is really gone.
    */
   readonly reclaimToken?: string;
 };
@@ -306,7 +307,7 @@ export type TransportApi = {
    * @throws {RoomFullError} If the hub refuses the join because the room is full. No warning: fullness is a
    *   join result, not a connectivity event (contracts section 6.2).
    * @throws {Error} If the signaling adapter cannot reach any rendezvous relay (also emits
-   *   `room:network-warning { reason: "rendezvous-unreachable" }`).
+   *   `room:network-warning { reason: "rendezvous-unreachable" }`, except on a connect with a `reclaimToken`).
    * @example
    * ```ts
    * await app.transport.connect({ role: "host", selfId: "host_root", code: "K7M2QX" });

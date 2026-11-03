@@ -162,7 +162,7 @@ describe("intent — idempotent reconcile (D4)", () => {
         handlerCalls.push(meta.cSeq);
       }
     });
-    attachIntentReceive(hostState, hostWire);
+    attachIntentReceive(hostState, hostWire, () => true);
 
     const ctrlApi = createIntentApi(
       ctrlState,
@@ -213,7 +213,7 @@ describe("intent — idempotent reconcile (D4)", () => {
         callCount++;
       }
     });
-    attachIntentReceive(hostState, hostWire);
+    attachIntentReceive(hostState, hostWire, () => true);
 
     const ctrlApi = createIntentApi(
       ctrlState,

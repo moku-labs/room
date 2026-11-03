@@ -178,10 +178,13 @@ export function createIntentApi(
     },
 
     intent(name, payload) {
+      // Minted here and not at createApp: a non-secure page has no crypto.randomUUID, and createApp must not throw.
+      state.run ??= crypto.randomUUID();
+
       const cSeq = state.nextCSeq;
       state.nextCSeq += 1;
 
-      const frame: IntentFrame = { t: "intent", name, payload, cSeq };
+      const frame: IntentFrame = { t: "intent", name, payload, cSeq, run: state.run };
 
       if (state.buffering) {
         enqueueBuffered(state, cfg, frame, Date.now());

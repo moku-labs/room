@@ -315,7 +315,7 @@ The `room:*` plane is **coarse lifecycle only**. All gameplay rides the `Wire` (
 | `room:peer-left` | `{ peerId }` | session | A controller left or was declared dead by the heartbeat; removed from roster. |
 | `room:host-reconnecting` | `{}` | session | The host is away. On a phone: its channel was lost, or a different host appeared. Show "reconnecting" UX; intents buffer. On the host: this tab reloaded. |
 | `room:host-back` | `{}` | session | A phone adopted the host after an absence. Its buffered intents are on their way. |
-| `room:sync-ready` | `{}` | sync | First full snapshot applied; the synced replica is now readable. |
+| `room:sync-ready` | `{}` | sync | First full snapshot applied; the synced replica is now readable. A controller hears it once per room. |
 | `room:intent-undeliverable` | `{ name, cSeq }` | intent | A live intent exhausted its bounded retransmit budget with no wire-level receipt — the wire is dead for this controller's intent stream; surface retry UX. |
 | `room:network-warning` | `{ reason: "ice-failed" \| "rendezvous-unreachable" \| "channel-closed" \| "room-evicted" }` | transport | A connectivity hard-failure surfaced for failure UX (D2). `room-evicted` is server-tier only — the `serverSignaling` DO's idle Alarm tore the room down. |
 
@@ -338,7 +338,9 @@ The `room:*` plane is **coarse lifecycle only**. All gameplay rides the `Wire` (
 > **Reload vs leave.** `app.stop()` and a hidden page keep the host's record, so the next load resumes the same room:
 > call `app.stage.createRoom()` as on a first boot, and the first call returns the restored room. A later call throws.
 > `app.session.leave()` ends the room: the record is deleted, the next load starts with no room, and `createRoom()` opens
-> a new one on the same app. A record older than `reentryMaxAgeMs` is removed on load.
+> a new one on the same app. There the host's slices stay registered and go back to their initial, with no second
+> `registerSlice`, and a phone's replica empties, so `room:sync-ready` fires again in its next room. A record older than
+> `reentryMaxAgeMs` is removed on load. The age counts from the host's last write, so an idle lobby stays resumable.
 
 ## Configuration
 

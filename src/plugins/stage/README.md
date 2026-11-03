@@ -56,9 +56,9 @@ transition); idempotent and safe to over-call (contracts §4.3, §5.3).
 
 Registers a typed host-side handler for a named controller intent. Delegates to `intent.onIntent`,
 adapting the engine's `(payload, meta)` callback to this facade's `(payload, peerId)` surface (it
-unwraps `meta.peerId`). `intent` correctness-only shape-checks each payload (D6) and drops any
-`cSeq <= lastApplied[peerId]` (contracts §4.3) before the handler runs. The handler is invoked with
-`(payload, peerId)`. Returns an unsubscribe function.
+unwraps `meta.peerId`). `intent` drops a frame from a peer with no seat in the roster, correctness-only
+shape-checks each payload (D6) and drops any `cSeq <= lastApplied[peerId]` (contracts §4.3) before the handler
+runs. The handler is invoked with `(payload, peerId)`. Returns an unsubscribe function.
 
 ### `roster(): readonly RosterEntry[]`
 

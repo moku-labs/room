@@ -105,8 +105,9 @@ export type State = {
   sSeq: number;
   /**
    * `true` once the FIRST snapshot has been applied (host: after `registerSlice` + first export;
-   * controller: after the first inbound `sync-snap`). Gates `room:sync-ready` (emitted exactly once on the
-   * transition `false -> true`) and `read`/`subscribe` correctness (contracts section 3.1, section 4).
+   * controller: after the first inbound `sync-snap`). Gates `room:sync-ready` (emitted on the transition
+   * `false -> true`, which a controller goes through once per room) and `read`/`subscribe` correctness
+   * (contracts section 3.1, section 4).
    */
   ready: boolean;
   /**
@@ -160,7 +161,8 @@ export type Api = {
    * the first broadcast. Idempotent re-register with the same initial is a no-op; a different initial
    * throws. The first `registerSlice` makes the host's snapshot readable. After a host reload the first
    * call for a restored namespace keeps the saved cells, whatever `initial` holds, and never throws, so the
-   * boot code stays the same on every load.
+   * boot code stays the same on every load. A slice stays registered when the room ends: it goes back to its
+   * initial, and the next room on the same app needs no second call.
    *
    * @param ns - The namespace key (contracts section 4.1 `Namespace`).
    * @param initial - The slice's initial plain-JSON cells (every leaf a `JsonValue`, contracts section 4.1).
@@ -274,7 +276,7 @@ export type Api = {
   /**
    * Whether the first snapshot has been applied and the replica/authoritative state is readable
    * (contracts section 3.1, section 4). Mirrors `room:sync-ready` for pull-style checks (the event fires
-   * once; this stays `true`).
+   * once per room on a controller; this stays `true` until that room ends).
    *
    * @returns `true` once the synced state is readable.
    * @example
@@ -489,6 +491,20 @@ export type SyncEngine = {
    * ```
    */
   exportSnapshot(): { readonly snapshot: Snapshot; readonly sSeq: number };
+
+  /**
+   * Forgets the room that ended (`session.onRoomEnded`), so the next one starts clean. A host keeps its registered
+   * slices, each back at its initial, and stays ready. A slice a reload restored and no `registerSlice` claimed is
+   * gone. A replica empties and is not ready, so `room:sync-ready` can fire again and the baseline retry asks again.
+   * `sSeq` is `0` and nothing is dirty or stale on both. Emits nothing and notifies no subscriber.
+   *
+   * @example
+   * ```ts
+   * // Wired once in onInit: a leave() or a failed first join ends the room.
+   * ctx.require(sessionPlugin).onRoomEnded(() => ctx.state.engine?.reset());
+   * ```
+   */
+  reset(): void;
 
   /**
    * Restores authoritative state from a persisted snapshot (delegated from `Api.importSnapshot`).
