@@ -270,6 +270,7 @@ export type IntentApi = {
    * @param name - The registered intent kind to subscribe to.
    * @param handler - Invoked with `(payload, meta)` — `meta` carries `peerId` + `cSeq`.
    * @returns An unsubscribe function that removes this handler.
+   * @throws {Error} If `name` is not registered; nothing is stored. Call `register(name, schema)` first.
    * @example
    * ```ts
    * const off = stage.onIntent("move", (payload, meta) => {
