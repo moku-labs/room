@@ -90,6 +90,11 @@ export type SessionConfig = {
    */
   readonly storageKeyPrefix: string;
   /**
+   * Maximum age (ms) of a host re-entry record a reload may restore. An older record is removed and the
+   * app boots with no room. Default `1_800_000` (30 min), the same as the hub's `roomTtlMs`.
+   */
+  readonly reentryMaxAgeMs: number;
+  /**
    * Number of characters in a minted room code. Default `ROOM_CODE_LENGTH` (6) from contracts §6.2.
    * **`serverSignaling` deployments SHOULD set `8`** (~57 bits) to resist room-code enumeration of
    * the public DO endpoint (D24, Cycle 2). `lifecycle/code.ts` reads this; the `ROOM_CODE_LENGTH`
@@ -194,6 +199,8 @@ export type SessionState = {
   _joinTimeout?: ReturnType<typeof setTimeout> | null;
   /** Runtime-only (host): the persisted re-entry record retained for re-broadcast on controller reconnect. */
   _reentryRecord?: HostReentryRecord | null;
+  /** Runtime-only (host): `createRoom` already returned the restored room, so the next call throws. */
+  _reentryClaimed?: boolean;
 };
 
 /**
@@ -362,7 +369,11 @@ export type SessionApi = {
    * star hub (`passive:false`, §1.1), arms host-snapshot persistence (§5.1), and returns the room
    * descriptor SYNCHRONOUSLY (room-code generation is synchronous — no `Promise`).
    *
-   * @throws {Error} If this device is already in a room (call `leave()` first).
+   * After a host reload the room is already restored and rejoined (§5.2), so the first call returns THAT
+   * room's descriptor, with the same code and `hostToken` and no second `connect`. The game's boot code
+   * stays the same on a first load and on a reload.
+   *
+   * @throws {Error} If this device is already in a room (call `leave()` first). On a reload, from the second call.
    * @example
    * ```ts
    * const { code, joinUrl, qr, hostToken } = app.session.createRoom();
@@ -411,7 +422,9 @@ export type SessionApi = {
   /**
    * Leaves the current room: closes this device's transport channel(s), clears the roster (host) or
    * detaches (controller), disarms recovery timers/persistence, and resets `role`/`roomCode` to idle.
-   * Idempotent — a no-op when not in a room.
+   * The room is over, so the host's re-entry record is deleted and the next load starts with no room
+   * (`app.stop()` keeps the record: that is the reload path). `createRoom()` then opens a new room on this
+   * same app. Idempotent — a no-op when not in a room.
    *
    * @returns Resolves when transport teardown for this device completes.
    * @example

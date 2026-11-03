@@ -27,10 +27,10 @@
 
 | Method | Signature | Notes |
 |---|---|---|
-| `createRoom` | `() => RoomDescriptor` | HOST. Returns `{ code, joinUrl, qr, hostToken }` SYNCHRONOUSLY (no `Promise`). `qr` is ALWAYS `null` here (QR generation is async) — use `qr()`. Throws if already in a room. |
+| `createRoom` | `() => RoomDescriptor` | HOST. Returns `{ code, joinUrl, qr, hostToken }` SYNCHRONOUSLY (no `Promise`). `qr` is ALWAYS `null` here (QR generation is async) — use `qr()`. After a host reload the first call returns the restored room, with no second `connect`. Throws if already in a room. |
 | `qr` | `() => Promise<QrMatrix \| null>` | HOST. Async companion to `createRoom` — builds the join-QR matrix for the open room (the `qrcode` encoder is lazy-imported host-only). `null` when `generateQr` is `false` or no room is open. Encodes the join URL ONLY — never SDP/ICE. |
 | `joinRoom` | `(code: string) => Promise<JoinResult>` | CONTROLLER (passive set internally). `{ ok:false, reason:"full"\|"not-found"\|"unreachable" }` on failure. |
-| `leave` | `() => Promise<void>` | Idempotent. |
+| `leave` | `() => Promise<void>` | Ends the room: deletes the host's re-entry record. `createRoom()` then opens a new room on the same app. Idempotent. |
 | `rejoin` | `() => Promise<JoinResult>` | iOS "rescan QR" path; re-uses the persisted `reconnectToken`. |
 | `roster` | `() => readonly RosterEntry[]` | Sorted defensive copy (by `joinedAt`). |
 | `self` | `() => SelfInfo` | `{ selfId, role, roomCode }`. |
@@ -56,6 +56,19 @@ the reload path MUST poll `app.session.recoveryPhase()` in their own `onInit`/`o
 phase means recovery is in flight) rather than rely on the event. The event remains useful for the
 steady-state (non-reload) host-reload detection.
 
+## Reload vs leave
+
+The re-entry record is what makes a reload resume the room. Three things decide its fate:
+
+| What happens | The record | The next load |
+|---|---|---|
+| `app.stop()`, or the page goes hidden | Written to `localStorage` | Restores the room: `role` is `"host"`, same code. The first `createRoom()` returns that room, a later one throws. |
+| `session.leave()` | Deleted from `localStorage` and IndexedDB, with no final write | Starts with no room: `role` is `"none"`, and `createRoom()` mints a new code. |
+| The record is older than `reentryMaxAgeMs`, or cannot be parsed | Removed on read | Starts with no room. |
+
+Only a broadcast writes a record: `sync` calls `persistSnapshot` after it broadcasts a dirty slice. A host
+that never broadcast has nothing to resume.
+
 ## Lossy intent buffering (acceptable for v1)
 
 While the host is absent, controllers buffer timestamped intents. The buffer is a ring (cap
@@ -73,7 +86,10 @@ migration deferred to v2). `recovery/` does not pretend to recover a crash.
 All fields default; override via `createApp({ pluginConfigs: { session: { ... } } })`. Defaults encode
 the D11 / contracts §5 constants: `joinUrlBase:""`, `generateQr:true`, `maxControllers:8`,
 `snapshotDebounceMs:500`, `reconnectTimeoutMs:10_000`, `intentBufferMax:256`, `intentBufferMaxAgeMs:8000`,
-`storageKeyPrefix:"moku.room"`, `codeLength:6`.
+`storageKeyPrefix:"moku.room"`, `reentryMaxAgeMs:1_800_000`, `codeLength:6`.
+
+`reentryMaxAgeMs` (default 30 min, the same as the hub's `roomTtlMs`) is the oldest host record a reload may
+restore. A record exactly that old still restores; an older one is removed.
 
 `codeLength` (default `ROOM_CODE_LENGTH` = 6) sets the generated room-code length. `serverSignaling`
 deployments SHOULD set `codeLength: 8` (~57 bits) to resist room-code enumeration of the public

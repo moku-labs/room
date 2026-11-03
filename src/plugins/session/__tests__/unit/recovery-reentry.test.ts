@@ -26,7 +26,8 @@ const testConfig: Readonly<SessionConfig> = {
   reconnectTimeoutMs: 200, // short for tests
   intentBufferMax: 256,
   intentBufferMaxAgeMs: 8000,
-  storageKeyPrefix: "test.room"
+  storageKeyPrefix: "test.room",
+  reentryMaxAgeMs: 1_800_000
 };
 
 // Captured transport callbacks — populated when registerTransportBindings runs against the mock.
@@ -441,7 +442,12 @@ describe("recovery/reentry", () => {
         savedAt: 1_700_000_000_000
       };
 
-      const fakeHandle = { flushNow: vi.fn(), dispose: vi.fn(), _update: vi.fn() };
+      const fakeHandle = {
+        flushNow: vi.fn(),
+        dispose: vi.fn(),
+        discard: vi.fn(),
+        _update: vi.fn()
+      };
       const readSpy = vi.spyOn(persistence, "readReentryRecord").mockReturnValue(record);
       const armSpy = vi.spyOn(persistence, "armPersistence").mockReturnValue(fakeHandle);
 
@@ -486,6 +492,7 @@ describe("recovery/reentry", () => {
       vi.spyOn(persistence, "armPersistence").mockReturnValue({
         flushNow: vi.fn(),
         dispose: vi.fn(),
+        discard: vi.fn(),
         _update: vi.fn()
       });
 
@@ -511,6 +518,7 @@ describe("recovery/reentry", () => {
       vi.spyOn(persistence, "armPersistence").mockReturnValue({
         flushNow: vi.fn(),
         dispose: vi.fn(),
+        discard: vi.fn(),
         _update: vi.fn()
       });
 
@@ -539,6 +547,7 @@ describe("recovery/reentry", () => {
       vi.spyOn(persistence, "armPersistence").mockReturnValue({
         flushNow: vi.fn(),
         dispose: vi.fn(),
+        discard: vi.fn(),
         _update: vi.fn()
       });
 

@@ -105,7 +105,7 @@ plugin: `ctx.require(stagePlugin)` / `ctx.require(controllerPlugin)`.
 
 **StageApi (`app.stage`, host):**
 - `createRoom(): RoomDescriptor` — SYNCHRONOUS; `{ code, joinUrl, qr, hostToken }` (`qr` is always `null` — fetch it
-  via `qr()`).
+  via `qr()`). After a host reload the first call returns the restored room (no second connect); a later call throws.
 - `qr(): Promise<QrMatrix | null>` — async QR matrix for the join URL (null when `generateQr: false`).
 - `mutate(ns, recipe): void` — mutate one authoritative slice; recipe `(draft) => next`; schedules a throttled delta.
 - `broadcast(): void` — force an immediate snapshot broadcast.
@@ -284,6 +284,7 @@ Internal types (`transport/protocol.ts`; NOT client-barrel exports). The client�
   `heartbeatTimeoutMs=6000`, `openTimeoutMs=3000`, `maxMessageBytes=14336`.
 - session: `joinUrlBase=""`, `generateQr=true`, `maxControllers=8`, `snapshotDebounceMs=500`,
   `reconnectTimeoutMs=10000`, `intentBufferMax=256`, `intentBufferMaxAgeMs=8000`, `storageKeyPrefix="moku.room"`,
+  `reentryMaxAgeMs=1800000` (oldest host record a reload may restore; older is removed),
   `codeLength=6` (set `8` for `serverSignaling` deployments — D24 room-code-enumeration resistance).
 - intent: `bufferCap=256`, `bufferMaxAgeMs=10000`, `ackTimeoutMs=1000` (wait before an unacked live intent's first
   retransmit; doubles per attempt), `maxRetransmits=3` (same-frame re-sends before the terminal
@@ -309,7 +310,8 @@ Internal types (`transport/protocol.ts`; NOT client-barrel exports). The client�
    `SyncSnapshotFrame`.
 6. Controller `app.controller.on(ns, cb)` re-renders on each applied frame; first snapshot → `room:sync-ready`.
 7. Host reload: snapshot persisted → resume same code → token verified peer-side → controllers reconcile + flush
-   buffered intents.
+   buffered intents. `app.session.leave()` is the opposite: it deletes the record, so the next load starts with no
+   room, and `createRoom()` opens a new one on the same app.
 
 ## Development
 

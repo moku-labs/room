@@ -50,7 +50,8 @@ function makeDeps(overrides?: Partial<SessionDeps>): SessionDeps {
       reconnectTimeoutMs: 10_000,
       intentBufferMax: 256,
       intentBufferMaxAgeMs: 8000,
-      storageKeyPrefix: "moku.room"
+      storageKeyPrefix: "moku.room",
+      reentryMaxAgeMs: 1_800_000
     },
     emit: {
       peerJoined: vi.fn(),

@@ -10,7 +10,7 @@
  * event flows into the bound `emitWarning` closure.
  */
 import type { RoomEvents } from "../../config";
-import { createWire, disconnectPeer, startHeartbeat, tearDownState } from "./channel";
+import { createWire, disconnectPeer, startHeartbeat, tearDownConnections } from "./channel";
 import { handlePeerArrival, handlePeerLeave, handleSignal } from "./handlers";
 import { primeIceServers } from "./ice";
 import type { SignalingJoinOpts, Wire } from "./protocol";
@@ -20,8 +20,8 @@ import type { ConnectOpts, TransportApi, TransportConfig, TransportState } from 
  * Builds the `transportPlugin` API for one app instance from its per-app `state`, frozen `config`, and a
  * narrowed `emitWarning` closure (the wiring harness binds `ctx.emit`). `connect` joins the signaling
  * room (host active / controller passive) and wires the handshake glue; `wire()` returns the stable
- * `Wire`; `disconnect` tears down one peer; `peers()` snapshots the live ids; `close()` runs the full
- * teardown against `state` (the same sequence `onStop` runs via the registry).
+ * `Wire`; `disconnect` tears down one peer; `peers()` snapshots the live ids; `close()` tears down the
+ * connections against `state` and keeps the wiring, so a later `connect()` is heard by the same consumers.
  *
  * @param state - The per-app transport state (peer map, signaling session, timers).
  * @param cfg - The frozen per-app transport config (ICE servers, timings, chunk threshold).
@@ -123,7 +123,7 @@ export function createTransportApi(
 
     /** @inheritdoc */
     async close(): Promise<void> {
-      await tearDownState(state);
+      await tearDownConnections(state);
       state.role = "idle";
       state.selfId = "";
     },

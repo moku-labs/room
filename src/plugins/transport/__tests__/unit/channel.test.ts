@@ -598,6 +598,15 @@ describe("channel — teardown", () => {
     expect(state.peerLostCb).toBeNull();
   });
 
+  it("tearDownState clears the wire consumers (no frame reaches a stopped app)", async () => {
+    const state = createTransportState();
+    state.frameConsumers.add(vi.fn());
+
+    await tearDownState(state);
+
+    expect(state.frameConsumers.size).toBe(0);
+  });
+
   it("tearDownState does NOT fire peerLostCb for any connected peers during teardown (D18)", async () => {
     const state = createTransportState();
     state.role = "host";
