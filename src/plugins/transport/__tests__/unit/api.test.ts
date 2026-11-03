@@ -194,6 +194,25 @@ describe("createTransportApi — wire / peers / disconnect / close", () => {
     expect(state.session).toBeNull();
   });
 
+  it("close() keeps the peer callbacks and the wire consumers for the next connect()", async () => {
+    const { signaling } = fakeSignaling();
+    const state = createTransportState();
+    const api = createTransportApi(state, makeConfig(signaling), vi.fn());
+    const onConnected = vi.fn();
+    const onLost = vi.fn();
+    const onFrame = vi.fn();
+    api.onPeerConnected(onConnected);
+    api.onPeerLost(onLost);
+    api.wire().on(onFrame);
+    await api.connect({ role: "host", selfId: "host_root", code: "K7M2QX" });
+
+    await api.close();
+
+    expect(state.peerConnectedCb).toBe(onConnected);
+    expect(state.peerLostCb).toBe(onLost);
+    expect(state.frameConsumers.has(onFrame)).toBe(true);
+  });
+
   it("close() is idempotent when already closed", async () => {
     const { signaling } = fakeSignaling();
     const api = createTransportApi(createTransportState(), makeConfig(signaling), vi.fn());

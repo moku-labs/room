@@ -73,6 +73,67 @@ function tryLocalStorageGet(key: string): string | null {
 }
 
 /**
+ * Removes a key from `localStorage` behind a DOM guard. Swallows a disabled-storage error, like the write.
+ *
+ * @param key - The localStorage key.
+ * @example
+ * ```ts
+ * tryLocalStorageRemove("moku.room.reentry.G7K2QF");
+ * ```
+ */
+function tryLocalStorageRemove(key: string): void {
+  if (typeof localStorage === "undefined") return;
+  try {
+    localStorage.removeItem(key);
+  } catch {
+    // Storage disabled — degrade gracefully.
+  }
+}
+
+/**
+ * Lists the `localStorage` keys up front, so the scan can remove records without shifting the indices it
+ * still has to visit.
+ *
+ * @returns Every key in storage, or the ones read so far when storage refuses.
+ * @example
+ * ```ts
+ * for (const key of listLocalStorageKeys()) tryLocalStorageRemove(key);
+ * ```
+ */
+function listLocalStorageKeys(): string[] {
+  const keys: string[] = [];
+  try {
+    for (let index = 0; index < localStorage.length; index += 1) {
+      const key = localStorage.key(index);
+      if (key !== null) keys.push(key);
+    }
+  } catch {
+    // Storage disabled — no recoverable record.
+  }
+  return keys;
+}
+
+/**
+ * Parses a stored re-entry record. A value with no numeric `savedAt` counts as unparseable: its age cannot
+ * be known, so it can never be restored safely.
+ *
+ * @param raw - The string read from `localStorage`.
+ * @returns The record, or `null` when the value is not one.
+ * @example
+ * ```ts
+ * parseStoredRecord("{not json"); // null
+ * ```
+ */
+function parseStoredRecord(raw: string): HostReentryRecord | null {
+  try {
+    const parsed = JSON.parse(raw) as Partial<HostReentryRecord> | null;
+    return typeof parsed?.savedAt === "number" ? (parsed as HostReentryRecord) : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
  * Opens (and upgrades, if needed) the IndexedDB store for the host re-entry record. Resolves to `null`
  * in headless environments where `indexedDB` is absent so the durable path no-ops cleanly.
  *
@@ -120,14 +181,52 @@ async function writeToIdb(record: HostReentryRecord, key: string): Promise<void>
 }
 
 /**
+ * Deletes the host re-entry record from IndexedDB. A no-op in headless environments (no `indexedDB`).
+ *
+ * @param key - The room-code-scoped storage key.
+ * @returns A promise that resolves once the delete transaction completes.
+ * @example
+ * ```ts
+ * await deleteFromIdb("moku.room.reentry.G7K2QF");
+ * ```
+ */
+async function deleteFromIdb(key: string): Promise<void> {
+  const db = await openIdb();
+  if (!db) return;
+  await new Promise<void>((resolve, reject) => {
+    const tx = db.transaction(IDB_STORE, "readwrite");
+    tx.objectStore(IDB_STORE).delete(key);
+    tx.addEventListener("complete", () => resolve());
+    tx.addEventListener("error", () => reject(tx.error));
+  });
+}
+
+/**
+ * Removes a record from both stores: the `localStorage` key and the IndexedDB row. Best-effort, like the
+ * writes.
+ *
+ * @param key - The room-code-scoped storage key.
+ * @example
+ * ```ts
+ * removeStoredRecord("moku.room.reentry.G7K2QF");
+ * ```
+ */
+function removeStoredRecord(key: string): void {
+  tryLocalStorageRemove(key);
+  deleteFromIdb(key).catch(() => {
+    // Durable delete is best-effort, like the durable write.
+  });
+}
+
+/**
  * Arms the persistence driver for the HOST: holds the latest record, schedules debounced IndexedDB
  * writes, and registers the synchronous `localStorage`-on-`visibilitychange` listener (§5.1). The
  * returned `PersistHandle` is stored into `deps.state.recovery.persistHandle`; the driver retains the
  * latest record internally so `flushNow()` needs no `state`. DOM/storage access is DOM-guarded.
  *
  * @param deps - This app's destructured per-instance pieces (`config` and `state`).
- * @returns A `PersistHandleInternal` with `flushNow`/`dispose` (public) plus the internal `_update`, for
- *   the `onStop` teardown path. Assignable to the public `PersistHandle | null` recovery field.
+ * @returns A `PersistHandleInternal` with `flushNow`/`dispose` (public) plus the internal `discard` and
+ *   `_update`, for the `leave()` and `onStop` teardown paths. Assignable to the public `PersistHandle | null` recovery field.
  * @example
  * ```ts
  * deps.state.recovery.persistHandle = armPersistence(deps);
@@ -231,6 +330,12 @@ export function armPersistence(deps: SessionDeps): PersistHandleInternal {
       }
     },
     /** @inheritdoc */
+    discard(): void {
+      latestRecord = null;
+      handle.dispose();
+      removeStoredRecord(storageKey);
+    },
+    /** @inheritdoc */
     _update(record: HostReentryRecord, scheduleIdb: boolean): void {
       latestRecord = record;
       if (scheduleIdb) scheduleIdbWrite();
@@ -260,8 +365,9 @@ export function recordSnapshot(deps: SessionDeps, record: HostReentryRecord): vo
 
 /**
  * Reads back the persisted `HostReentryRecord` for this origin from `localStorage` on reload (§5.2).
- * Scans for the room-code-scoped re-entry key. Returns `null` when there is no record. DOM/storage
- * access is DOM-guarded.
+ * Scans for the room-code-scoped re-entry key. A record older than `config.reentryMaxAgeMs`, or one that
+ * cannot be parsed, is removed from both stores and skipped. Returns `null` when no record is left.
+ * DOM/storage access is DOM-guarded.
  *
  * @param deps - This app's destructured per-instance pieces.
  * @returns The persisted `HostReentryRecord`, or `null` if absent.
@@ -274,15 +380,14 @@ export function readReentryRecord(deps: SessionDeps): HostReentryRecord | null {
   if (typeof localStorage === "undefined") return null;
 
   const entryPrefix = `${deps.config.storageKeyPrefix}.reentry.`;
-  try {
-    for (let index = 0; index < localStorage.length; index += 1) {
-      const key = localStorage.key(index);
-      if (!key?.startsWith(entryPrefix)) continue;
-      const raw = tryLocalStorageGet(key);
-      if (raw) return JSON.parse(raw) as HostReentryRecord;
-    }
-  } catch {
-    // localStorage unavailable or JSON parse error — no recoverable record.
+  const now = Date.now();
+  for (const key of listLocalStorageKeys()) {
+    if (!key.startsWith(entryPrefix)) continue;
+    const raw = tryLocalStorageGet(key);
+    if (!raw) continue;
+    const record = parseStoredRecord(raw);
+    if (record && now - record.savedAt <= deps.config.reentryMaxAgeMs) return record;
+    removeStoredRecord(key);
   }
   return null;
 }

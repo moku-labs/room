@@ -5,8 +5,8 @@
  *
  * `channel.ts` owns the `Wire` (contracts section 2) and the internal chunk envelope. Inbound frames are
  * reassembled then dispatched DIRECTLY to the single `Wire.on` consumer — never through Moku `emit`
- * (spec/07 section 3). `tearDownState` is the single teardown sequence both `onStop` and the public
- * `close()` API run against the same per-app `TransportState`.
+ * (spec/07 section 3). `tearDownConnections` is the teardown both the public `close()` and `onStop` run
+ * against the same per-app `TransportState`; `tearDownState` adds what only `onStop` may do: clear the wiring.
  */
 import type { Frame, HeartbeatPongFrame, PeerId, Wire } from "./protocol";
 import type { PeerConnection, TransportConfig, TransportState } from "./types";
@@ -488,19 +488,21 @@ export function disconnectPeer(state: TransportState, peerId: PeerId): void {
 }
 
 /**
- * Tears down ALL of one app's live resources: stops the heartbeat interval, clears each peer's open
- * timer, closes every channel + peer connection, drops every reassembly buffer, and leaves the signaling
- * session (contracts section 1.2). The single teardown sequence both `onStop` (via the registry lookup)
- * and the public `close()` API run against the same per-app `TransportState`. Idempotent.
+ * Tears down one app's live connections: stops the heartbeat interval, clears each peer's open timer,
+ * closes every channel + peer connection, drops every reassembly buffer, ends the ICE epoch, and leaves the
+ * signaling session (contracts section 1.2). Keeps the wiring (`Wire.on` consumers, `onPeerConnected`,
+ * `onPeerLost`): those are registered once at init, and the next `connect()` needs them. This is what the
+ * public `close()` runs. Idempotent.
  *
  * @param state - The per-app transport state to release.
  * @returns A promise that resolves once every connection and the signaling session are released.
  * @example
  * ```ts
- * await tearDownState(state);
+ * await tearDownConnections(state);
+ * await api.connect(opts); // the same consumers hear the new room
  * ```
  */
-export async function tearDownState(state: TransportState): Promise<void> {
+export async function tearDownConnections(state: TransportState): Promise<void> {
   // Stop the heartbeat loop.
   if (state.heartbeatTimer !== null) {
     clearInterval(state.heartbeatTimer);
@@ -510,12 +512,9 @@ export async function tearDownState(state: TransportState): Promise<void> {
   // Disconnect every live peer (clears each peer's open timer, channel, and reassembly state).
   for (const peerId of state.peers.keys()) disconnectPeer(state, peerId);
 
-  // Clear the per-app consumers, warn de-dup state, and any buffered early candidates.
+  // Clear the warn de-dup state and any buffered early candidates.
   const session = state.session;
   state.session = null;
-  state.frameConsumers.clear();
-  state.peerConnectedCb = null;
-  state.peerLostCb = null;
   state.warned.clear();
   state.earlyCandidates.clear();
 
@@ -528,6 +527,24 @@ export async function tearDownState(state: TransportState): Promise<void> {
   state.pendingArrivals.clear();
 
   await session?.leave();
+}
+
+/**
+ * Tears down ALL of one app's transport for good: the connections ({@link tearDownConnections}) plus the
+ * wiring (`Wire.on` consumers, `onPeerConnected`, `onPeerLost`). This is what `onStop` runs. Idempotent.
+ *
+ * @param state - The per-app transport state to release.
+ * @returns A promise that resolves once every connection and the signaling session are released.
+ * @example
+ * ```ts
+ * await tearDownState(state);
+ * ```
+ */
+export async function tearDownState(state: TransportState): Promise<void> {
+  state.frameConsumers.clear();
+  state.peerConnectedCb = null;
+  state.peerLostCb = null;
+  await tearDownConnections(state);
 }
 
 /**

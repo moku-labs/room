@@ -313,6 +313,12 @@ The `room:*` plane is **coarse lifecycle only**. All gameplay rides the `Wire` (
 > register. On the reload path, poll `app.session.recoveryPhase()` in your own init/start (a non-`"stable"` phase means
 > recovery is in flight) rather than relying on the event. The event remains useful for steady-state detection.
 
+> [!NOTE]
+> **Reload vs leave.** `app.stop()` and a hidden page keep the host's record, so the next load resumes the same room:
+> call `app.stage.createRoom()` as on a first boot, and the first call returns the restored room. A later call throws.
+> `app.session.leave()` ends the room: the record is deleted, the next load starts with no room, and `createRoom()` opens
+> a new one on the same app. A record older than `reentryMaxAgeMs` is removed on load.
+
 ## Configuration
 
 Every field has a safe default — the verified "couch" profile — so a stage/controller app needs **zero overrides**.
@@ -329,6 +335,7 @@ README — [transport](src/plugins/transport/README.md), [session](src/plugins/s
 | `maxControllers` | session | `8` | Cap simultaneous controllers (excludes host); lowering is fine. |
 | `joinUrlBase` | session | `""` (uses `location.origin`) | Set the origin baked into the join URL / QR. |
 | `codeLength` | session | `6` | Generated room-code length. Set `8` for `serverSignaling` deployments (D24). |
+| `reentryMaxAgeMs` | session | `1_800_000` (30 min) | Oldest host record a reload may restore. Same as the hub's `roomTtlMs`. |
 | `broadcastHz` | sync | `30` | Authoritative state broadcast rate. Verified safe band 20–30 Hz; clamped to `[5, 60]`. |
 
 The server-tier `hub` plugin has its own config (`doBinding`, `assetsBinding`, `rateLimit`, `joinWindowMs`,

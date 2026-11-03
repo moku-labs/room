@@ -21,6 +21,7 @@ import type { HostReentryRecord, JoinResult, SessionConfig, SessionDeps } from "
 type PersistHandleWithUpdate = {
   flushNow(): void;
   dispose(): void;
+  discard(): void;
   _update(record: HostReentryRecord, scheduleIdb: boolean): void;
 };
 
@@ -33,7 +34,8 @@ const testConfig: Readonly<SessionConfig> = {
   reconnectTimeoutMs: 10_000,
   intentBufferMax: 256,
   intentBufferMaxAgeMs: 8000,
-  storageKeyPrefix: "test.room"
+  storageKeyPrefix: "test.room",
+  reentryMaxAgeMs: 1_800_000
 };
 
 const emptySnapshot: Snapshot = {};
@@ -71,6 +73,10 @@ class MockObjectStore {
   constructor(private readonly records: Map<string, unknown>) {}
   put(value: unknown, key: string): void {
     this.records.set(key, value);
+  }
+
+  delete(key: string): void {
+    this.records.delete(key);
   }
 }
 
@@ -159,6 +165,16 @@ class MockIndexedDB {
     });
     return request;
   }
+}
+
+function makeRecord(sSeq: number): HostReentryRecord {
+  return {
+    roomCode: "TEST01",
+    hostToken: "token-abc",
+    snapshot: emptySnapshot,
+    sSeq,
+    savedAt: Date.now()
+  };
 }
 
 function makeDeps(): SessionDeps {
@@ -374,7 +390,7 @@ describe("recovery/persistence", () => {
 
     const flushNow = vi.fn();
     const dispose = vi.fn();
-    state.recovery.persistHandle = { flushNow, dispose, _update: vi.fn() };
+    state.recovery.persistHandle = { flushNow, dispose, discard: vi.fn(), _update: vi.fn() };
 
     const timerHandle = setTimeout(() => {}, 99_999);
     state.recovery.timer = timerHandle;
@@ -740,6 +756,188 @@ describe("recovery/persistence", () => {
     handle.dispose();
   });
 
+  const writeRecord = (storageKey: string, savedAt: number): void => {
+    mockStorage.setItem(storageKey, JSON.stringify({ ...makeRecord(1), savedAt }));
+  };
+
+  describe("readReentryRecord age limit", () => {
+    const key = "test.room.reentry.TEST01";
+
+    afterEach(() => {
+      vi.unstubAllGlobals();
+    });
+
+    it("restores a record exactly reentryMaxAgeMs old and keeps its key", () => {
+      writeRecord(key, Date.now() - testConfig.reentryMaxAgeMs);
+
+      expect(readReentryRecord(makeDeps())?.roomCode).toBe("TEST01");
+      expect(mockStorage.getItem(key)).not.toBeNull();
+    });
+
+    it("skips a record 1 ms older than reentryMaxAgeMs and removes its key", () => {
+      writeRecord(key, Date.now() - testConfig.reentryMaxAgeMs - 1);
+
+      expect(readReentryRecord(makeDeps())).toBeNull();
+      expect(mockStorage.getItem(key)).toBeNull();
+    });
+
+    it("deletes the IndexedDB row of a record too old to restore", async () => {
+      const mockIdb = new MockIndexedDB();
+      mockIdb.records.set(key, { sSeq: 1 });
+      vi.stubGlobal("indexedDB", mockIdb);
+      writeRecord(key, Date.now() - testConfig.reentryMaxAgeMs - 1);
+
+      readReentryRecord(makeDeps());
+      await vi.advanceTimersByTimeAsync(0);
+
+      expect(mockIdb.records.has(key)).toBe(false);
+    });
+
+    it("removes an unparseable record instead of leaving it to fail every load", () => {
+      mockStorage.setItem(key, "{not json");
+
+      expect(readReentryRecord(makeDeps())).toBeNull();
+      expect(mockStorage.getItem(key)).toBeNull();
+    });
+
+    it("removes a record with no savedAt: its age cannot be known", () => {
+      mockStorage.setItem(key, JSON.stringify({ roomCode: "TEST01", hostToken: "token-abc" }));
+
+      expect(readReentryRecord(makeDeps())).toBeNull();
+      expect(mockStorage.getItem(key)).toBeNull();
+    });
+
+    it("removes a stored null: it parses, but it is no record", () => {
+      mockStorage.setItem(key, "null");
+
+      expect(readReentryRecord(makeDeps())).toBeNull();
+      expect(mockStorage.getItem(key)).toBeNull();
+    });
+
+    it("keeps scanning after a removal: two stale records go, the fresh third is returned", () => {
+      const tooOld = Date.now() - testConfig.reentryMaxAgeMs - 1;
+      writeRecord("test.room.reentry.OLD001", tooOld);
+      writeRecord("test.room.reentry.OLD002", tooOld);
+      writeRecord(key, Date.now());
+
+      expect(readReentryRecord(makeDeps())?.roomCode).toBe("TEST01");
+      expect(mockStorage.getItem("test.room.reentry.OLD001")).toBeNull();
+      expect(mockStorage.getItem("test.room.reentry.OLD002")).toBeNull();
+    });
+
+    it("yields null when a stale record cannot be removed (storage refuses)", () => {
+      const raw = JSON.stringify({ savedAt: Date.now() - testConfig.reentryMaxAgeMs - 1 });
+      vi.stubGlobal("localStorage", {
+        length: 1,
+        key: (): string => key,
+        getItem: (): string => raw,
+        removeItem: (): void => {
+          throw new Error("storage disabled");
+        }
+      });
+
+      expect(readReentryRecord(makeDeps())).toBeNull();
+    });
+
+    it("yields null when listing the storage keys throws", () => {
+      vi.stubGlobal("localStorage", {
+        get length(): number {
+          throw new Error("storage disabled");
+        }
+      });
+
+      expect(readReentryRecord(makeDeps())).toBeNull();
+    });
+  });
+
+  describe("discard", () => {
+    const key = "test.room.reentry.TEST01";
+
+    afterEach(() => {
+      vi.unstubAllGlobals();
+    });
+
+    it("removes the localStorage key and the IndexedDB row already written", async () => {
+      const mockIdb = new MockIndexedDB();
+      vi.stubGlobal("indexedDB", mockIdb);
+      const deps = makeDeps();
+      const handle = armPersistence(deps);
+      deps.state.recovery.persistHandle = handle;
+      recordSnapshot(deps, makeRecord(1));
+      await vi.advanceTimersByTimeAsync(150);
+      handle.flushNow();
+      expect(mockIdb.records.has(key)).toBe(true);
+      expect(mockStorage.getItem(key)).not.toBeNull();
+
+      handle.discard();
+      await vi.advanceTimersByTimeAsync(0);
+
+      expect(mockStorage.getItem(key)).toBeNull();
+      expect(mockIdb.records.has(key)).toBe(false);
+    });
+
+    it("cancels the pending debounce and drops the record, so a later flush writes nothing", async () => {
+      const mockIdb = new MockIndexedDB();
+      vi.stubGlobal("indexedDB", mockIdb);
+      const deps = makeDeps();
+      const handle = armPersistence(deps);
+      deps.state.recovery.persistHandle = handle;
+      recordSnapshot(deps, makeRecord(2));
+
+      handle.discard();
+      await vi.advanceTimersByTimeAsync(1000);
+      handle.flushNow();
+
+      expect(mockIdb.records.has(key)).toBe(false);
+      expect(mockStorage.getItem(key)).toBeNull();
+    });
+
+    it("removes the visibilitychange listener, so a hidden page writes nothing", () => {
+      const deps = makeDeps();
+      const handle = armPersistence(deps);
+      deps.state.recovery.persistHandle = handle;
+      recordSnapshot(deps, makeRecord(3));
+
+      handle.discard();
+
+      expect(visibilityListeners).toHaveLength(0);
+    });
+
+    it("swallows a refused removeItem and a failed IndexedDB open", async () => {
+      vi.stubGlobal("indexedDB", new MockIndexedDB(true, false));
+      vi.stubGlobal("localStorage", {
+        removeItem: (): void => {
+          throw new Error("storage disabled");
+        }
+      });
+      const unhandled = vi.fn();
+      process.on("unhandledRejection", unhandled);
+
+      try {
+        const handle = armPersistence(makeDeps());
+        expect(() => handle.discard()).not.toThrow();
+        await vi.advanceTimersByTimeAsync(0);
+        expect(unhandled).not.toHaveBeenCalled();
+      } finally {
+        process.off("unhandledRejection", unhandled);
+      }
+    });
+
+    it("swallows a failed IndexedDB delete transaction", async () => {
+      vi.stubGlobal("indexedDB", new MockIndexedDB(false, true));
+      const unhandled = vi.fn();
+      process.on("unhandledRejection", unhandled);
+
+      try {
+        armPersistence(makeDeps()).discard();
+        await vi.advanceTimersByTimeAsync(0);
+        expect(unhandled).not.toHaveBeenCalled();
+      } finally {
+        process.off("unhandledRejection", unhandled);
+      }
+    });
+  });
+
   describe("headless path (no document)", () => {
     let savedDocument: typeof globalThis.document;
 
@@ -769,6 +967,17 @@ describe("recovery/persistence", () => {
       expect(visibilityListeners).toHaveLength(0);
       // dispose() likewise takes the document-undefined false side without throwing.
       expect(() => handle.dispose()).not.toThrow();
+    });
+
+    it("discard skips the storage and the listener when no DOM exists", () => {
+      Object.defineProperty(globalThis, "localStorage", {
+        value: undefined,
+        writable: true,
+        configurable: true
+      });
+      const handle = armPersistence(makeDeps());
+
+      expect(() => handle.discard()).not.toThrow();
     });
   });
 });

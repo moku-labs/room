@@ -482,7 +482,8 @@ type TransportApi = {
   disconnect(peerId: PeerId): void;
   /** Ids of all currently-connected peers (channel open + heartbeat-alive). Read-only snapshot. */
   peers(): readonly PeerId[];
-  /** Closes ALL peers, stops the heartbeat, leaves the signaling session. Idempotent. */
+  /** Closes ALL peers, stops the heartbeat, leaves the signaling session. Keeps the Wire.on consumers and the
+   *  onPeerConnected/onPeerLost callbacks, so a later connect() is heard by the same consumers. Idempotent. */
   close(): Promise<void>;
   /** Registers the single consumer fired when a peer's gameplay channel reaches open. Used by session to emit
    *  room:peer-joined. Latest registration wins. Returns unsubscribe. */
@@ -507,7 +508,8 @@ rescan-QR degradation). Declares + emits `room:peer-joined`, `room:peer-left`, `
 ```typescript
 type SessionApi = {
   /** HOST. Mints selfId + 6-char code + hostToken, joins signaling as active hub, arms persistence, returns the
-   *  descriptor SYNCHRONOUSLY (no Promise). Throws if already in a room. */
+   *  descriptor SYNCHRONOUSLY (no Promise). After a host reload the first call returns the restored room instead,
+   *  with no second connect. Throws if already in a room. */
   createRoom: () => RoomDescriptor;
   /** HOST. Async companion to createRoom — builds the join-QR matrix for the open room (the qrcode encoder is
    *  lazy-imported host-only). null when generateQr is false or no room is open. Encodes the join URL ONLY,
@@ -516,7 +518,8 @@ type SessionApi = {
   /** CONTROLLER. Loads/creates the phone reconnectToken, joins signaling as passive. Resolves once the channel is
    *  connected. `{ ok:false, reason }` on failure. (passive:true set internally — caller passes code only.) */
   joinRoom: (code: string) => Promise<JoinResult>;
-  /** Leaves the room (closes channels, clears roster/detaches, disarms recovery). Idempotent. */
+  /** Leaves the room (closes channels, clears roster/detaches, disarms recovery) and deletes the host's re-entry
+   *  record, so the next load starts with no room. createRoom() then opens a new room on the same app. Idempotent. */
   leave: () => Promise<void>;
   /** CONTROLLER re-entry helper for the iOS "rescan QR" degrade path; re-uses the persisted reconnectToken. */
   rejoin: () => Promise<JoinResult>;
@@ -871,6 +874,7 @@ verified "couch" profile.
 | `intentBufferMax` | `number` | `256` | Ring-buffer cap for intents buffered during host absence (oldest dropped). |
 | `intentBufferMaxAgeMs` | `number` | `8000` | Max age of a buffered intent before discard on flush. |
 | `storageKeyPrefix` | `string` | `"moku.room"` | localStorage key prefix for the phone reconnectToken + re-entry record. |
+| `reentryMaxAgeMs` | `number` | `1800000` | Oldest host re-entry record a reload may restore (the same as the hub's `roomTtlMs`). An older record is removed on load. |
 | `codeLength` | `number` | `6` (`ROOM_CODE_LENGTH`) | Generated room-code length. `serverSignaling` deployments SHOULD set `8` (~57 bits) to resist room-code enumeration of the public WS endpoint (D24). |
 
 ### intent (`IntentConfig`)
@@ -1011,15 +1015,19 @@ await app.start();
 
 1. During play, `syncPlugin` hands snapshots to `session.persistSnapshot(snapshot, sSeq)`; `session` writes a
    debounced IndexedDB record + a synchronous `localStorage` record on `visibilitychange`.
-2. The host tab reloads. `session` `onInit` detects the persisted re-entry record, resumes the SAME room code, and
+2. The host tab reloads. `session` `onInit` detects the persisted re-entry record (one older than `reentryMaxAgeMs`,
+   or unparseable, is removed instead), resumes the SAME room code, and
    (host side) emits `room:host-reconnecting`. Consumers on the reload path read `session.recoveryPhase()` (it is
-   not `"stable"`).
+   not `"stable"`). The game's first `createRoom()` returns the restored room; a later call throws.
 3. Controllers detect the host absence, buffer intents (ring buffer, lossy), and show reconnecting UX.
 4. On re-entry: controller sends `RecoveryHelloFrame {hostToken, peerId}`; host verifies the token peer-side and
    replies `RecoveryWelcomeFrame {hostToken, sSeq}` followed by a fresh `SyncSnapshotFrame`.
 5. Each controller flushes its buffer in one `RecoveryFlushFrame {buffered}`; the host applies them in `cSeq` order,
    dropping duplicates. Recovery phase returns to `"stable"`.
 6. (On iOS the path degrades to "rescan QR" → the controller calls `session.rejoin()`.)
+
+`session.leave()` is the opposite of a reload: it deletes the record with no final write, so the next load starts with
+no room (`role` is `"none"`), and `createRoom()` opens a new room on the same app. `app.stop()` keeps the record.
 
 ---
 

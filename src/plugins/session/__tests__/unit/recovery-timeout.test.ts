@@ -20,7 +20,8 @@ const testConfig: Readonly<SessionConfig> = {
   reconnectTimeoutMs: 200, // short for tests
   intentBufferMax: 256,
   intentBufferMaxAgeMs: 8000,
-  storageKeyPrefix: "test.room"
+  storageKeyPrefix: "test.room",
+  reentryMaxAgeMs: 1_800_000
 };
 
 function makeDeps(state = createSessionState()): SessionDeps {

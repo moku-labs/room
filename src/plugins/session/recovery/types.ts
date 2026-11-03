@@ -31,6 +31,18 @@ export type PersistHandle = {
  */
 export type PersistHandleInternal = PersistHandle & {
   /**
+   * Forgets the record for good (the `leave()` path, where the room is over): cancels the debounce, drops
+   * the latest record, removes the `localStorage` key, deletes the IndexedDB row and removes the
+   * `visibilitychange` listener. A later `flushNow()` writes nothing.
+   *
+   * @example
+   * ```ts
+   * state.recovery.persistHandle?.discard();
+   * teardownSession(state); // its final flush now has nothing to write
+   * ```
+   */
+  discard(): void;
+  /**
    * Updates the retained latest record and optionally schedules the debounced IndexedDB write.
    *
    * @param record - The new latest `HostReentryRecord`.

@@ -10,7 +10,8 @@ import type { SessionConfig } from "./types";
 /**
  * The typed default `sessionPlugin` config. Every field is overridable via
  * `createApp({ pluginConfigs: { session: { ... } } })`; the defaults encode the D11 / contracts §5
- * constants (8-cap, 500 ms snapshot debounce, 10 s reconnect window, 256-entry / 8 s intent buffer).
+ * constants (8-cap, 500 ms snapshot debounce, 10 s reconnect window, 256-entry / 8 s intent buffer) and a
+ * 30 min limit on the age of a restorable host record.
  *
  * @example
  * ```ts
@@ -26,5 +27,6 @@ export const sessionConfig: SessionConfig = {
   reconnectTimeoutMs: 10_000,
   intentBufferMax: 256,
   intentBufferMaxAgeMs: 8000,
-  storageKeyPrefix: "moku.room"
+  storageKeyPrefix: "moku.room",
+  reentryMaxAgeMs: 1_800_000 // the hub's roomTtlMs
 };

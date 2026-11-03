@@ -67,6 +67,13 @@ export function createSessionApi(deps: SessionDeps): SessionApi {
   return {
     /** @inheritdoc */
     createRoom(): import("./types").RoomDescriptor {
+      // A reload already restored and rejoined this room: the first call hands it over, with no second connect.
+      if (deps.state._reentryRecord && !deps.state._reentryClaimed) {
+        deps.state._reentryClaimed = true;
+        const { roomCode: code, hostToken } = deps.state;
+        return { code, joinUrl: buildJoinUrl(code, deps.config.joinUrlBase), qr: null, hostToken };
+      }
+
       if (deps.state.role !== "none") {
         throw new Error(
           "[room] A room is already active. Call leave() before creating a new room.\n  Use session.leave() to exit the current room."
@@ -133,6 +140,10 @@ export function createSessionApi(deps: SessionDeps): SessionApi {
       // Close all connections.
       await transport.close();
 
+      // The room is over, so its re-entry record goes too. In the same tick as the teardown: a broadcast that
+      // landed during the close above cannot write the record back.
+      deps.state.recovery.persistHandle?.discard();
+
       // Disarm recovery handles.
       teardownSession(deps.state);
 
@@ -145,6 +156,8 @@ export function createSessionApi(deps: SessionDeps): SessionApi {
       deps.state.recovery.phase = "stable";
       deps.state.recovery.buffer = [];
       deps.state.recovery.reconnectDeadline = 0;
+      deps.state._reentryRecord = null;
+      deps.state._reentryClaimed = false;
     },
 
     /** @inheritdoc */

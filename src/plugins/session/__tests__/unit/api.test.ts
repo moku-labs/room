@@ -23,7 +23,8 @@ const testConfig: Readonly<SessionConfig> = {
   reconnectTimeoutMs: 10_000,
   intentBufferMax: 256,
   intentBufferMaxAgeMs: 8000,
-  storageKeyPrefix: "test.room"
+  storageKeyPrefix: "test.room",
+  reentryMaxAgeMs: 1_800_000
 };
 
 type MockTransport = ReturnType<SessionDeps["requireTransport"]>;
@@ -306,6 +307,54 @@ describe("createSessionApi", () => {
 
       expect(vi.mocked(transport.close)).toHaveBeenCalledTimes(1);
       expect(deps.state.role).toBe("none");
+    });
+
+    it("writes no record when sync persists while the transport is closing", async () => {
+      const store = new Map<string, string>();
+      vi.stubGlobal("localStorage", {
+        setItem: (key: string, value: string): void => {
+          store.set(key, value);
+        },
+        removeItem: (key: string): void => {
+          store.delete(key);
+        }
+      });
+
+      try {
+        const deps = makeDeps();
+        const transport = deps.requireTransport();
+        const api = createSessionApi(deps);
+        api.createRoom();
+        api.persistSnapshot({}, 1);
+        // A broadcast tick lands during the async close, while the role is still "host".
+        vi.mocked(transport.close).mockImplementation(async () => {
+          api.persistSnapshot({}, 2);
+        });
+
+        await api.leave();
+
+        expect([...store.keys()]).toEqual([]);
+      } finally {
+        vi.unstubAllGlobals();
+      }
+    });
+
+    it("clears the restored record and its claim", async () => {
+      const deps = makeDeps();
+      deps.state.role = "host";
+      deps.state._reentryRecord = {
+        roomCode: "ABC234",
+        hostToken: "token-xyz",
+        snapshot: {},
+        sSeq: 1,
+        savedAt: 1
+      };
+      deps.state._reentryClaimed = true;
+
+      await createSessionApi(deps).leave();
+
+      expect(deps.state._reentryRecord).toBeNull();
+      expect(deps.state._reentryClaimed).toBe(false);
     });
   });
 
