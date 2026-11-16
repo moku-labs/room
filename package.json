@@ -98,7 +98,7 @@
     "@biomejs/biome": "2.4.16",
     "@cloudflare/workers-types": "4.20260621.1",
     "@moku-labs/ci": "1.5.8",
-    "@moku-labs/common": "0.3.11",
+    "@moku-labs/common": "0.3.12",
     "@moku-labs/core": "1.7.6",
     "@moku-labs/worker": "0.20.11",
     "@playwright/test": "1.61.0",

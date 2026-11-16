@@ -14,7 +14,7 @@
         "@biomejs/biome": "2.4.16",
         "@cloudflare/workers-types": "4.20260621.1",
         "@moku-labs/ci": "1.5.8",
-        "@moku-labs/common": "0.3.11",
+        "@moku-labs/common": "0.3.12",
         "@moku-labs/core": "1.7.6",
         "@moku-labs/worker": "0.20.11",
         "@playwright/test": "1.61.0",
@@ -281,7 +281,7 @@
 
     "@moku-labs/ci": ["@moku-labs/ci@1.5.8", "", { "bin": { "moku-release": "dist/release.mjs" } }, "sha512-qbwfIjwSKNHMQ0nadkyfiJdW0tb/QancHDM5YZmg4eSecAXBMKmDrOt9imvcMPydpHGtM/dN+x8+kqHhdlT3Lw=="],
 
-    "@moku-labs/common": ["@moku-labs/common@0.3.11", "", { "peerDependencies": { "@moku-labs/core": "^1.7.1" } }, "sha512-3F7QGTn4Upi9o2kPEnCrPo8fKC/IUJBCyUWpoW3XYt0Dom3oaQWw8SB79CEXwvmV6BVaPGRcZNGttspvalDPAQ=="],
+    "@moku-labs/common": ["@moku-labs/common@0.3.12", "", { "peerDependencies": { "@moku-labs/core": "^1.7.1" } }, "sha512-Re8TCuQCBT+uCmgosn5OWQ7qi4H/uWPl5gGPgIjKVMVAZk9n6HNEBKi5k7Z2YnfahOwLhjNC1ZQDwKybAWIXug=="],
 
     "@moku-labs/core": ["@moku-labs/core@1.7.6", "", {}, "sha512-CdCxX/9zwJ9Czv45I/CmDuV8sV1r9uiOSfUzckD3MZC8eumO1QcT4PY4yiSXd0zspsTgdsntFxfDHkUUYVp5Iw=="],
 
